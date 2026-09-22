@@ -75,7 +75,8 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 ## 当前状态（2026-09-22）
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
-- **V2.0 实施**：未启动，等 `docs/plans/v2.0-implementation.md`（由 writing-plans 技能产出）批准后开始
+- **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
+- **V2.0 实施**：进行中（Task 1 起）
 - **V1 工作区**：未动
 
 ---

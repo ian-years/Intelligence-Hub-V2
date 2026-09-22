@@ -125,11 +125,28 @@ select = [
     "ANN",               # annotations
 ]
 ignore = [
-    "ANN101",            # self annotation (deprecated)
-    "ANN102",            # cls annotation (deprecated)
     "PLR0913",           # too many args (Pydantic 模型经常多)
     "TRY003",            # long messages outside exception class (我们用 EM 替代)
     "S101",              # assert in tests
+
+    # ---- 本项目特有豁免（每条都有原因，别顺手删） ----
+    "RUF001", "RUF002", "RUF003",
+    # 全角标点被判"歧义 Unicode"。本仓库的 docstring / 注释 / 用户可见文案一律中文，
+    # 110 条里 109 条是这个。开着等于把中文文档全禁了。
+
+    "TC001", "TC003",
+    # 不把导入挪进 TYPE_CHECKING 块。Pydantic v2 在建类时求值注解，
+    # 挪进去要么得处处补 model_rebuild()，要么运行期 NameError。
+    # 省的那点导入时间换不来这个坑。
+
+    "UP046", "UP047",
+    # 不用 PEP 695 的 `class X[T]` 语法。Generic[T] 在 Pydantic 泛型模型上
+    # 的兼容性更久经考验，target-version 已经是 py312，写法差异不带来任何收益。
+
+    "N818",
+    # 异常名不强制 Error 后缀。TaskCancelled / TaskRejected 是
+    # docs/specs/task-runner.md §2.5 锁定的契约名（Locked，改动需走 ADR），
+    # 命名规范让位于 spec。
 ]
 
 [tool.ruff.lint.per-file-ignores]
