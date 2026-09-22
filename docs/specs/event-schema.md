@@ -204,7 +204,18 @@ from typing import AsyncIterator, Protocol
 
 class EventBus(Protocol):
     async def publish(self, event: Event) -> None:
-        """发布事件。多播到所有订阅者 + 持久化到 SQLite。"""
+        """发布事件。多播到所有订阅者；**带 `task_id` 的**才持久化到 SQLite。
+
+        > **实施期修订（2026-09-22, Task 3）**：`task_events.task_id` 是
+        > `TEXT NOT NULL`（§6），所以 `platform.health_changed` 与 `config.changed`
+        > 这类**全局事件只广播、不落库**。
+        >
+        > 为什么不为了持久化把 `task_id` 放宽成可空：这两类事件没有"历史回放"的价值
+        > （健康状态看当下，配置看 `config/*.yaml`），而硬挂到某个任务上更糟 ——
+        > 一个与任务无关的事件会因为"它属于哪次任务"这个问题被随意回答，
+        > 于是任务详情页的日志里出现不属于这个任务的行。
+        > `EventRepository.append()` 对这种事件直接抛（外键 + NOT NULL），不静默丢弃。
+        """
 
     def subscribe(
         self,
@@ -275,6 +286,15 @@ CREATE INDEX idx_task_events_type_time ON task_events(type, timestamp);
 - 已完成任务的事件保留 `storage.event_retention_days`（默认 30 天）
 - 后台 APScheduler job 每天清理过期事件
 - 失败任务的事件保留更久（90 天，方便排查）
+
+> **实施期补细（2026-09-22, Task 3）**，三条 `prune()` 的具体口径
+> （看护在 `tests/unit/storage/test_events_repo.py`）：
+> - **享受 3 倍保留期的是 `failed` 与 `timeout`**。`cancelled` 不算 ——
+>   那是人主动停的，没有"为什么挂了"要查。
+> - **停在 `running` 的任务一条都不删**，哪怕它已经跑了很久。
+>   删掉正在推流的任务的历史，等于让前端日志凭空断一段，而没人知道断了。
+> - `retention_days < 1` 在**入口**就抛 `ValueError`。
+>   配成 0 的字面意思是"全删"，那不是配置而是事故，不该被静默执行。
 
 ---
 

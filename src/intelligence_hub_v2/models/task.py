@@ -70,3 +70,38 @@ class TaskResult(BaseModel):
 
 ProgressCallback = Callable[[float], None]
 """进度回调，0.0~1.0。"""
+
+
+class TaskRunRecord(BaseModel):
+    """DB 行（task_runs 表的 Pydantic 映射）。
+
+    与 `TaskResult` 的区别：`TaskResult` 是**一次执行的产出**（handler 返回它），
+    `TaskRunRecord` 是**这次执行的档案**（含 id / 时间戳 / 进度 / 清单路径）。
+    前者活在一次调用里，后者要能被"任务历史"页面翻出来。
+
+    V1 §2 契约二看护：`status` 为终态时 `ended_at` 必填，DB 层有 CHECK 约束
+    `status = 'running' OR ended_at IS NOT NULL`。
+    """
+
+    id: str
+    task_name: str
+    kind: str
+    status: Literal["running", "success", "partial", "failed", "timeout", "cancelled"]
+    params_json: str = "{}"
+    config_snapshot_json: str = "{}"
+    started_at: datetime
+    ended_at: datetime | None = None
+    summary_json: str | None = None
+    manifest_path: str | None = None
+    error_text: str | None = None
+    progress: float = 0.0
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status != "running"
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()

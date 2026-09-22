@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl
+from typing_extensions import TypedDict
 
 
 class CreatorRef(BaseModel):
@@ -66,3 +67,23 @@ class Creator(BaseModel):
     metadata_json: str
     created_at: datetime
     updated_at: datetime
+
+
+class CreatorUpdatableFields(TypedDict, total=False):
+    """`CreatorRepository.update_fields()` 允许改的字段集（V1 §7.4 同款纪律）。
+
+    **`is_tracking` 故意不在里面** —— 它只有 `set_tracking()` 一个写入口，
+    因为那个方法要在入口断言 `isinstance(tracking, bool)`（V1 §7.24：
+    落成 `0` / `"false"` 会让"日更采集"和"按位抓取"读出相反的结果）。
+    放进这个集合就等于开了第二个不设防的写入口。
+    """
+
+    name: str
+    avatar_url: str | None
+    follower_count: int | None
+    profile_url: str
+    metadata_json: str
+
+
+UPDATABLE_CREATOR_FIELDS: frozenset[str] = frozenset(CreatorUpdatableFields.__annotations__)
+"""运行期白名单，理由同 `UPDATABLE_VIDEO_FIELDS`。"""

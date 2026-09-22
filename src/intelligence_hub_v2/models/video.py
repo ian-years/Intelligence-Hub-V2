@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field, HttpUrl
+from typing_extensions import TypedDict
 
 from intelligence_hub_v2.models.creator import CreatorRef
 
@@ -125,3 +126,43 @@ class PagedResult(BaseModel, Generic[T]):
     @property
     def pages(self) -> int:
         return max(1, (self.total + self.size - 1) // self.size)
+
+
+class VideoUpdatableFields(TypedDict, total=False):
+    """`VideoRepository.update_fields()` 允许改的字段集。
+
+    **这是 V1 §7.4 的结构性解法**。V1 的 `local_store.upsert_video()` 是"整行覆盖"语义，
+    传空标题会把真标题折叠成 `"精选自媒体作品"` —— 部分字段更新抹掉了其他字段。
+    V2 只有这一个写入口，且只 SET 你显式传进来的列。
+
+    `total=False` 是**必须的**：所有键都可选，调用方只传要改的那几个。
+
+    故意**不在**这个集合里的三个字段（要走专门方法，不许从这里绕）：
+    - `platform` / `platform_video_id` —— 唯一身份，改了等于换了一条作品。
+    - `is_hidden` / `hidden_at` / `hidden_reason` —— 走 `hide()` / `unhide()`，
+      因为"隐藏"要同时写三个字段并发事件（V1 §7.25：少一半都不算数）。
+    """
+
+    title: str
+    description: str | None
+    published_at: datetime | None
+    duration_seconds: float | None
+    view_count: int | None
+    like_count: int | None
+    comment_count: int | None
+    share_count: int | None
+    media_path: str | None
+    media_source: str | None
+    media_aux_paths_json: str | None
+    cover_path: str | None
+    metadata_json: str | None
+    creator_id: int | None
+
+
+UPDATABLE_VIDEO_FIELDS: frozenset[str] = frozenset(VideoUpdatableFields.__annotations__)
+"""运行期的白名单。
+
+mypy 只能在**静态可知的调用点**拦住写错字段名；从 dict 展开（`**payload`）
+或从 API 请求体来的字段名是运行期才知道的，所以还要这一份。
+`VideoRepository.update_fields()` 拿它做校验，未知字段抛 `TypeError`。
+"""

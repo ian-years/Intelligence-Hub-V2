@@ -1,0 +1,51 @@
+# 行尾与文本属性。
+#
+# 为什么需要这份文件（2026-09-22，Task 3 收尾时加的）：
+# 开发机是 Windows 且 git 的 `core.autocrlf=true`，仓库里又没有 .gitattributes，
+# 于是 checkout 出来的 `.py` 是 **CRLF**，而 `pyproject.toml` 里
+# `[tool.ruff.format] line-ending = "lf"`。后果是 `ruff format --check`
+# 在 Windows 上把**每个文件**都报成"要重排"（差异只有行尾），
+# 而 Linux CI 上一片绿 —— 这种"本地与 CI 结论相反"的门禁比没有门禁更糟，
+# 人会开始忽略它。
+#
+# 2026-09-22 实测（把 storage/session.py 逐字复制成 CRLF 版本再问 ruff）：
+#   ruff format --check -> "unformatted: File would be reformatted"，exit 1，
+#                          整份 diff 只有行尾（每行都 -/+ 一遍）
+#   ruff check          -> "All checks passed!"
+# 也就是**只有 format 那一关会被行尾打爆**，lint 关不受影响。
+#
+# 修法：让仓库自己决定行尾，不依赖每个人的 git 配置。
+# `text=auto` 让 git 按内容判断文本；`eol=lf` 强制 checkout 出 LF。
+
+* text=auto eol=lf
+
+# 二进制：不转换、不做 diff、不当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.onnx binary
+*.tar.bz2 binary
+*.zip binary
+
+# SQLite 与其临时文件：库里可能存真实博主数据，别进 diff、别进 blame
+*.sqlite3 binary
+*.sqlite3-wal binary
+*.sqlite3-shm binary
+
+# Python 源：显式声明，让 `git diff --stat` 与语法高亮稳定
+*.py text
+*.pyi text
+
+# Windows 专用的 .cmd / .bat 脚本：必须 CRLF，否则某些 shell 解析会出问题
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 导出物与生成物：只留一份、不做语义 diff
+package-lock.json -diff
+uv.lock text -diff

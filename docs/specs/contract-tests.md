@@ -55,6 +55,41 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | §7.24 「持续跟踪」的值必须是真布尔，且默认值只能有一处 | `test_creator_tracking_default_is_true` + `test_set_tracking_rejects_non_bool` + `test_tracking_default_single_source_of_truth` | L1 + L4 | `tests/unit/storage/test_creators.py` + `tests/integration/api/test_creators.py` |
 | §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_writer_finalizes_on_all_exit_paths`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/tasks/test_manifest.py` |
 
+### 3.1 已落地的看护（截至 Task 3，2026-09-22）
+
+上面那张表是**计划**。这一节是**已经能跑的现状** —— 分开写是因为实施时会撞见
+"计划里的测试名/文件路径与实际不同"，而未来的会话需要知道哪一条是真的存在：
+
+| 陷阱 | 现在真正跑着的用例 | 层级 | 文件 |
+|------|-------------------|------|------|
+| §7.4 整行覆盖 | `test_update_fields_does_not_clobber_other_fields` + `test_update_fields_rejects_identity_and_tombstone_fields` + `test_update_fields_rejects_unknown_field` + `test_update_fields_can_set_a_field_to_none` | L1 | `tests/unit/storage/test_videos_repo.py` |
+| §7.4（博主侧同形） | 同名四件（`test_update_fields_does_not_clobber_other_fields` / `..._rejects_identity_fields` / `..._rejects_unknown_field` / `..._with_no_fields_is_a_noop`） | L1 | `tests/unit/storage/test_creators_repo.py` |
+| §7.11 列名三种写法 | `test_insert_and_find`（唯一身份入口就是 `find(platform, platform_id)`，没有第二种名字的入口）+ `test_update_fields_rejects_identity_fields` | L1 | `tests/unit/storage/test_creators_repo.py` |
+| §7.24 布尔值 + 默认值一处 | `test_set_tracking_rejects_non_bool[0/1/"false"/"true"/None/""/[]]` + `test_set_tracking_roundtrips_both_ways` + `test_update_fields_refuses_to_touch_tracking` | L1 | `tests/unit/storage/test_creators_repo.py` |
+| §7.25 墓碑双删 | `test_hide_removes_from_list_but_get_still_works` + `test_unhide_restores_and_clears_the_tombstone` + `test_hide_requires_a_non_blank_reason` + `test_video_count_respects_hidden`（V2 里墓碑是**一列三字段**，"少一半都不算数"由 `hide()`/`unhide()` 这唯一写入口消除） | L1 | `tests/unit/storage/test_videos_repo.py` + `test_creators_repo.py` |
+| §7.22 按位扫描 vs 开关筛全库 | `test_list_tracked_excludes_switched_off_but_find_still_hits` + `test_list_all_includes_untracked` | L1 | `tests/unit/storage/test_creators_repo.py` |
+| §7.5 转写目录按平台不对称 | `test_text_path_is_stored_verbatim`（两平台同尾段布局）+ `test_transcript_path_is_identical_across_platforms` + `test_audio_dir_is_not_under_transcript`（§7.21 的中间产物隔离） | L1 | `tests/unit/storage/test_transcripts_repo.py` + `test_files.py` |
+| §7.8 `safe_filename` 不止换 `/` | 9 条 hypothesis 属性 + 16 个定向函数（展开 68 条），含 `test_result_is_never_a_bare_windows_device_name`、`test_result_is_always_a_single_path_segment`、`test_result_is_usable_as_a_real_path`（真建目录真写文件） | L0 | `tests/unit/test_safe_filename.py` |
+| §2 契约二（DB 层那一半） | `test_terminal_status_without_ended_at_is_rejected_by_the_db`（绕开 `finish()` 直接写 SQL，验 `ck_task_runs_terminal_has_ended_at`）+ `test_unknown_status_is_rejected` | L1 | `tests/unit/storage/test_task_runs_repo.py` |
+| §1.3 不许吞错（错误原文落库） | `test_finish_preserves_the_error_text_verbatim` + `test_content_json_keeps_chinese_error_text_readable` + `test_payload_keeps_chinese_readable` | L1 | `tests/unit/storage/test_{task_runs,manifests,events}_repo.py` |
+| §7.20 健康灯"测不到"≠"正常" | `test_is_healthy_only_trusts_an_explicit_ok`（6 组参数）+ `test_upsert_does_not_clobber_health_columns` + `test_clear_health_returns_to_never_checked` | L1 | `tests/unit/storage/test_platforms_repo.py` |
+| §7.12 预检查错库（V2 结构性消除） | `test_check_files_exist_requires_data_dir`（不给 `data_dir` 就抛，不兜一个错的默认值）+ 全仓只有一个库路径解析函数 `resolve_db_path()` | L1 | `tests/unit/storage/test_manifests_repo.py` |
+
+**表里 §7.8 那行的计划名是 `test_safe_filename_property_based`**，实际拆成了 9 个具名属性
+（`test_result_is_never_empty` / `..._contains_no_illegal_characters` /
+`..._is_always_a_single_path_segment` / `..._is_idempotent` 等）——
+一个巨型属性红了以后没法定位是哪条不变式破的，所以按不变式拆开。**以这一节为准**，
+计划表里的名字当作"要覆盖这个陷阱"的意图读。
+
+**注意同名用例**：`test_update_fields_does_not_clobber_other_fields` 在
+`test_videos_repo.py` 与 `test_creators_repo.py` 里**各有一条**（两行表格指的是两条），
+`-k` 或按 node id 单跑时要带文件名，别以为只有一条。
+
+**仍未落地**（按计划属于后续任务）：§7.1 / §7.2 / §7.3 / §7.9 / §7.13 / §7.14 / §7.15 /
+§7.16 / §7.19 / §7.21 / §7.22 的 L2-L4 部分（ adapters、桥、ASR、前端默认值、集成任务流）、
+§7.24 的 L4 前端部分、§2 契约二的 `manifest_writer` 那一半（Task 4）、
+以及下面 §4 的抽象基类整套（Task 14）。
+
 ---
 
 ## 4. L2 适配器契约测试抽象基类

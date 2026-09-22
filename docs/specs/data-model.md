@@ -290,9 +290,17 @@ class VideoRepository(Protocol):
     async def hide(self, id: int, reason: str) -> Video: ...
     async def unhide(self, id: int) -> Video: ...
     async def list_visible(self, *, filters: VideoFilters, page: Page) -> PagedResult[Video]: ...
-    async def attach_transcript(self, video_id: int, transcript: TranscriptDraft) -> Transcript: ...
+    async def attach_transcript(self, video_id: int, transcript: TranscriptDraft) -> TranscriptRecord: ...
     async def count(self, *, filters: VideoFilters | None = None) -> int: ...
 ```
+
+> **实施期修订（2026-09-22, Task 3）**：`attach_transcript()` 原本写的是返回 `Transcript`。
+> 那是不成立的：`Transcript` 有必填的 `text` 正文，而正文按本 spec §2.4 的设计**只在磁盘上**，
+> DB 行里没有。返回它要么把整篇稿子读回来（白白一次磁盘 IO），要么造一个 `text=""` 的假对象
+> （撒谎）。改成 `TranscriptRecord`（存储层行）。
+> 采集层拿到的仍然是 `Transcript` —— 两个类型的分工见 `models/transcript.py` 的 docstring。
+> **这条改动同时约束 V3**：`Transcript` 不属于存储层，任何"从库里读出口播稿正文"的
+> 需求都应走 `FileStorage.transcript_path()` → 读文件。
 
 **`update_fields` 实现纪律**：
 - 用 SQLAlchemy Core `update()` 语句，**只 SET 传入的列**
@@ -323,7 +331,19 @@ class Storage(Protocol):
 
 实现：
 - `SqliteStorage`（生产，aiosqlite + SQLAlchemy 2.0 async）
-- `InMemoryStorage`（测试，SQLite `:memory:`）
+- `SqliteStorage.in_memory()`（测试与内存场景，SQLite `:memory:`）
+
+> **实施期修订（2026-09-22, Task 3）**：没有做成第二个类 `InMemoryStorage`。
+> 两者差别只有"URL + 建表方式"两处（`:memory:` + `create_all` vs 文件 + Alembic），
+> 复制一份实现等于把**漂移的可能性**也复制一份 —— 而 §5 那条 `check_schema_matches_migrations()`
+> 看护的存在理由正是"两条建表路径必须一致"，多加一条路径就多加一处要看护的地方。
+>
+> 因此测试用 `storage` fixture 参数化同一个类的两档（`memory` / `file`），
+> 用例数翻倍但实现只有一份。副作用是实打实的：`version_path_separator` 那个坑
+> （docs/lessons.md 坑 10）**只有 `[file]` 档红**，只测内存库会完全看不见。
+>
+> V3 若真要换 PostgreSQL，做法是加一个实现同一个 `Storage` Protocol 的类，
+> 而不是给 `SqliteStorage` 加分支。
 
 ---
 

@@ -166,3 +166,30 @@ class ManifestBuilder:
             config_snapshot=self._config_snapshot,
             error=self._error,
         )
+
+
+class ManifestRecord(BaseModel):
+    """DB 行（manifests 表的 Pydantic 映射）。
+
+    清单**双写**：文件（`data/manifests/<...>.json`，审计与离线分析）
+    + SQLite（前端历史列表查询）。V1 只有文件，于是"最近 20 次任务"
+    要 glob 目录 + 逐个读 JSON + 排序 —— 慢，而且文件名格式一变就全废。
+
+    `content_json` 是完整清单的冗余副本：详情/审计仍然读文件（那才是权威源），
+    这里存一份只是为了列表页不用回磁盘。
+    """
+
+    id: int
+    task_id: str
+    schema_version: str = "2.0"
+    file_path: str
+    written_at: datetime
+    content_json: str
+
+    def content(self) -> Manifest:
+        """把冗余副本解析回 `Manifest`。
+
+        解析失败抛 `ValueError` 而不是返回 None —— 库里存着坏 JSON 是数据损坏，
+        静默跳过等于把损坏藏起来（V1 §1.3）。
+        """
+        return Manifest.model_validate_json(self.content_json)

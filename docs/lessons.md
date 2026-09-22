@@ -235,6 +235,150 @@ defaults < YAML < env < CLI 四层，多一层就多一种"为什么这个值是
 **看护**：`tests/unit/core/test_config.py` 末尾的"发货配置漂移看护"一节。
 这三条是**本仓库里唯一读真实 config/ 的测试**，改 YAML 不改 schema 就会红。
 
+#### 坑 8 · `alembic.ini` 里的中文注释让所有 alembic 命令起不来（Task 3）
+
+**现象**：`alembic revision --autogenerate` 直接抛
+`UnicodeDecodeError: 'gbk' codec can't decode byte 0x82 in position 411`，
+栈顶在 `config.read_config_from_persistent`。一条 `alembic` 命令都没跑起来过，
+而仓库里其它地方中文用得好好的。
+
+**根因**：Task 1 写 `alembic.ini` 时把中文的"为什么不配 sqlalchemy.url / 不挂 post_write_hooks"
+注释写进了 ini。Alembic 读这个文件用的是 `encoding="locale"`
+（`alembic/util/compat.py`），中文 Windows 的 locale 编码是 **GBK**，
+而文件是 UTF-8。注释也是要被解析器读进去的 —— 它先读字节再判断哪行是注释。
+
+**解法**：`alembic.ini` 全文改写成纯 ASCII 的说明，中文理由挪到 `alembic/env.py` 的
+docstring（`.py` 永远按 UTF-8 读）和本文件。ini 顶部留一句显眼的
+"THIS FILE MUST STAY PURE ASCII"，并写明为什么。
+
+顺带一条同类教训：`rm` 临时库时别用 Git Bash 的 `$TEMP`。
+它展开成 `/tmp`，而 Windows 上的 sqlite3 打不开这个路径 ——
+报的是 `unable to open database file`，看起来像权限问题其实是路径。用仓库内 `.tmp/`。
+
+**判据**：`.venv/Scripts/python.exe -m alembic upgrade head && -m alembic check`
+→ `No new upgrade operations detected.`，退出码 0。
+
+**看护**：`tests/unit/storage/test_migrations.py::test_alembic_ini_is_pure_ascii`
+（直接读字节找 >0x7F）、
+`test_alembic_ini_uses_path_separator_not_the_deprecated_alias`、
+`test_alembic_ini_does_not_hardcode_a_url`。
+后两条**必须走 configparser** 而不是子串搜索 —— 这个文件的注释里为了说明"为什么没配"
+恰好写了 `sqlalchemy.url` 和 `version_path_separator` 两个名字，子串搜索会把注释读成配置。
+
+#### 坑 9 · autogenerate 出来的迁移引用 `UTCDateTime`，`revision` 是绿的但 `upgrade` 当场 NameError（Task 3）
+
+**现象**：`alembic revision --autogenerate` 成功、生成的文件能 import、
+但 `alembic upgrade head` 在全新库上抛
+`NameError: name 'UTCDateTime' is not defined`（`0001` 里所有时间列都写成
+`sa.Column(..., intelligence_hub_v2.storage.schema.UTCDateTime(), ...)` 而没有 import）。
+
+**根因**：`UTCDateTime` 是 `TypeDecorator` 子类。autogenerate 序列化列类型时
+默认输出"完整点号路径"，它假设迁移文件里能引到那个名字 —— 裸 `DateTime` 能，
+自定义类型不能。而**生成阶段不做任何校验**，所以这一步不红。
+
+**解法**：在 `env.py` 装一个 `render_item` 钩子，把 `UTCDateTime` 渲染成 `sa.DateTime()`。
+这不是绕过去：`UTCDateTime.impl is DateTime`，DDL 逐字相同（有断言钉着），
+而时区语义由**运行时**的列类型决定，迁移文件里不需要知道那个装饰器。
+加新 `TypeDecorator` 时同样要过这个钩子。
+
+**判据**：`0001_initial_schema.py` 里 `grep -c UTCDateTime` → 0；
+`alembic downgrade base` 后只剩 `alembic_version` 一张表，再 `upgrade head` 又 7 张表齐全。
+
+**看护**：`tests/unit/storage/test_migrations.py` 的
+`test_run_migrations_creates_every_table` / `test_downgrade_base_then_upgrade_head_roundtrips` /
+`test_schema_matches_migrations`。**这类"生成时绿、执行时红"的东西只有真跑一遍 upgrade 才能发现**，
+所以下面坑 10 那条双后端 fixture 不是奢侈品。
+
+#### 坑 10 · Alembic 1.20 把 `version_path_separator` 改名，配上 `filterwarnings=["error"]` 得到一种只红一半的失败（Task 3）
+
+**现象**：30 个用例报错，全在 `[file]` 档：
+`MigrationError: ... No path_separator found in configuration; falling back to legacy splitting...`。
+同一套代码、同一个 Repository，`[memory]` 档 30 条全绿。第一反应是"文件库 fixture 写坏了"。
+
+**根因**：两层叠起来才红。
+① Alembic 1.20 弃用 `version_path_separator`，改名 `path_separator`，
+**两种情况都发警告**（用旧名、或不配这个键）。
+② `pyproject.toml` 里 `filterwarnings = ["error"]`（Task 1 为了"别把警告当无声"）
+把这条警告升级成异常。
+③ 只有文件库会真的跑迁移 → 只有 `[file]` 档撞上。
+
+**解法**：`alembic.ini` 用 `path_separator = os`。
+不改 `filterwarnings` —— 那条"警告即失败"的纪律换来的东西比这个坑值钱。
+
+**判据**：`pytest tests/unit/storage -q` → `[memory]` 与 `[file]` 两档同数通过。
+
+**看护**：`tests/unit/storage/conftest.py` 的 `storage` fixture 参数化本身
+（两档跑同一批用例），加上坑 8 那节提到的 `test_alembic_ini_uses_path_separator_not_the_deprecated_alias`。
+
+**可迁移的结论**：**凡是"只有第二条路径会红"的失败，先怀疑路径而不是业务代码**。
+双后端 fixture 的价值就在这里 —— 少一档，这个坑会一路带到生产。
+
+#### 坑 11 · `env.py` 的 `dictConfig` 会把 structlog 的处理器链冲掉（Task 3，被测试之外发现）
+
+**现象**：没有现象 —— 这是读代码时抓到的。`alembic/env.py` 模板在模块顶层无条件
+`logging.config.dictConfig(fileConfig)`，而 `SqliteStorage.initialize()` 是
+**在 `setup_logging()` 之后**才跑迁移的。
+
+**根因**：`dictConfig` 默认 `disable_existing_loggers=False`，但它会**重建 root logger 的 handler**
+并覆盖已装的 formatter。structlog 的 `ProcessorFormatter` 链与 `RotatingFileHandler`
+就在那一步被换掉：结果是"日志文件不再轮转、控制台不再是 key-value"，
+而**跑迁移这件事本身看起来完全正常**。CLI 上反过来是想要的行为（要看见 alembic 的 INFO）。
+
+**解法**：`env.py` 里用 `config.attributes.get("configure_logger", True)` 决定装不装日志；
+`_alembic_config()`（程序内路径）显式置 `False`，CLI 保持默认 `True`。
+
+**判据**：`-m alembic current` 的 stdout 里有 `INFO [alembic.runtime.migration] ...`（CLI 档生效）；
+应用启动路径不覆盖 structlog。
+
+**看护**：**没有自动化看护** —— 这是诚实的记录。它要验的是"别人的日志配置没被我冲掉"，
+得同时装配 structlog 再跑一次迁移然后比对 handler，代价与收益不成比例。
+`tests/unit/storage/test_migrations.py::test_file_storage_runs_migrations_on_initialize`
+只保证跑迁移不炸。改动 `env.py` 或 `logging.py` 时**人肉看这一条**。
+
+#### 坑 12 · Alembic 的 `compare_metadata` 看不见 CHECK 约束，于是"漂移看护"有个洞（Task 3）
+
+**现象**：`check_schema_matches_migrations()` 返回 `[]`，但给 `HEALTH_STATUSES`
+加一个取值，它**仍然**返回 `[]` —— 而实际后果是内存库放行、
+生产库（`0001` 里那段字面量）当场拒收。
+
+2026-09-22 用一次性脚本实测（两个 metadata，只差 CHECK 里多一个取值，
+库按 A 建、比对目标给 B）：
+
+```
+CHECK 内容变化产生的差异: 无差异 —— compare_metadata 对它不可见
+对照组（加一列）: ('add_column', None, 't', Column('extra', Integer(), ...))
+```
+
+对照组是**这条断言的信誉来源**：同一个函数、同一份库，加一列它看得见，
+改 CHECK 它看不见。没有对照组的话，"它返回 []"既可能是"没漂移"也可能是"函数坏了"，
+两者分不开 —— 而本仓库对这两者的处置完全相反。
+
+**根因**：SQLite 反射不出 CHECK 约束的原始文本，所以 `env.py` 里
+`compare_server_default=False`，`compare_check_constraints` 也没开。
+这带来一个容易被忽略的推论：**"metadata 与迁移一致"这件事不覆盖约束的内容**。
+而 enum 的取值清单在这个仓库里有两个定义点（`schema.py` 的常量 + 迁移文件里的字面量），
+Task 3 之前还是**手抄**的四条。
+
+**解法**：两件。
+① 约束文本改成**从常量生成**（`schema.py::_enum_check`），Python 侧只剩一处真相；
+② 迁移文件那侧是历史事实不能重生成，于是加一条"从真库读 `sqlite_master`，
+把 CHECK 里的取值集合与常量比对"的用例，并把**全部 11 条约束名**列成精确集合
+（不是子集）—— 顺手也覆盖了"batch 模式重建表时约束静默消失"。
+
+**判据**：`pytest tests/unit/storage/test_schema_types.py -q` → 18 passed；
+其中 `test_the_migrated_db_has_exactly_the_checks_we_wrote` 断言的是集合相等。
+
+**看护**：`tests/unit/storage/test_schema_types.py` 全文件。
+另外 `test_the_platform_health_statuses_are_one_tuple_not_two` 盯住
+`models/platform.HEALTH_STATUSES` 与 `storage.schema.HEALTH_STATUSES` 这对**不得不两份**的定义点
+（V2.1 加健康状态时改一处不够）。
+
+**还有一处没收口（记在这里，别当成已解决）**：同一个 CHECK 的**整条被删掉**时
+`compare_metadata` 同样看不见（上面那个探针测的是"改内容"，删约束是它的兄弟情形），
+所以现在靠的是 `EXPECTED_CHECKS` 那份**手写的 11 条清单**。
+它比"没有看护"强（漏一条就红），但它自己也是第三处真相 ——
+新加约束时必须同时往那份清单里加一条，否则红的是"集合不相等"而不是"你忘了改"。
+
 ---
 
 ## 第二部分 · V2 设计与实施过程中的经验
@@ -394,6 +538,103 @@ schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；�
 **看护**：这三条测试本身。**同样的手法后面还要用**：
 前端发货的 `settings.ts` 默认值 vs 后端 schema 默认值（V1 §7.24 的"默认值只能有一处"），
 以及 Alembic 迁移链 vs SQLAlchemy 元数据（Task 3 要加）。
+
+> **Task 3 的后续（2026-09-22）**：Alembic 那条加了，而且**必须加两条**才够 ——
+> `check_schema_matches_migrations()` 对 CHECK 约束是瞎的（坑 12），
+> 所以除了漂移看护本身，还要一条直接读 `sqlite_master` 比对约束取值与约束名清单的用例
+> （`tests/unit/storage/test_schema_types.py`）。
+> 只做前者会留下一个"看起来有两处看护、实际只有一处"的错觉。
+> `settings.ts` 那条仍在待办池，Task 10/11 落前端时做。
+
+### 实施阶段（V2.0）· Task 3（存储层）
+
+#### 经验 11 · 漏翻译异常是一**整类** bug，写测试时能一次性捞出好几个
+
+**现象**：给 `platforms` 写删除用例时，`creators` 还指着这个平台，
+期望拿到 `StorageError`（API 层要映射成"该平台下还有 N 位博主"），
+实际甩出来的是裸 `sqlalchemy.exc.IntegrityError` + 一屏 SQL 回显。
+顺着同一条思路回头审其它 Repository，又找到两处：
+`TaskRunRepository.start()` 撞主键、`EventRepository.append()` / `ManifestRepository.record()`
+指向不存在的任务 —— **同一个形状的漏口一共四个**。
+
+**根因**：`BaseRepository._translate_integrity()` 是有的，但它是**可选调用**：
+每个写方法都得自己记得 `try/except IntegrityError`。漏一个不会红，
+只会在真实用户手上变成 500 页面。V1 §7 那句"看起来在跑"就是这个机制。
+
+**解法**：把这一类当成**批量审计项**而不是逐个 bug ——
+凡是有 `insert()` / `delete()` / 会撞约束的写方法，一律过一遍。
+`affected_rows()` / `inserted_id()` 两个 helper（见经验 12）顺手把
+`rowcount` 的读法也统一了，同一个道理。
+
+**判据**：`tests/unit/storage/` 里 8 条断言"抛的是本仓库异常族"的用例全绿，
+其中 `test_delete_is_translated_when_creators_still_reference_it` 匹配的是
+`外键不成立` 这句**翻译后的**文案，不是 SQLite 原文。
+
+**看护**：`tests/unit/storage/test_{platforms,creators,videos,task_runs,events,manifests}_repo.py`
+各自的 NotFound / Conflict / 外键分支。**V3 换存储实现时这一批是行为契约**：
+它认的是异常类型与文案，不是 SQL。
+
+#### 经验 12 · 一个 `ContextVar` 放错模块，代价是七个"看不出为什么"的函数级 import
+
+**现象**：`db.py` 里 `_Repositories.__init__()` 把七个 Repository 全 import 在函数体里，
+旁边一句"避免循环导入"。ruff 为此专门有 `PLC0415`，于是每条都要人肉判断该不该豁免 ——
+七个豁免注释，而注释本身还得解释一个只有读懂双向依赖才看得懂的问题。
+
+**根因**：`CURRENT_SESSION` 这个 `ContextVar` 同时被两侧需要：
+`db.py` 的 `transaction()` 要 set/reset，`repositories/base.py` 的 `_scope()` 要读。
+它住在 `db.py` 里，`db → repositories → db` 就是环，函数级 import 是唯一的解法之一。
+但"唯一"是错的：**它该住在叶子模块**。
+
+**解法**：抽出 `storage/session.py`，只放这个 ContextVar 和它的说明。
+依赖变成单向的 `session.py ← repositories/base.py ← db.py`，
+七个函数级 import 直接提到顶层。`db.py` 仍然 re-export
+`CURRENT_SESSION`，所以公开路径没变（V3 的契约名不动）。
+
+**判据**：`db.py` 里函数体内的业务包 import 归零 ——
+`grep -n "^    from intelligence_hub_v2" src/intelligence_hub_v2/storage/db.py`
+只剩第 53 行那一条，而它在 `if TYPE_CHECKING:` 块里，
+是**分层**要求（`storage` 不许运行期往 `core` 引），不是循环导入的补丁。这两个"缩进的 import"
+长得一样、理由完全不同，看代码时别混。
+`ruff check src/` 干净，且 `src/` 里 `# noqa: PLC0415` 计数为 0（豁免只剩 `alembic/env.py` 两条，各带原因）。
+
+**看护**：`test_transaction_does_not_leak_into_sibling_tasks`
+（并发两个 `transaction()` 互不串写 —— 抽模块之后这条仍然是唯一能证明隔离性的用例）。
+
+**可迁移的结论**：**看到"一堆延迟导入 + 一句解释循环"时，先问那个共享符号能不能搬走**。
+循环通常是放置位置的症状，不是架构的本质。
+
+#### 经验 13 · 不要给"我以为的操作系统行为"写测试
+
+**现象**：给 `safe_filename` 写 Windows 保留名用例时，我顺手加了一条"终判据"：
+拿 `CON` 建目录、往里写文件，断言 `OSError` —— 用来证明"加 `_` 前缀不是洁癖"。
+跑出来三条全红：**建得出来，也写得进去，读回来还对**。
+
+**根因**：`CON` 这类保留名在 Win32 路径解析里的处理**随版本与路径写法而变**
+（`\\?\` 前缀、长短路径、是否经 shell）。我写的是"我记得的行为"，不是这台机器的行为。
+这类测试比没测试更糟：它带着"已经用操作系统验证过了"的口吻，
+下一个人就不会再去查。
+
+**解法**：撤掉那条断言，换成把**实测结果本身**写进用例的 docstring
+（`test_windows_reserved_names_are_still_prefixed_even_though_this_machine_allows_them`），
+并把保留前缀的理由改成诚实的那个：别的消费方（资源管理器、备份工具、某些杀软、
+别的 Windows 版本）可能仍按设备名解析，而我们**无法在本机验证那批消费方**。
+看护落在函数层（前缀确实加了）与幂等性上。
+
+**判据**：`tests/unit/test_safe_filename.py` → 68 passed
+（9 条 hypothesis 属性 + 16 个定向测试函数，参数化展开成 68 条；
+其中 `test_result_is_usable_as_a_real_path` 是真建目录真写文件 ——
+那条是**可移植**的不变式，不含任何"Windows 会拒绝 X"的猜测）。
+
+**看护**：上面那个文件。另外记一句反直觉的：**这一轮 hypothesis 只找到 1 个 counterexample，
+而且是"我的断言写错"**（`safe_filename("", max_length=1)` 返回兜底字面量 `"unnamed"`，
+7 个字符 > 预算 2 —— 兜底值本来就不受长度预算约束）。
+另外三个错的是我手写的定向断言（`.._` 不是穿越、`。` 不该被剥、`"///"` → `"___"` 不走兜底），
+跟 hypothesis 无关。
+
+**所以属性测试的真实价值在这批里不是"抓到实现 bug"**，而是两样别的东西：
+① 它把"我认为的边界"变成可执行的句子，写的时候就得想清楚判据（那条 `max_length` 就是
+写出来才发现说不圆的）；② 幂等性与"结果永远是单段路径"这类**没法逐条列举**的性质，
+只有生成器能覆盖。抓到实现 bug 是偶得的红利，不是这层的 KPI。
 
 ---
 

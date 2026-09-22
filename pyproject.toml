@@ -134,10 +134,17 @@ ignore = [
     # 全角标点被判"歧义 Unicode"。本仓库的 docstring / 注释 / 用户可见文案一律中文，
     # 110 条里 109 条是这个。开着等于把中文文档全禁了。
 
-    "TC001", "TC003",
+    "TC001", "TC002", "TC003",
     # 不把导入挪进 TYPE_CHECKING 块。Pydantic v2 在建类时求值注解，
     # 挪进去要么得处处补 model_rebuild()，要么运行期 NameError。
     # 省的那点导入时间换不来这个坑。
+    # TC002（第三方）与 TC001（首方）是同一件事的另一半 —— Task 3 写存储层时才发现
+    # 只豁免两条会留下"一半文件挪、一半不挪"的分裂写法。
+    #
+    # **别把它读成"TYPE_CHECKING 在本仓库被禁了"**：`storage/db.py` 与
+    # `storage/files.py` 把 `AppConfig` 放在 TYPE_CHECKING 块里是**分层**要求
+    # （依赖方向 api → core → platforms → infra → storage，storage 不许运行期往上引），
+    # 不是导入风格。那两处照旧手写，这条豁免只是不替我们做这个决定。
 
     "UP046", "UP047",
     # 不用 PEP 695 的 `class X[T]` 语法。Generic[T] 在 Pydantic 泛型模型上

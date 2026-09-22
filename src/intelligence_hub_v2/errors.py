@@ -60,3 +60,32 @@ class ConfigError(IntelligenceHubError):
     def __init__(self, message: str, *, path: str | None = None) -> None:
         self.path = path
         super().__init__(message)
+
+
+class StorageError(IntelligenceHubError):
+    """存储层异常基类（DB / 文件）。
+
+    API 层（Task 9）把这一族映射成 HTTP 状态码，所以**不许**在 Repository 里
+    抛裸 `ValueError` / `KeyError` —— 那样全局异常处理器只能一律 500。
+    """
+
+
+class NotFoundError(StorageError):
+    """按主键 / 唯一键查不到。API 层映射 404。"""
+
+    def __init__(self, entity: str, key: object) -> None:
+        self.entity = entity
+        self.key = key
+        super().__init__(f"{entity} 不存在: {key!r}")
+
+
+class ConflictError(StorageError):
+    """唯一约束冲突（同平台同 ID 已存在）。API 层映射 409。"""
+
+
+class MigrationError(StorageError):
+    """Alembic 迁移失败或迁移链与模型漂移。
+
+    这条的存在意义是**启动就红**：schema 对不上还继续跑，
+    后面每一条 SQL 都会以更难懂的方式失败。
+    """

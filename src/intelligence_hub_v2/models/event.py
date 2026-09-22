@@ -165,3 +165,17 @@ class TranscriptReadyPayload(BaseModel):
     engine: str
     char_count: int
     sentence_count: int
+
+
+# --- 存储层 ---
+
+
+class StoredEvent(Event):
+    """落库后的事件（多一个自增 `id`）。
+
+    SSE 推给前端的是 `Event`（没有 id），回放历史时给的是 `StoredEvent`。
+    分开这两个类型是为了让"线上推流"和"事后翻历史"这两条路各自拿到
+    自己该有的字段 —— 前端不该在实时流里看到一个无意义的 id。
+    """
+
+    id: int
