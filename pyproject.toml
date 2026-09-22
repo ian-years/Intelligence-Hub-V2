@@ -150,7 +150,18 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ANN", "PLR2004", "S105", "S106"]
+# tests：断言字符串、故意绑 0.0.0.0 的反例、故意抛的假异常、
+# 用不上的 fixture/callback 形参 —— 这些在测试里是正常写法，不是缺陷。
+"tests/**" = [
+    "S101",      # assert
+    "S104",      # 测试里就是要验"改成 0.0.0.0 不会被静默改写"
+    "S105", "S106",
+    "ANN",       # 测试函数的注解由 mypy 不管、ruff 不啰嗦
+    "PLR2004",   # 魔法数字（端口、计数）
+    "EM",        # 测试里现编的异常消息不需要先赋值给变量
+    "TRY",       # tryceratops 那套在测试里没有意义
+    "ARG",       # 未使用的 fixture 参数 / lambda 形参
+]
 "tools/**" = ["ANN", "PLR0913"]
 "alembic/**" = ["ANN", "E501"]
 
@@ -169,7 +180,10 @@ line-ending = "lf"
 python_version = "3.12"
 strict = true
 warn_return_any = true
-warn_unused_configs = true
+warn_unused_configs = false
+# 关掉的原因：下面那条 overrides 覆盖的是**可选 extras**（yt-dlp / sherpa-onnx /
+# curl-cffi / zhconv），只装了 dev extras 的环境里 mypy 会认为整段"没用上"，
+# 于是每次跑都多一行 note。信号（抓模块名拼错）值不上这个噪音。
 disallow_untyped_decorators = true
 disallow_any_generics = true
 extra_checks = true

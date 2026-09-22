@@ -17,6 +17,9 @@ app:
   openapi_url: "/openapi.json"
   docs_url: "/api/docs"           # Swagger UI
   redoc_url: null                 # 关掉 ReDoc，节省加载
+  # 平台被禁用时，前端 Feed 是否仍显示它的历史数据。
+  # true = 关掉平台只是停采集，已收的东西不消失（用户预期如此）。
+  show_disabled_platform_history: true
 
 data:
   # 数据目录（相对路径相对仓库根，绝对路径直接用）
@@ -50,6 +53,21 @@ scheduler:
   # 任务并发上限（按平台限流，每个平台一个 Semaphore）
   max_concurrent_per_platform: 2
   max_concurrent_global: 4
+  # 启动时跑一次 preflight（缺依赖就如实报红，不臆造成功 —— V1 §1.3）
+  health_check_on_startup: true
+  health_check_interval_seconds: 300              # 5 分钟
+  # 每类任务的超时（秒）。超时记 status='timeout' 并写终态清单（V1 §2 契约二）。
+  # key 必须是 TaskKind 的取值，写错启动就报 ConfigError。
+  task_timeout_seconds:
+    platform_collect: 3600                        # 1 小时
+    all_platforms: 7200                           # 2 小时（四平台串行）
+    single_link: 600                              # 10 分钟
+    add_creator: 60
+    backfill: 1800                                # 30 分钟
+    postprocess: 1800                             # 30 分钟
+    sync: 900
+    preflight: 30
+    migrate: 3600
 
 cdp_bridge:
   # CDP 桥（独立服务，V2 仓库内 cdp_bridge_server.py）

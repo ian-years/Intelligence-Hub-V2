@@ -55,7 +55,185 @@ V1 的 `AGENTS.md §7` 记录了 25 条踩出来的陷阱。V2 不是"重写一�
 > 本节在 V2.0 实施过程中逐步填充。每条格式：
 > **现象** → **根因** → **解法** → **判据** → **看护**
 
-（暂无，待实施）
+#### 坑 1 · ruff 的默认规则集把中文文档全判成"歧义 Unicode"（Task 1）
+
+**现象**：`ruff check src/ tests/` 报 130 条错误，其中 110 条是 `RUF002 ambiguous-unicode-character-docstring`，
+指认的全是中文全角标点（`，` `。` `：` `（`）。
+
+**根因**：RUF001/002/003 的设计目标是防"用西里尔字母 а 冒充拉丁 a"这类同形字攻击。
+中文全角标点和 ASCII 标点确实同形，但本仓库的 docstring / 注释 / 用户可见文案**一律中文**，
+这条规则开着等于禁止写中文文档。
+
+**解法**：在 `pyproject.toml` 里显式 ignore，**每条都写中文原因**，不做"一把梭关掉全部 lint"。
+同一批还豁免了：
+- `TC001` / `TC003`（不把导入挪进 `TYPE_CHECKING`）—— Pydantic v2 建类时求值注解，
+  挪进去要么处处补 `model_rebuild()`，要么运行期 `NameError`。
+- `UP046` / `UP047`（不用 PEP 695 的 `class X[T]`）—— `Generic[T]` 在 Pydantic 泛型模型上更久经考验。
+- `N818`（异常名不强制 `Error` 后缀）—— `TaskCancelled` / `TaskRejected` 是
+  `docs/specs/task-runner.md §2.5` 锁定的契约名，改动要走 ADR。
+- `PLR0913` / `TRY003` / `S101` —— 参数多的构造函数、中文错误消息、测试里的 `assert`。
+
+**判据**：`ruff check src/ tests/` 全绿；`pyproject.toml` 的 `ignore` 列表里**没有无注释的条目**。
+
+**看护**：`tests/unit/core/test_config.py` 之外没有专门测试（这是配置约定）；
+看护方式是代码审查 —— 往 `ignore` 里加东西必须带中文原因，否则打回。
+
+#### 坑 2 · `ManifestBuilder.fail()` 静默丢掉错误原文（Task 2）
+
+**现象**：`builder.fail(RuntimeError("读博主库失败"))` → `finalize()` 出来的 `Manifest`
+里**没有任何地方**装着 "读博主库失败" 这句话。`failures[]` 也是空的。
+
+**根因**：`fail()` 把消息存进了 `self._error`，但 `Manifest` 这个 Pydantic model
+**根本没有 `error` 字段**，`finalize()` 也就没传。spec `task-runner.md §2.6` 的
+`Manifest` 定义里同样没有 —— 这是**设计阶段的遗漏**，不是实施走样。
+后果正好撞上 V1 §1.3 的红线（"不许吞错"）和 V1 §7.22 那次真实事故
+（用户看到"任务失败 退出码 1"+ 一屏 traceback，清单里没有原因）。
+
+**解法**：
+1. `Manifest` 加 `error: str | None = None`（顶层任务级错误原文）。
+2. `fail()` 里 `self._error = str(exc) or f"{type(exc).__name__}（无消息文本）"`
+   —— 空消息的异常也要留下类名，`str(exc)` 返回 `""` 不等于"没有错误"。
+3. `fail()` 顺手把带 `platform` / `stage` 属性的异常（`PlatformError`）
+   自动追加一条 `FailureRecord`，这样"整个任务挂了"和"哪一步挂了"两个视角都在。
+4. 配套放宽两处契约：`FailureRecord.platform` 改成 `str | None`
+   （runner 级失败不归任何单一平台），`stage` 的 Literal 多一个 `"task"`。
+5. 适配器可以抛任意 stage 字符串（V1 §7.22 那次抛的是 `creators`），
+   `_coerce_stage()` 认不出来就归到 `"task"`，**原文仍然留在 `error` 里**，不丢信息。
+
+**判据**：`pytest tests/unit/test_manifest_builder.py -q` → 20 passed。
+其中 `test_fail_preserves_error_text_verbatim` 断言原文逐字相等，
+`test_fail_with_empty_message_exception` 断言空消息也留下类名。
+
+**看护**：`tests/unit/test_manifest_builder.py`（20 条），
+外加 `test_schema_version_is_locked` 锁住 `schema_version == "2.0"`
+（改 Manifest 结构必须显式升版本号，不许静默漂）。
+
+#### 坑 3 · `logging.py` 用 `FileHandler`，配置里的轮转参数是摆设（Task 2）
+
+**现象**：`LoggingSection` 有 `rotate_max_bytes=52428800` / `rotate_backup_count=5`，
+但 `setup_logging()` 里建的是 `logging.FileHandler` —— 两个配置项**一次都没被读过**。
+
+**根因**：Task 1 先写了 `LoggingSection`（照着 spec 抄字段），Task 2 补测试时
+覆盖率报告指出 `logging.py` 只有 25%，写测试才发现字段和实现是断开的。
+后果：常驻服务跑几周，`server.log` 无限长，几个 GB 起步，
+而且 V1 §7.17 那条"别把常驻服务的输出接在管道后面"的经验在 V2 里换成文件后同样致命。
+
+**解法**：换 `RotatingFileHandler(log_file, maxBytes=rotate_max_bytes,
+backupCount=rotate_backup_count, encoding="utf-8")`，
+`setup_logging()` 签名加两个 keyword-only 参数。
+`encoding="utf-8"` 必须显式传 —— Windows 上默认编码是 GBK，中文日志会 `UnicodeEncodeError`。
+
+**判据**：`test_file_handler_is_rotating` 断言 handler 类型 + `maxBytes` + `backupCount` 三个值都对得上。
+
+**看护**：`tests/unit/test_logging_setup.py::test_file_handler_is_rotating`。
+这条测试的价值不在"测轮转"，在**测配置项真的被消费了** —— 加配置字段时必须同时加一条这样的测试。
+
+#### 坑 4 · JSON 日志把所有中文转义成 `\uXXXX`（Task 2）
+
+**现象**：`{"event": "\u59dc\u80e1\u8bf4"}`。博主昵称、视频标题、平台返回的错误原文
+全部变成转义序列。
+
+**根因**：`structlog.processors.JSONRenderer` 默认 `serializer=json.dumps`，
+而 `json.dumps` 默认 `ensure_ascii=True`。
+
+**解法**：`functools.partial(json.dumps, ensure_ascii=False)` 传给 `JSONRenderer(serializer=...)`。
+代价是 stdout 必须能编码中文，所以配套写了 `_ensure_utf8_stream()`：
+V1 那条「Windows 上所有命令都要 `-X utf8`」的纪律（V1 AGENTS.md §4）
+在 V2 里改成**进程自己负责** —— `stream.reconfigure(encoding="utf-8", errors="replace")`。
+`errors="replace"` 是兜底：宁可日志里出现一个 `?`，也不要因为打日志把服务搞崩。
+没有 `reconfigure` 的流（pytest 的 capsys、重定向到 StringIO）原样返回。
+
+**判据**：`test_unicode_survives_json` 断言 `"\u" not in raw`（不只是断言解析回来相等 ——
+解析回来永远相等，那条断言抓不到这个 bug）；
+`test_ensure_utf8_stream_reconfigures_when_possible` 断言真的传了 `errors="replace"`。
+
+**看护**：`tests/unit/test_logging_setup.py`（4 条编码相关用例，含两条 fallback 分支）。
+
+#### 坑 5 · `get_logger` 的返回类型是谎话，`cast` 把它压过去了（Task 2）
+
+**现象**：注解写 `-> structlog.stdlib.BoundLogger`，实现写
+`cast("structlog.stdlib.BoundLogger", structlog.get_logger(...))`。
+mypy 全绿，但运行期 `isinstance(logger, structlog.stdlib.BoundLogger)` 是 **False**。
+
+**根因**：`structlog.get_logger()` 实际交出来的是 `BoundLoggerLazyProxy`
+（延迟到第一次调用才绑定真实 logger）。它**满足** `structlog.BoundLogger`
+这个 Protocol（有 `bind` / `info` / ...），但**不是** `stdlib.BoundLogger` 的实例。
+`cast` 的作用是"让 mypy 闭嘴"，不是"让类型变对" —— 用它压一个真实的类型不匹配，
+等于把 bug 从编译期挪到运行期。
+
+**解法**：返回类型改成 Protocol `structlog.BoundLogger`，`cast` 保留
+（Protocol 与 LazyProxy 之间 mypy 推不出来），但这次 cast 的方向是**对的**。
+函数 docstring 里写明"为什么不是 stdlib.BoundLogger"，防止下一个人再改回去。
+
+**判据**：`test_get_logger_satisfies_the_bound_logger_protocol` 同时断言两件事 ——
+Protocol 要求的 8 个方法都 `callable`，**且** `not isinstance(logger, structlog.stdlib.BoundLogger)`。
+后半句是这条测试的全部价值：它锁住的是"没有标错"，不是"能用"。
+
+**看护**：`tests/unit/test_logging_setup.py::test_get_logger_satisfies_the_bound_logger_protocol`。
+
+#### 坑 6 · 计划里的 `AppConfig(_yaml_file=path)` 根本不工作（Task 2）
+
+**现象**：实施计划 Task 2 写的测试模式是 `AppConfig(_yaml_file=yaml_file)`，
+照抄进测试后**静默失败** —— `_yaml_file` 始终是 `None`，没有报错。
+
+**根因**：Pydantic v2 的 `BaseModel.__init__` 会**丢弃**私有属性（下划线开头）的传入值，
+不报错、不警告。`private_attr` 只能靠 `model_post_init` 或默认工厂赋值。
+所以"通过构造函数传 YAML 路径"这条路在 Pydantic Settings 上是死的。
+
+**解法**：换成 `ContextVar` + 自定义 `PydanticBaseSettingsSource`：
+```python
+_YAML_DATA: ContextVar[dict[str, Any] | None] = ContextVar("_YAML_DATA", default=None)
+
+def load_app_config(yaml_path: Path | None = None, **cli_overrides: Any) -> AppConfig:
+    token = _YAML_DATA.set(read_yaml_mapping(path))
+    try:
+        return AppConfig(**cli_overrides)
+    finally:
+        _YAML_DATA.reset(token)
+```
+`settings_customise_sources` 返回 `(init_settings, env_settings, _YamlDictSource)`
+—— **顺序即优先级，第一个最高**（这点实测确认过，文档里写得含糊）。
+`dotenv` / `file_secret` 两个 source 故意不启用：V2 的配置来源只有
+defaults < YAML < env < CLI 四层，多一层就多一种"为什么这个值是这样"的排查成本。
+
+**判据**：`test_priority_ladder_*` 三条用例分别验 yaml>default、env>yaml、cli>env。
+
+**看护**：`tests/unit/core/test_config.py`（40 条）。
+另有一条**反向**用例 `test_bare_app_config_does_not_read_yaml` ——
+裸 `AppConfig()` 不读盘是**故意的**（测试隔离，也避免 V1 §7.12 那类"行为取决于 cwd"的坑），
+将来有人"顺手加个便利"就会被这条测试拦住。
+
+**连带坑**：`ContextVar` 的默认值不能写 `default={}`（ruff B039：可变默认值会被所有
+未 set 的上下文共享）。改成 `default=None` + 模块级 `_EMPTY` 哨兵 + `_yaml_data()` 访问器。
+
+#### 坑 7 · 设计阶段产出的 `platforms.yaml` 和 schema 对不上（Task 2）
+
+**现象**：`ConfigManager().load()` 直接抛
+`ConfigError: platforms.yaml 里有本构建不支持的平台: defaults, platforms`。
+
+**根因**：设计阶段写 YAML 时用了嵌套结构（顶层一个 `platforms:` 键，
+外加一个 `defaults:` 块给所有平台兜底）；而 `docs/specs/config-schema.md`
+和实施计划假设的是**扁平结构**（顶层键就是平台名）。两边都没错，但谁也没验过。
+`_load_platforms()` 的"未注册平台硬失败"逻辑（本来是为了防拼错平台名）
+恰好把这个漂移抓了出来 —— 如果它当初写成"忽略未知键"，这个 bug 会一直活到首次启动。
+
+**解法**：
+1. `platforms.yaml` 拍平：顶层键 = 平台名，删掉 `defaults:` 块。
+2. `defaults:` 里的内容不是丢掉，而是**升格成 schema 的真实字段**挪进 `app.yaml`：
+   `app.show_disabled_platform_history`、`scheduler.health_check_on_startup`、
+   `scheduler.health_check_interval_seconds`、`scheduler.task_timeout_seconds`（9 个 TaskKind 各一条）。
+   平台级的公共默认值由 `PlatformConfig` 的 Pydantic 字段默认值承担 ——
+   **默认值只能有一处**（V1 §7.24 的同一条纪律）。
+3. `xiaohongshu` / `youtube` 两节**整段注释掉**并写明 V2.1 启用，
+   而不是留着 `enabled: false`：注册表里没有实现却在配置里出现，等于对读者撒谎。
+
+**判据**：三条**漂移看护**测试（读的是仓库里真实发货的 `config/*.yaml`，不是 tmp_path 造的）：
+- `test_shipped_config_files_load` —— 发货配置必须能被 `ConfigManager` 加载。
+- `test_shipped_config_has_no_unregistered_platform_sections` —— 顶层键必须在 `PLATFORM_CONFIG_SCHEMAS` 里。
+- `test_shipped_platforms_yaml_survives_write_roundtrip` —— `write_platform_config()` 写回去再读回来必须等价。
+
+**看护**：`tests/unit/core/test_config.py` 末尾的"发货配置漂移看护"一节。
+这三条是**本仓库里唯一读真实 config/ 的测试**，改 YAML 不改 schema 就会红。
 
 ---
 
@@ -125,9 +303,97 @@ V1 的 `AGENTS.md §7` 记录了 25 条踩出来的陷阱。V2 不是"重写一�
 
 ### 实施阶段（V2.0）
 
-> 本节在 V2.0 实施过程中逐步填充。
+> 本节记录**跨任务的方法论**，具体的坑在上面"V2 新增"一节。
 
-（暂无，待实施）
+#### 经验 6 · spec 缺字段时补 spec，不要绕过去
+
+**现象**：Task 2 发现 `Manifest` 装不下任务级错误原文（坑 2）。
+
+**当时可以选的三条路**：
+1. 把错误塞进 `summary["error"]`（`dict[str, int | str]` 勉强能装字符串）—— **不用改 spec，但是撒谎**：
+   `summary` 的语义是计数，前端会拿它渲染统计卡片。
+2. 塞进 `failures[]` 造一条假记录 —— **破坏 `FailureRecord` 的语义**（它是"逐条 item 的失败"，
+   不是"整个任务的失败"），V1 §7.22 那次事故里恰恰就是这两层混在一起，看不出真因。
+3. 给 `Manifest` 加 `error` 字段，同时在 spec 里记一笔 —— 改了契约，但改得**诚实**。
+
+**决定**：走第 3 条。所有实施期对 spec 的偏离都记在本文件"V2 新增"一节，
+带**根因**和**判据**，让 V3 重写时能直接看到"V2 的 spec 哪里是错的"。
+
+**判据**：本文件的"V2 新增"一节里，每条坑都能回答"spec 原本怎么写的 / 为什么不够 / 改成什么了"。
+
+**看护**：`CONTRIBUTING.md` 的会话结束清单里加一条 ——
+"如果实施中偏离了 spec，是否在 `docs/lessons.md` 记了？"
+
+#### 经验 7 · 计划里的代码是**意图**，不是成品；每条都要真跑一遍
+
+**现象**：实施计划 `docs/plans/v2.0-implementation.md` 里的代码块，照抄进仓库后有 3 处直接不工作：
+- `AppConfig(_yaml_file=...)` —— Pydantic 静默丢弃（坑 6）。
+- `setup_logging()` 的 handler 装配 —— 配置字段没被消费（坑 3）。
+- `get_logger` 的返回类型 —— 运行期不是那个类（坑 5）。
+
+**根因**：写计划时没有可执行环境，代码块是"照着我理解的 API 写出来的"，
+不是"跑通过的"。这不是计划的缺陷 —— 计划的价值在于**任务边界、依赖顺序、验收标准**，
+不在于每行代码都对。
+
+**解法**：严格执行 TDD 循环（写失败测试 → 确认失败 → 实现 → 确认通过），
+**不许跳过"确认失败"那一步**。坑 5 就是靠这一步抓到的：
+测试先写成 `isinstance(logger, structlog.stdlib.BoundLogger)` 断言为真，跑出来是红的，
+才逼出"那到底该标什么类型"这个问题。
+
+**判据**：每个 Task 的提交都带测试，且 `pytest` 输出里能看到测试数在涨
+（Task 1：15 条 → Task 2：96 条）。
+
+**看护**：`superpowers:test-driven-development` skill；
+CI 的覆盖率门禁（总 80% / core 90% / platforms 90% / api 70%）。
+
+#### 经验 8 · lint 配置要在**第一个任务**就校准，不要攒到最后
+
+**现象**：Task 1 结束时 `ruff check` 报 130 条。如果按"先写完再统一修"的节奏，
+这 130 条会和后面 15 个任务的产出混在一起，届时已经分不清哪些是"该改的代码"哪些是"该改的规则"。
+
+**解法**：Task 1 当场处理完 —— 能自动修的 `--fix`，
+该豁免的写进 `pyproject.toml` 并**逐条附中文原因**（坑 1）。
+之后每个任务的 `ruff check` 都是干净的，新增的报错一定是新代码的真问题。
+
+**判据**：Task 1 的提交（`8c5f51a`）里 `ruff check` / `mypy src/` 双双全绿。
+
+**看护**：`Makefile` 的 `lint` target；pre-commit 钩子。
+
+#### 经验 9 · 覆盖率报告是**找断开的线**的工具，不是分数
+
+**现象**：Task 2 的测试写完，`pytest --cov` 显示 `logging.py` 25%、`models/manifest.py` 82%。
+补测试的过程中挖出坑 2、坑 3、坑 4、坑 5 —— **四个真 bug，全是"配置字段/类型注解和实现断开"**。
+
+**根因**：这两处代码是 Task 1 照 spec 写的，当时没有消费方，所以"写了但没接上"看不出来。
+
+**解法**：把覆盖率报告当**待办清单**用，而不是当分数用。
+低于 90% 的模块先看 `Missing` 那一列的行号 —— 未覆盖的分支往往正是"没人调用过"的那条线。
+反过来，100% 覆盖也不代表没 bug（坑 5 的类型谎话在补测试前覆盖率也是够的）。
+
+**判据**：Task 2 结束时 `logging.py` / `models/manifest.py` 都是 100%，总覆盖率 96.02%。
+
+**看护**：`pyproject.toml` 的 `--cov-fail-under=80`；CI 上传 coverage 到 codecov。
+
+#### 经验 10 · "读真实发货文件"的测试是漂移的唯一有效看护
+
+**现象**：坑 7 那个 `platforms.yaml` 与 schema 不兼容的问题，
+在 40 条配置测试全绿的情况下仍然存在 —— 因为**所有测试都用 `tmp_path` 造 YAML**，
+没有一条读仓库里真实的 `config/platforms.yaml`。
+
+**根因**：单元测试的隔离性（不碰真实文件）和"发货配置是否正确"这个需求天然冲突。
+tmp_path 测的是"代码能处理各种 YAML"，不是"我们发的那份 YAML 是对的"。
+
+**解法**：专门开一节"发货配置漂移看护"，三条测试用
+`REPO_ROOT = Path(__file__).resolve().parents[3]` 读真实的 `config/*.yaml`。
+它们不测代码逻辑，测的是**仓库自身的自洽性**：
+schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；写回读不等价 → 红。
+
+**判据**：`test_shipped_config_files_load` / `test_shipped_config_has_no_unregistered_platform_sections`
+/ `test_shipped_platforms_yaml_survives_write_roundtrip` 三条常绿。
+
+**看护**：这三条测试本身。**同样的手法后面还要用**：
+前端发货的 `settings.ts` 默认值 vs 后端 schema 默认值（V1 §7.24 的"默认值只能有一处"），
+以及 Alembic 迁移链 vs SQLAlchemy 元数据（Task 3 要加）。
 
 ---
 

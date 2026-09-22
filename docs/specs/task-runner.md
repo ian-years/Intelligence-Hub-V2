@@ -183,6 +183,7 @@ class Manifest(BaseModel):
     failures: list[FailureRecord]
     artifacts: list["ArtifactRef"]
     config_snapshot: dict[str, Any]           # 任务启动时的配置快照
+    error: str | None = None                  # 任务级错误原文（实施期补，见下）
 
 class ArtifactRef(BaseModel):
     kind: Literal["media", "transcript", "metadata", "cover", "manifest"]
@@ -191,6 +192,14 @@ class ArtifactRef(BaseModel):
     video_id: str | None = None
     size_bytes: int | None = None
 ```
+
+> **实施期修订（2026-09-22，Task 2）**：`error` 字段是实施时补的，原 spec 漏了。
+> `ManifestBuilder.fail(exc)` 拿到了异常原文却没地方放，`failures[]` 装的是**逐条 item** 的失败、
+> `summary` 的语义是计数 —— 两个都不该塞任务级错误。缺这个字段等于违反 V1 §1.3「不许吞错」，
+> 也正是 V1 §7.22 那次事故的样子（用户只看到"退出码 1"+ 一屏 traceback，清单里没有原因）。
+> 同时 `FailureRecord` 放宽两处：`platform` 可为 `None`（runner 级失败不归任何单一平台），
+> `stage` 的 Literal 多一个 `"task"`（不是某个 item 的流水线阶段挂了，而是任务本身挂了）。
+> 详见 `docs/lessons.md` 坑 2。
 
 **强制终态**：用上下文管理器实现，**任何分支退出**（成功/异常/取消/超时）都走 `finalize()`：
 

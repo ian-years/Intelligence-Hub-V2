@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -43,15 +43,20 @@ class FailureRecord(BaseModel):
     """清单里的失败记录。
 
     V1 §1.3 看护：error 字段必须是原文，不许吞错。
+
+    与 docs/specs/task-runner.md §2.4 的两处**放宽**（实施期发现，见 docs/lessons.md）：
+    - `platform` 可为 None：runner 级失败（配置坏了 / 博主库读不出来 / 存储打不开）
+      不归任何单一平台。V1 §7.22 那次 `RuntimeError` 一路甩成 traceback 就是这类。
+    - `stage` 多了 `"task"`：不是某个 item 的流水线阶段挂了，而是任务本身挂了。
     """
 
-    platform: str
-    stage: Literal["parse_url", "list", "download", "transcribe", "store"]
+    platform: str | None = None
+    stage: Literal["parse_url", "list", "download", "transcribe", "store", "task"]
     video_id: str | None = None
     creator_id: str | None = None
     error: str
     error_kind: str | None = None
-    timestamp: datetime
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class TaskResult(BaseModel):

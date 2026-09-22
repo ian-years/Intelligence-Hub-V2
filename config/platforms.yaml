@@ -1,140 +1,144 @@
 # Intelligence Hub V2 — 平台配置
 #
-# 每个平台一段，`enabled` 控制开关（前端配置面板可改）。
-# 改这个文件后**重启服务**才生效；运行时改配置走 `PUT /api/platforms/{name}/config`，
-# 服务端会原子写盘 + 热加载 + publish CONFIG_CHANGED 事件。
+# 结构：**顶层 key 就是平台名**（`douyin` / `bilibili` / ...），不再套一层 `platforms:`。
+# 原因是 `PUT /api/platforms/{name}/config` 要原子重写整个文件，
+# 扁平结构下「文件内容 == 平台配置表」，重写时不会误伤别的段。
+# 全局行为（超时、健康检查、Feed 是否显示已禁用平台的历史）在 `app.yaml`。
 #
-# 每个平台的完整 schema 见 `src/intelligence_hub_v2/platforms/<name>/config.py`
-# 与 `docs/specs/config-schema.md`。前端配置面板从 `/api/platforms/{name}/schema`
-# 拿 JSON Schema 自动渲染表单。
+# 改这个文件后**重启服务**才生效；运行时改配置走 `PUT /api/platforms/{name}/config`，
+# 服务端会原子写盘 + 热加载 + publish CONFIG_CHANGED 事件（配置层不监听文件变化）。
+#
+# 顶层出现本构建没注册的平台名 → 启动直接 `ConfigError`，不静默忽略。
+# 已注册的平台见 `src/intelligence_hub_v2/platforms/__init__.py` 的
+# `PLATFORM_CONFIG_SCHEMAS`；每个平台的完整 schema 见同目录下的 `config.py`，
+# 前端配置面板从 `/api/platforms/{name}/schema` 拿 JSON Schema 自动渲染表单。
 
-platforms:
-  # -------------------------------------------------------------------------
-  # 抖音
-  # -------------------------------------------------------------------------
-  douyin:
-    enabled: true
-    display_name: "抖音"
-    # cookie 文件（Netscape 格式，由 tools/refresh_bridge_cookies.py 从桥导出）
-    cookies_file: "data/cookies/douyin.com.txt"
-    # 是否走 CDP 桥（列表枚举与播放直链兜底都需要）
-    use_cdp_bridge: true
-    # 媒体下载策略：yt_dlp_with_fallback（V1 §7.2 那条经验：yt-dlp 必失败 → 页面播放直链）
-    media_strategy: "yt_dlp_with_fallback"
-    # yt-dlp cookie 优先级（V1 §7.3）
-    ytdlp_cookie_priority:
-      - "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER"   # 显式 --cookies-from-browser
-      - "env:DOUYIN_YTDLP_COOKIES_FILE"
-      - "file:cookies_file"                       # 上面那个 cookies_file
-      - "none"
-    # 限流
-    rate_limit:
-      per_minute: 30
-      per_creator_seconds: 2                      # 同一博主两条视频之间的间隔
-    # 列表枚举
-    list_strategy: "browser_scroll"               # 桥内页面 JS 滚动加载
-    videos_per_creator: 30
-    # 兜底
-    fallback_to_page_play_url: true
-    # 高级字段（前端默认折叠）
-    advanced:
-      retry_max: 3
-      retry_backoff_seconds: 2
-      request_timeout_seconds: 30
-      max_video_duration_seconds: null            # null = 不限
+# ---------------------------------------------------------------------------
+# 抖音
+# ---------------------------------------------------------------------------
+douyin:
+  enabled: true
+  display_name: "抖音"
+  # cookie 文件（Netscape 格式，由 tools/refresh_bridge_cookies.py 从桥导出）。
+  # 文件不存在不是错误 —— 见下面 ytdlp_cookie_priority 的阶梯。
+  cookies_file: "data/cookies/douyin.com.txt"
+  # 列表枚举与播放直链兜底都要在已登录浏览器的页面上下文里做
+  use_cdp_bridge: true
+  # V1 §7.2：抖音对非浏览器客户端做风控，直连 detail 接口恒 403，
+  # 缺的是页面那层 a_bogus 签名，yt-dlp 造不出来。
+  # 所以"yt-dlp 未拿到媒体，已改用页面播放直链"是**常态而不是故障**。
+  media_strategy: "yt_dlp_with_fallback"
+  # yt-dlp cookie 优先级阶梯（V1 §7.3）。从左到右第一个可用的胜出。
+  # Windows 上 yt-dlp 读不了 Chrome 的 cookie 库：
+  #   Chrome 开着 → Could not copy Chrome cookie database
+  #   Chrome 关着 → Failed to decrypt with DPAPI
+  # 唯一稳定路径是 --cookies <文件>，所以 file: 档排在 env: 之后、none 之前。
+  ytdlp_cookie_priority:
+    - "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER"   # 显式 --cookies-from-browser
+    - "env:DOUYIN_YTDLP_COOKIES_FILE"           # 显式 --cookies
+    - "file:cookies_file"                       # 上面那个 cookies_file
+    - "none"
+  rate_limit:
+    per_minute: 30
+    per_creator_seconds: 2                      # 同一博主两条视频之间的间隔
+  list_strategy: "browser_scroll"               # 桥内页面 JS 滚动加载
+  videos_per_creator: 30
+  # yt-dlp 失败时兜底到页面播放直链。**兜底时必须保留 yt-dlp 的失败原文**
+  # （MediaArtifact.yt_dlp_error）—— V1 早期一兜底成功就把原文丢掉，
+  # 日志只剩"未拿到媒体"，等于没法判断该修什么。
+  fallback_to_page_play_url: true
+  # CDN 播放直链是签名的、不带 cookie，几小时后失效。**别改成 true**，
+  # 否则库里躺一堆死链（V1 §7.2）。
+  persist_play_url: false
+  advanced:
+    retry_max: 3
+    retry_backoff_seconds: 2
+    request_timeout_seconds: 30
+    max_video_duration_seconds: null            # null = 不限
 
-  # -------------------------------------------------------------------------
-  # B站
-  # -------------------------------------------------------------------------
-  bilibili:
-    enabled: true
-    display_name: "B站"
-    cookies_file: "data/cookies/bilibili.com.txt"
-    use_cdp_bridge: false                         # B站列表枚举走公开 web-interface，不需要桥
-    # cookie 三档阶梯（V1 §7.15）：导出文件 > --cookies-from-browser > 匿名
-    cookie_variant_order:
-      - "exported_file"
-      - "browser"
-      - "anonymous"
-    ytdlp_cookies_from_browser: "chrome"          # cookie_variant_order 含 browser 时用
-    media_strategy: "yt_dlp"
-    list_strategy: "api"                          # 公开 web-interface
-    # 外部浏览器清单（V1 .agents/skills/bilibili-download 那条路）
-    external_browser_manifest_path: null          # 留空走内置；填路径则吃外部清单
-    videos_per_creator: 30
-    prefer_subtitles: true                        # 有字幕优先字幕，跳过 ASR
-    rate_limit:
-      per_minute: 60
-      per_creator_seconds: 1
-    advanced:
-      # 4K/高帧率档需要登录 cookie（V1 §7.15）
-      require_login_for_high_quality: true
-      dash_split_handling: "auto"                 # auto / merge / keep_split
-      retry_max: 3
-      retry_backoff_seconds: 2
-      request_timeout_seconds: 30
-      # 搜索兜底要 Node 版 playwright（V1 §7.16）
-      search_fallback_node_playwright: false
+# ---------------------------------------------------------------------------
+# B站
+# ---------------------------------------------------------------------------
+bilibili:
+  enabled: true
+  display_name: "B站"
+  cookies_file: "data/cookies/bilibili.com.txt"
+  # B站列表枚举走公开 web-interface，媒体走纯 yt-dlp，都不需要桥。
+  # 但无 cookie 枚举会随机回 352/412，**同一台机器上一条过一条不过**（V1 §7.15）。
+  use_cdp_bridge: false
+  # cookie 三档阶梯，顺序排死：导出文件 > --cookies-from-browser > 匿名。
+  # 档位差别往往不是"能不能下"，是**画质**：
+  #   BV1cSec6tEux 登录档 21 条视频轨/最高 1772p@59.94，匿名 15 条/886p@29.97
+  #   BV1ZUYf6JEfo 登录档视频轨 34.6 MB + 音轨 2.5 MB，匿名整片合并才 18.6 MB
+  # 所以清单 note 必须写清是哪一档。
+  cookie_variant_order:
+    - "exported_file"
+    - "browser"
+    - "anonymous"
+  ytdlp_cookies_from_browser: "chrome"          # 置空即跳过浏览器档
+  media_strategy: "yt_dlp"
+  list_strategy: "api"                          # 公开 web-interface
+  # 外部浏览器清单（V1 .agents/skills/bilibili-download 那条路）。
+  # 填路径则命中清单的博主跳过内置枚举；生产者是仓库内那份脚本，不是用户级副本（V1 §7.13）。
+  external_browser_manifest_path: null
+  videos_per_creator: 30
+  prefer_subtitles: true                        # 有字幕优先字幕，省一整轮 ASR
+  rate_limit:
+    per_minute: 60
+    per_creator_seconds: 1
+  advanced:
+    require_login_for_high_quality: true        # 4K/高帧率档需要登录 cookie
+    # 未合并 DASH 分片怎么办（V1 §7.21）。转写必须认音频轨：
+    # 只 rglob('*.mp4') 会把纯视频流喂给 ffmpeg，报出来的
+    # "Output file does not contain any stream" **长得和"ffmpeg 没装"一模一样**，
+    # 但方向完全不同 —— 先看错误里有没有这句，有就是分片问题，别去查 PATH。
+    dash_split_handling: "auto"                 # auto / merge / keep_split
+    retry_max: 3
+    retry_backoff_seconds: 2
+    request_timeout_seconds: 30
+    # 搜索兜底要的是 **Node 版** playwright + NODE_PATH，pip 那个不算数（V1 §7.16）。
+    # 依赖链很脏，默认关。开启后检测不到就如实失败，不静默跳过。
+    search_fallback_node_playwright: false
 
-  # -------------------------------------------------------------------------
-  # 小红书
-  # -------------------------------------------------------------------------
-  xiaohongshu:
-    enabled: true
-    display_name: "小红书"
-    cookies_file: "data/cookies/xiaohongshu.com.txt"
-    use_cdp_bridge: true                          # 列表枚举与详情都走桥
-    media_strategy: "yt_dlp"
-    list_strategy: "browser_scroll"
-    videos_per_creator: 30
-    rate_limit:
-      per_minute: 20
-      per_creator_seconds: 3
-    advanced:
-      retry_max: 3
-      retry_backoff_seconds: 2
-      request_timeout_seconds: 30
-      include_image_notes: true                   # 是否收图文笔记
-
-  # -------------------------------------------------------------------------
-  # YouTube
-  # -------------------------------------------------------------------------
-  youtube:
-    enabled: false                                # 默认关：V1 §6 实测本机网络不可达
-    display_name: "YouTube"
-    cookies_file: null                            # YouTube 不需要 cookie
-    use_cdp_bridge: false
-    media_strategy: "yt_dlp"
-    list_strategy: "yt_dlp_flat"                  # yt-dlp --flat-playlist
-    videos_per_creator: 30
-    prefer_subtitles: true
-    rate_limit:
-      per_minute: 30
-      per_creator_seconds: 1
-    # 代理（本机网络不可达时用）
-    proxy: null                                   # "http://127.0.0.1:7890"
-    advanced:
-      retry_max: 3
-      retry_backoff_seconds: 2
-      request_timeout_seconds: 60
-      # yt-dlp-ejs 需要 node 在 PATH（V1 §4.1）
-      require_node: true
-      format_preference: "bestvideo[height<=1080]+bestaudio/best"
-
-# ============================================================================
-# 全局平台行为
-# ============================================================================
-defaults:
-  # 平台被禁用时的全局行为（前端 Feed 是否仍显示历史数据）
-  show_disabled_platform_history: true
-  # 健康检查
-  health_check_on_startup: true
-  health_check_interval_seconds: 300              # 5 分钟
-  # 任务超时
-  task_timeout_seconds:
-    platform_collect: 3600                        # 1 小时
-    single_link: 600                              # 10 分钟
-    add_creator: 60
-    postprocess: 1800                             # 30 分钟
-    preflight: 30
-    backfill: 1800
+# ---------------------------------------------------------------------------
+# 小红书 / YouTube —— V2.1 才实现（ROADMAP.md + ADR-0010）
+# ---------------------------------------------------------------------------
+# 这两段**故意注释掉**：配置层对未注册的平台名是硬失败（ConfigError），
+# 留着不注释 = 新克隆的仓库起不来。V2.1 注册适配器时把注释放开即可。
+#
+# xiaohongshu:
+#   enabled: true
+#   display_name: "小红书"
+#   cookies_file: "data/cookies/xiaohongshu.com.txt"
+#   use_cdp_bridge: true                        # 列表枚举与详情都走桥
+#   media_strategy: "yt_dlp"
+#   list_strategy: "browser_scroll"
+#   videos_per_creator: 30
+#   rate_limit:
+#     per_minute: 20
+#     per_creator_seconds: 3
+#   advanced:
+#     retry_max: 3
+#     retry_backoff_seconds: 2
+#     request_timeout_seconds: 30
+#     include_image_notes: true                 # 是否收图文笔记
+#
+# youtube:
+#   enabled: false                              # 默认关：V1 §6 实测本机网络不可达
+#   display_name: "YouTube"
+#   cookies_file: null                          # YouTube 不需要 cookie
+#   use_cdp_bridge: false
+#   media_strategy: "yt_dlp"
+#   list_strategy: "yt_dlp_flat"                # yt-dlp --flat-playlist
+#   videos_per_creator: 30
+#   prefer_subtitles: true
+#   rate_limit:
+#     per_minute: 30
+#     per_creator_seconds: 1
+#   proxy: null                                 # 本机网络不可达时填 "http://127.0.0.1:7890"
+#   advanced:
+#     retry_max: 3
+#     retry_backoff_seconds: 2
+#     request_timeout_seconds: 60
+#     require_node: true                        # yt-dlp-ejs 需要 node 在 PATH（V1 §4.1）
+#     format_preference: "bestvideo[height<=1080]+bestaudio/best"

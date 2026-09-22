@@ -18,6 +18,28 @@
 4. 环境变量 `INTELLIGENCE_HUB_*`（嵌套用 `__` 分隔，如 `INTELLIGENCE_HUB_APP__PORT=9000`）
 5. CLI 参数（`--config-dir` / `--data-dir` / `--port` / `--platforms-enable douyin,bilibili`）
 
+> **实施期修订（2026-09-22，Task 2）**，四条，详见 `docs/lessons.md` 坑 6 / 坑 7：
+>
+> 1. **YAML 不是通过构造函数传的**。计划里写的 `AppConfig(_yaml_file=path)` 不工作 ——
+>    Pydantic v2 的 `__init__` 会**静默丢弃**下划线开头的私有属性，不报错。
+>    实现改成 `ContextVar` + 自定义 `PydanticBaseSettingsSource`，公开入口是
+>    `load_app_config(yaml_path=None, **cli_overrides) -> AppConfig`。
+> 2. **`settings_customise_sources` 返回的元组顺序即优先级，第一个最高**：
+>    `(init_settings, env_settings, _YamlDictSource)`。`dotenv` / `file_secret` 两个 source
+>    故意不启用 —— 配置来源只有上面这五层，多一层就多一种排查成本。
+> 3. **裸 `AppConfig()` 不读盘**，这是**故意的**（测试隔离，也避免 V1 §7.12 那类
+>    "行为取决于 cwd"的坑）。要读盘必须走 `load_app_config()` 或 `ConfigManager.load()`。
+>    看护：`test_bare_app_config_does_not_read_yaml`。
+> 4. **`platforms.yaml` 是扁平结构**：顶层键就是平台名，**没有** `platforms:` 外层、
+>    **没有** `defaults:` 块（设计阶段的示例文件是嵌套的，与 schema 不兼容，已改）。
+>    平台级公共默认值由 `PlatformConfig` 的 Pydantic 字段默认值承担 —— 默认值只能有一处
+>    （V1 §7.24 的同一条纪律）。原 `defaults:` 里的运行时项升格成 `app.yaml` 的真实字段：
+>    `app.show_disabled_platform_history`、`scheduler.health_check_on_startup`、
+>    `scheduler.health_check_interval_seconds`、`scheduler.task_timeout_seconds`。
+>    注册表里没有实现的平台（`xiaohongshu` / `youtube`）在 YAML 里**整段注释掉**，
+>    不留 `enabled: false` —— 出现了却没有实现等于对读者撒谎；
+>    `_load_platforms()` 对未注册的顶层键**硬失败**（`ConfigError`）。
+
 ---
 
 ## 2. `AppConfig`
@@ -142,6 +164,15 @@ class PlatformConfig(BaseModel):
     advanced: dict[str, Any] = Field(default_factory=dict)
     """平台特有字段，前端默认折叠（用 ui:advanced 标记）。"""
 ```
+
+> **实施期修订（2026-09-22，Task 2）**：`advanced` 的注解从 `dict[str, Any]` 改成 `Any`
+> （默认值仍是 `default_factory=dict`）。原因是子类会把它**覆盖成强类型 model**
+> （`DouyinAdvanced` / `BilibiliAdvanced`），而 Pydantic model 不是 `dict` 的子类型，
+> mypy strict 会拒绝这个覆盖。放宽到 `Any` 之后，强类型由子类自己的注解保证，
+> 基类不再假装它是 dict。前端仍然按 JSON Schema 渲染，取到的是子类的具体 schema。
+>
+> 另一处：`Capabilities` 是 `@dataclass(frozen=True, slots=True)`，
+> **不进配置**（`docs/specs/platform-adapter.md`），改它要发版 —— 见 `docs/lessons.md` 经验 4。
 
 ### 3.1 `DouyinConfig`
 

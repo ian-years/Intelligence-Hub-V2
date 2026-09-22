@@ -76,8 +76,47 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中（Task 1 起）
+- **V2.0 实施**：进行中 —— Task 1 ✅ / Task 2 ✅ / Task 3-16 待做
 - **V1 工作区**：未动
+
+### 实施进度明细
+
+| Task | 内容 | 状态 | 提交 | 测试 |
+|------|------|------|------|------|
+| 1 | 包骨架 + `errors.py` + `logging.py` + 共享 models | ✅ | `8c5f51a` | 15 passed |
+| 2 | 配置层 `AppConfig` / `PlatformConfig` 家族 / `ConfigManager` | ✅ | 见 git log | 96 passed（累计），覆盖率 96.02% |
+| 3 | DB schema + Alembic + Repository + Storage | ⬜ | — | — |
+| 4 | EventBus + `manifest_writer` 上下文管理器 | ⬜ | — | — |
+| 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ⬜ | — | — |
+| 6 | DouyinAdapter（可与 Task 7 并行） | ⬜ | — | — |
+| 7 | BilibiliAdapter | ⬜ | — | — |
+| 8 | TaskRunner + TaskRegistry + 6 个 handler | ⬜ | — | — |
+| 9 | FastAPI app + 全部 API 路由 + SSE | ⬜ | — | — |
+| 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ⬜ | — | — |
+| 11 | 前端 API 层 + SSE + stores + Router + Layout | ⬜ | — | — |
+| 12 | 页面 Dashboard / Feed / Settings / Preflight | ⬜ | — | — |
+| 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ⬜ | — | — |
+| 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ⬜ | — | — |
+| 15 | `tools/migrate_v1.py` | ⬜ | — | — |
+| 16 | CI 验证 + 端到端 smoke + 收尾文档 | ⬜ | — | — |
+
+**门禁现状**（每次提交前都要全绿）：
+
+```bash
+cd E:/08-Codework/Intelligence-Hub-V2
+.venv/Scripts/python.exe -m pytest tests/ -q          # 96 passed，覆盖率 96.02%（门禁 80%）
+.venv/Scripts/python.exe -m ruff format src/ tests/
+.venv/Scripts/python.exe -m ruff check src/ tests/    # All checks passed
+.venv/Scripts/python.exe -m mypy src/                 # no issues found in 18 source files
+```
+
+**尚未安装的可选依赖**（Task 6/7/8 需要）：`yt-dlp` / `curl-cffi` / `zhconv` / `sherpa-onnx` /
+`numpy` / `playwright`。装法：`.venv/Scripts/python.exe -m pip install -e ".[media,asr,bridge]"`。
+
+**实施期对 spec 的偏离**全部记在 `docs/lessons.md`「V2 新增」一节（7 条坑）与
+「实施阶段」一节（5 条方法论），涉及的两份 spec 已就地加修订说明：
+`docs/specs/task-runner.md §2.6`（`Manifest.error`）、`docs/specs/config-schema.md §1 / §3`
+（YAML 加载方式、`platforms.yaml` 扁平化、`advanced: Any`）。
 
 ---
 
