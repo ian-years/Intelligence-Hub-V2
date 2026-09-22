@@ -1,0 +1,110 @@
+# === 运行时数据（含凭证、媒体、SQLite、ASR 模型） ===
+data/
+!data/.gitkeep
+
+# === 敏感配置 ===
+config/feishu.yaml
+config/*.local.yaml
+config/secrets/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === uv ===
+.uv/
+
+# === pytest / coverage ===
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# === mypy / ruff ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# === Node / 前端 ===
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# === Playwright ===
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# === 编辑器 / OS ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === 临时 / 调试 ===
+.tmp/
+tmp/
+*.log
+*.bak
+*.orig
+*.rej
+
+# === Qoder / AI 工具的工作目录（保留 .qoder/repowiki 等配置，但屏蔽缓存） ===
+.qoder/cache/
+.qoder/tmp/
+
+# === V1 兼容（防止误把 V1 数据放进 V2） ===
+downloads/
+local.sqlite3
+feishu-base.sqlite3
+cookies/
+cdp-bridge-profile/
+asr-models/
+
+# === ASR 模型（233 MB，不进 git） ===
+*.onnx
+*.tar.bz2
+*.zip
+sherpa-onnx-*/

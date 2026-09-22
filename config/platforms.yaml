@@ -1,0 +1,140 @@
+# Intelligence Hub V2 — 平台配置
+#
+# 每个平台一段，`enabled` 控制开关（前端配置面板可改）。
+# 改这个文件后**重启服务**才生效；运行时改配置走 `PUT /api/platforms/{name}/config`，
+# 服务端会原子写盘 + 热加载 + publish CONFIG_CHANGED 事件。
+#
+# 每个平台的完整 schema 见 `src/intelligence_hub_v2/platforms/<name>/config.py`
+# 与 `docs/specs/config-schema.md`。前端配置面板从 `/api/platforms/{name}/schema`
+# 拿 JSON Schema 自动渲染表单。
+
+platforms:
+  # -------------------------------------------------------------------------
+  # 抖音
+  # -------------------------------------------------------------------------
+  douyin:
+    enabled: true
+    display_name: "抖音"
+    # cookie 文件（Netscape 格式，由 tools/refresh_bridge_cookies.py 从桥导出）
+    cookies_file: "data/cookies/douyin.com.txt"
+    # 是否走 CDP 桥（列表枚举与播放直链兜底都需要）
+    use_cdp_bridge: true
+    # 媒体下载策略：yt_dlp_with_fallback（V1 §7.2 那条经验：yt-dlp 必失败 → 页面播放直链）
+    media_strategy: "yt_dlp_with_fallback"
+    # yt-dlp cookie 优先级（V1 §7.3）
+    ytdlp_cookie_priority:
+      - "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER"   # 显式 --cookies-from-browser
+      - "env:DOUYIN_YTDLP_COOKIES_FILE"
+      - "file:cookies_file"                       # 上面那个 cookies_file
+      - "none"
+    # 限流
+    rate_limit:
+      per_minute: 30
+      per_creator_seconds: 2                      # 同一博主两条视频之间的间隔
+    # 列表枚举
+    list_strategy: "browser_scroll"               # 桥内页面 JS 滚动加载
+    videos_per_creator: 30
+    # 兜底
+    fallback_to_page_play_url: true
+    # 高级字段（前端默认折叠）
+    advanced:
+      retry_max: 3
+      retry_backoff_seconds: 2
+      request_timeout_seconds: 30
+      max_video_duration_seconds: null            # null = 不限
+
+  # -------------------------------------------------------------------------
+  # B站
+  # -------------------------------------------------------------------------
+  bilibili:
+    enabled: true
+    display_name: "B站"
+    cookies_file: "data/cookies/bilibili.com.txt"
+    use_cdp_bridge: false                         # B站列表枚举走公开 web-interface，不需要桥
+    # cookie 三档阶梯（V1 §7.15）：导出文件 > --cookies-from-browser > 匿名
+    cookie_variant_order:
+      - "exported_file"
+      - "browser"
+      - "anonymous"
+    ytdlp_cookies_from_browser: "chrome"          # cookie_variant_order 含 browser 时用
+    media_strategy: "yt_dlp"
+    list_strategy: "api"                          # 公开 web-interface
+    # 外部浏览器清单（V1 .agents/skills/bilibili-download 那条路）
+    external_browser_manifest_path: null          # 留空走内置；填路径则吃外部清单
+    videos_per_creator: 30
+    prefer_subtitles: true                        # 有字幕优先字幕，跳过 ASR
+    rate_limit:
+      per_minute: 60
+      per_creator_seconds: 1
+    advanced:
+      # 4K/高帧率档需要登录 cookie（V1 §7.15）
+      require_login_for_high_quality: true
+      dash_split_handling: "auto"                 # auto / merge / keep_split
+      retry_max: 3
+      retry_backoff_seconds: 2
+      request_timeout_seconds: 30
+      # 搜索兜底要 Node 版 playwright（V1 §7.16）
+      search_fallback_node_playwright: false
+
+  # -------------------------------------------------------------------------
+  # 小红书
+  # -------------------------------------------------------------------------
+  xiaohongshu:
+    enabled: true
+    display_name: "小红书"
+    cookies_file: "data/cookies/xiaohongshu.com.txt"
+    use_cdp_bridge: true                          # 列表枚举与详情都走桥
+    media_strategy: "yt_dlp"
+    list_strategy: "browser_scroll"
+    videos_per_creator: 30
+    rate_limit:
+      per_minute: 20
+      per_creator_seconds: 3
+    advanced:
+      retry_max: 3
+      retry_backoff_seconds: 2
+      request_timeout_seconds: 30
+      include_image_notes: true                   # 是否收图文笔记
+
+  # -------------------------------------------------------------------------
+  # YouTube
+  # -------------------------------------------------------------------------
+  youtube:
+    enabled: false                                # 默认关：V1 §6 实测本机网络不可达
+    display_name: "YouTube"
+    cookies_file: null                            # YouTube 不需要 cookie
+    use_cdp_bridge: false
+    media_strategy: "yt_dlp"
+    list_strategy: "yt_dlp_flat"                  # yt-dlp --flat-playlist
+    videos_per_creator: 30
+    prefer_subtitles: true
+    rate_limit:
+      per_minute: 30
+      per_creator_seconds: 1
+    # 代理（本机网络不可达时用）
+    proxy: null                                   # "http://127.0.0.1:7890"
+    advanced:
+      retry_max: 3
+      retry_backoff_seconds: 2
+      request_timeout_seconds: 60
+      # yt-dlp-ejs 需要 node 在 PATH（V1 §4.1）
+      require_node: true
+      format_preference: "bestvideo[height<=1080]+bestaudio/best"
+
+# ============================================================================
+# 全局平台行为
+# ============================================================================
+defaults:
+  # 平台被禁用时的全局行为（前端 Feed 是否仍显示历史数据）
+  show_disabled_platform_history: true
+  # 健康检查
+  health_check_on_startup: true
+  health_check_interval_seconds: 300              # 5 分钟
+  # 任务超时
+  task_timeout_seconds:
+    platform_collect: 3600                        # 1 小时
+    single_link: 600                              # 10 分钟
+    add_creator: 60
+    postprocess: 1800                             # 30 分钟
+    preflight: 30
+    backfill: 1800

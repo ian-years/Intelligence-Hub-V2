@@ -1,0 +1,128 @@
+# pre-commit hooks — `pre-commit install` 后每次 commit 自动跑
+# 手动全跑：`pre-commit run --all-files`
+
+default_language_version:
+  python: python3.12
+
+repos:
+  # ---------------------------------------------------------------------
+  # 通用文件检查
+  # ---------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: check-added-large-files
+        args: ['--maxkb=512']
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: name-tests-test
+        args: ['--pytest-test-first']
+
+  # ---------------------------------------------------------------------
+  # 敏感信息检测（V1 §1.1 那条「downloads/ 永不入库」的兜底）
+  # ---------------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+            uv\.lock|
+            .*\.example|
+            docs/.*|
+            tests/fixtures/.*
+          )$
+
+  # ---------------------------------------------------------------------
+  # Python: ruff（lint + format）
+  # ---------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        name: ruff check
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: ruff format
+
+  # ---------------------------------------------------------------------
+  # Python: mypy（strict）
+  # ---------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pydantic>=2.9
+          - pydantic-settings>=2.5
+          - types-PyYAML
+          - types-python-dateutil
+        args: [--config-file=pyproject.toml]
+        pass_filenames: false
+        entry: bash -c 'uv run mypy src'
+
+  # ---------------------------------------------------------------------
+  # uv lockfile 同步
+  # ---------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: uv-lock
+        name: uv lock --check
+        entry: bash -c 'uv lock --check'
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------
+  # 前端: ESLint / Prettier / Stylelint（通过 npm，需 frontend/node_modules）
+  # ---------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: bash -c 'cd frontend && npx eslint --fix --max-warnings=0'
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx|mjs|cjs)$
+        pass_filenames: false
+
+      - id: prettier
+        name: prettier
+        entry: bash -c 'cd frontend && npx prettier --write --ignore-path .gitignore'
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx|json|css|md|html)$
+        pass_filenames: false
+
+      - id: stylelint
+        name: stylelint
+        entry: bash -c 'cd frontend && npx stylelint --fix'
+        language: system
+        files: ^frontend/.*\.css$
+        pass_filenames: false
+
+      - id: tsc
+        name: typescript --noEmit
+        entry: bash -c 'cd frontend && npx tsc --noEmit'
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------
+  # 提交信息（Conventional Commits）
+  # ---------------------------------------------------------------------
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, refactor, test, chore, perf, ci, build, style, revert]

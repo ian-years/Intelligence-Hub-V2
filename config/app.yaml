@@ -1,0 +1,83 @@
+# Intelligence Hub V2 — 全局配置
+#
+# 优先级（低 → 高）：
+#   1. Pydantic Settings 内置默认值
+#   2. 本文件 (config/app.yaml)
+#   3. 环境变量 INTELLIGENCE_HUB_*
+#   4. CLI 参数
+#
+# 改这个文件后**重启服务**才生效（运行时不监听文件变化，配置只通过 API 写）。
+
+app:
+  name: "Intelligence Hub V2"
+  version: "0.1.0"
+  host: "127.0.0.1"               # 只绑回环（V1 §1.2 硬约束）
+  port: 8789
+  cors_origins: []                # 默认无 CORS（同源），开发时前端走 Vite proxy
+  openapi_url: "/openapi.json"
+  docs_url: "/api/docs"           # Swagger UI
+  redoc_url: null                 # 关掉 ReDoc，节省加载
+
+data:
+  # 数据目录（相对路径相对仓库根，绝对路径直接用）
+  # 可用环境变量 INTELLIGENCE_HUB_DATA_DIR 覆盖
+  dir: "data"
+  # 媒体子目录布局：data/media/<platform>/<creator_name>/<video_id>-<safe_title>/
+  media_subdir: "media"
+  manifests_subdir: "manifests"
+  cookies_subdir: "cookies"
+  logs_subdir: "logs"
+
+storage:
+  # SQLite 配置
+  sqlite_file: "intelligence_hub.sqlite3"   # 相对 data.dir
+  wal_mode: true
+  busy_timeout_ms: 5000
+  # 事件流保留期（天），过期清理已完成任务的事件
+  event_retention_days: 30
+
+logging:
+  level: "INFO"                   # DEBUG / INFO / WARNING / ERROR
+  format: "json"                  # json / console（开发模式用 console）
+  file: "server.log"              # 相对 data.dir/logs_subdir
+  rotate_max_bytes: 52428800      # 50 MB
+  rotate_backup_count: 5
+
+scheduler:
+  # APScheduler 配置
+  enabled: true
+  timezone: "Asia/Shanghai"
+  # 任务并发上限（按平台限流，每个平台一个 Semaphore）
+  max_concurrent_per_platform: 2
+  max_concurrent_global: 4
+
+cdp_bridge:
+  # CDP 桥（独立服务，V2 仓库内 cdp_bridge_server.py）
+  url: "http://127.0.0.1:3457"
+  enabled: true
+  # 桥健康检查间隔（秒）
+  health_check_interval_seconds: 60
+  # 自愈冷却（V1 §7.20）
+  restart_cooldown_seconds: 30
+
+asr:
+  # ASR 引擎（V2.1 接入）
+  engine: "sherpa_sense_voice"    # sherpa_sense_voice / mlx_whisper / faster_whisper
+  model_dir: "data/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
+  # 模型目录也可由环境变量 SENSEVOICE_MODEL_DIR 或 SHERPA_ONNX_MODEL_DIR 覆盖
+  num_threads: 4
+  device: "cpu"                   # cpu / cuda / mps
+
+http_client:
+  # httpx 全局配置
+  timeout_seconds: 30
+  follow_redirects: true
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+paths:
+  # 外部依赖路径（可选，留空走 PATH）
+  ffmpeg: null
+  ffprobe: null
+  node: null
+  yt_dlp: null

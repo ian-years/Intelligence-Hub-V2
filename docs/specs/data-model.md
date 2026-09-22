@@ -1,0 +1,364 @@
+# Spec: Data Model
+
+> **状态**：Locked（V2.0 起 schema 稳定，改动走 Alembic 迁移 + ADR）
+> **源文件**：`src/intelligence_hub_v2/storage/schema.py` + `alembic/versions/`
+> **相关 ADR**：[0006](../adr/0006-data-model-and-storage.md)
+
+SQLite schema 的契约。V3 换 PostgreSQL 时，这份 schema 是迁移目标。
+
+---
+
+## 1. 文件布局
+
+```
+data/                                  # 由 INTELLIGENCE_HUB_DATA_DIR 控制，默认 ./data/
+  intelligence_hub.sqlite3             # 主库（WAL 模式）
+  intelligence_hub.sqlite3-wal         # WAL 日志
+  intelligence_hub.sqlite3-shm         # 共享内存
+  manifests/                           # 清单 JSON（审计 + 离线分析）
+    20260922-120000-douyin_collect.json
+  media/
+    douyin/<creator_name>/<video_id>-<safe_title>/
+      media.mp4                        # 主媒体（合并后）
+      media.f137.mp4 + media.f140.m4a  # 或 DASH 未合并分片（B站）
+      cover.jpg
+      metadata.json                    # 平台原始 metadata（审计用）
+      transcript/
+        speech-clean.txt
+        segments.json
+    bilibili/...
+    xiaohongshu/...
+    youtube/...
+  cookies/                             # Netscape 格式，yt-dlp 直读
+    douyin.com.txt
+    bilibili.com.txt
+    xiaohongshu.com.txt
+  cdp-bridge-profile/                  # Chrome 用户数据（桥的持久化 profile）
+  asr-models/                          # SenseVoice 模型（gitignore）
+  logs/
+    server.log
+  tmp/                                 # 任务专属临时目录
+    <task_id>/
+  .migration_state.json                # V1→V2 迁移进度（仅迁移期间存在）
+```
+
+**媒体路径在 DB 里存相对路径**（相对 `data/`），整个数据目录可以搬走、备份、迁移。
+
+---
+
+## 2. Schema
+
+### 2.1 `platforms`
+
+```sql
+CREATE TABLE platforms (
+    name              TEXT PRIMARY KEY,           -- 'douyin' / 'bilibili' / ...
+    enabled           BOOLEAN NOT NULL,
+    config_json       TEXT NOT NULL,              -- 配置快照（Pydantic 模型 dump）
+    health_status     TEXT,                       -- 'ok'/'degraded'/'unreachable'/'unknown'
+    health_checked_at TIMESTAMP,
+    health_detail     TEXT,
+    CHECK (enabled IN (0, 1)),
+    CHECK (health_status IS NULL OR health_status IN ('ok','degraded','unreachable','unknown'))
+);
+```
+
+配置真源在 `config/platforms.yaml`，运行态镜像一份到这张表方便查询（含健康状态）。
+
+### 2.2 `creators`
+
+```sql
+CREATE TABLE creators (
+    id              INTEGER PRIMARY KEY,
+    platform        TEXT NOT NULL REFERENCES platforms(name) ON DELETE RESTRICT,
+    platform_id     TEXT NOT NULL,                -- sec_uid / mid / user_id / channel_id（统一字段名）
+    name            TEXT NOT NULL,
+    avatar_url      TEXT,
+    follower_count  INTEGER,
+    profile_url     TEXT NOT NULL,
+    is_tracking     BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata_json   TEXT NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMP NOT NULL,
+    updated_at      TIMESTAMP NOT NULL,
+    UNIQUE(platform, platform_id),
+    CHECK (is_tracking IN (0, 1))
+);
+CREATE INDEX idx_creators_platform ON creators(platform);
+CREATE INDEX idx_creators_tracking ON creators(is_tracking);
+```
+
+**唯一身份 = `(platform, platform_id)`**。废 V1 的 `creators.json` 双源（V1 §7.7）。
+**`is_tracking` 必须真布尔** + `CHECK` 约束兜底（V1 §7.24）。
+
+### 2.3 `videos`
+
+```sql
+CREATE TABLE videos (
+    id                   INTEGER PRIMARY KEY,
+    platform             TEXT NOT NULL,
+    platform_video_id    TEXT NOT NULL,           -- aweme_id / bvid / note_id / video_id
+    creator_id           INTEGER REFERENCES creators(id) ON DELETE SET NULL,
+    title                TEXT NOT NULL,
+    description          TEXT,
+    published_at         TIMESTAMP,
+    duration_seconds     REAL,
+    view_count           INTEGER,
+    like_count           INTEGER,
+    comment_count        INTEGER,
+    share_count          INTEGER,
+    media_path           TEXT,                    -- 主文件相对路径
+    media_source         TEXT,                    -- 'yt_dlp'/'page_play_url'/'dash_merged'/'dash_split'
+    media_aux_paths_json TEXT NOT NULL DEFAULT '[]',  -- DASH 分片等辅助文件（JSON 数组）
+    cover_path           TEXT,
+    metadata_json        TEXT NOT NULL DEFAULT '{}',
+    is_hidden            BOOLEAN NOT NULL DEFAULT FALSE,
+    hidden_at            TIMESTAMP,
+    hidden_reason        TEXT,
+    created_at           TIMESTAMP NOT NULL,
+    updated_at           TIMESTAMP NOT NULL,
+    UNIQUE(platform, platform_video_id),
+    CHECK (is_hidden IN (0, 1)),
+    CHECK (media_source IS NULL OR media_source IN ('yt_dlp','page_play_url','dash_merged','dash_split'))
+);
+CREATE INDEX idx_videos_creator ON videos(creator_id);
+CREATE INDEX idx_videos_platform_published ON videos(platform, published_at DESC);
+CREATE INDEX idx_videos_visible ON videos(is_hidden, published_at DESC);
+CREATE INDEX idx_videos_created ON videos(created_at DESC);
+```
+
+**墓碑内化为列**（V1 §7.25 解决）：`is_hidden` + `hidden_at` + `hidden_reason`，废 `hidden-videos.json`。所有查询走 `list_visible()`，自动过滤。
+
+**`creator_id` 用 `ON DELETE SET NULL`**：删博主不删视频，视频变成"孤儿"但仍可查（`creator_id IS NULL`）。
+
+### 2.4 `transcripts`
+
+```sql
+CREATE TABLE transcripts (
+    video_id        INTEGER PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+    engine          TEXT NOT NULL,                -- 'sherpa_sense_voice'/'bilibili_subtitle'/'youtube_subtitle'/'manual'
+    language        TEXT,
+    char_count      INTEGER NOT NULL,
+    sentence_count  INTEGER NOT NULL,
+    text_path       TEXT NOT NULL,                -- 相对 data/，统一 'media/.../transcript/speech-clean.txt'
+    segments_json   TEXT,                         -- JSON 数组 [{start_seconds, end_seconds, text}, ...]
+    created_at      TIMESTAMP NOT NULL
+);
+```
+
+**`text_path` 统一**（V1 §7.5 解决）：废"按平台不对称"的转写目录。
+
+### 2.5 `task_runs`
+
+```sql
+CREATE TABLE task_runs (
+    id                     TEXT PRIMARY KEY,      -- UUID
+    task_name              TEXT NOT NULL,
+    kind                   TEXT NOT NULL,
+    status                 TEXT NOT NULL,         -- 'running'/'success'/'partial'/'failed'/'timeout'/'cancelled'
+    params_json            TEXT NOT NULL,
+    config_snapshot_json   TEXT NOT NULL,
+    started_at             TIMESTAMP NOT NULL,
+    ended_at               TIMESTAMP,
+    summary_json           TEXT,
+    manifest_path          TEXT,
+    error_text             TEXT,
+    progress               REAL NOT NULL DEFAULT 0.0,
+    CHECK (status IN ('running','success','partial','failed','timeout','cancelled')),
+    CHECK (progress >= 0.0 AND progress <= 1.0)
+);
+CREATE INDEX idx_task_runs_started ON task_runs(started_at DESC);
+CREATE INDEX idx_task_runs_status ON task_runs(status);
+CREATE INDEX idx_task_runs_name ON task_runs(task_name);
+```
+
+### 2.6 `task_events`
+
+```sql
+CREATE TABLE task_events (
+    id           INTEGER PRIMARY KEY,
+    task_id      TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    timestamp    TIMESTAMP NOT NULL,
+    type         TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX idx_task_events_task_time ON task_events(task_id, timestamp);
+CREATE INDEX idx_task_events_type_time ON task_events(type, timestamp);
+```
+
+事件 schema 见 `event-schema.md`。
+
+**保留策略**：已完成任务的事件保留 30 天（`storage.event_retention_days`），失败任务保留 90 天。
+
+### 2.7 `manifests`
+
+```sql
+CREATE TABLE manifests (
+    id              INTEGER PRIMARY KEY,
+    task_id         TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+    schema_version  TEXT NOT NULL,                -- '2.0'
+    file_path       TEXT NOT NULL,                -- 相对 data/
+    written_at      TIMESTAMP NOT NULL,
+    content_json    TEXT NOT NULL                 -- 完整清单内容（冗余，方便查询）
+);
+CREATE INDEX idx_manifests_task ON manifests(task_id);
+CREATE INDEX idx_manifests_written ON manifests(written_at DESC);
+```
+
+**双写**（文件 + SQLite）：前端历史列表查 SQLite，详情/审计查文件。
+
+### 2.8 `topics`（V2.2 实施）
+
+```sql
+CREATE TABLE topics (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    description  TEXT,
+    created_at   TIMESTAMP NOT NULL
+);
+
+CREATE TABLE video_topics (
+    video_id     INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    topic_id     INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    PRIMARY KEY (video_id, topic_id)
+);
+```
+
+### 2.9 `drafts`（V2.2 实施）
+
+```sql
+CREATE TABLE drafts (
+    id              INTEGER PRIMARY KEY,
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    source_video_id INTEGER REFERENCES videos(id) ON DELETE SET NULL,
+    status          TEXT NOT NULL DEFAULT 'draft',   -- 'draft'/'published'/'archived'
+    created_at      TIMESTAMP NOT NULL,
+    updated_at      TIMESTAMP NOT NULL,
+    CHECK (status IN ('draft','published','archived'))
+);
+```
+
+### 2.10 `feishu_sync_state`（V2.2 实施）
+
+```sql
+CREATE TABLE feishu_sync_state (
+    record_kind      TEXT NOT NULL,               -- 'video'/'creator'/'transcript'
+    local_id         INTEGER NOT NULL,
+    feishu_record_id TEXT NOT NULL,
+    synced_at        TIMESTAMP NOT NULL,
+    payload_json     TEXT NOT NULL,
+    PRIMARY KEY (record_kind, local_id)
+);
+```
+
+废 V1 独立 `feishu-base.sqlite3`，状态收进主库。
+
+---
+
+## 3. Repository Protocol
+
+```python
+from typing import Protocol, Unpack
+from typing_extensions import TypedDict
+
+class VideoUpdatableFields(TypedDict, total=False):
+    """允许 update_fields() 更新的字段集。TypedDict + mypy 限定。"""
+    title: str
+    description: str | None
+    published_at: datetime | None
+    duration_seconds: float | None
+    view_count: int | None
+    like_count: int | None
+    comment_count: int | None
+    share_count: int | None
+    media_path: str | None
+    media_source: str | None
+    media_aux_paths_json: str | None
+    cover_path: str | None
+    metadata_json: str | None
+    creator_id: int | None
+    # 注意：platform / platform_video_id / is_hidden 不可更新（要走专门方法）
+
+class VideoRepository(Protocol):
+    async def get(self, id: int) -> Video | None: ...
+    async def find_by_platform_id(self, platform: str, platform_video_id: str) -> Video | None: ...
+    async def insert(self, video: VideoDraft) -> Video: ...
+
+    # 关键：字段级更新，不再"整行覆盖"（V1 §7.4 解决）
+    async def update_fields(self, id: int, **fields: Unpack[VideoUpdatableFields]) -> Video: ...
+
+    async def hide(self, id: int, reason: str) -> Video: ...
+    async def unhide(self, id: int) -> Video: ...
+    async def list_visible(self, *, filters: VideoFilters, page: Page) -> PagedResult[Video]: ...
+    async def attach_transcript(self, video_id: int, transcript: TranscriptDraft) -> Transcript: ...
+    async def count(self, *, filters: VideoFilters | None = None) -> int: ...
+```
+
+**`update_fields` 实现纪律**：
+- 用 SQLAlchemy Core `update()` 语句，**只 SET 传入的列**
+- TypedDict + mypy 限定哪些字段可更新
+- 单元测试覆盖"部分字段更新不能抹掉其他字段"（V1 §7.4 回归看护）
+
+**所有 Repository 都遵循同样模式**：`CreatorRepository` / `TranscriptRepository` / `TaskRunRepository` / `EventRepository` / `ManifestRepository` / `PlatformRepository`。
+
+---
+
+## 4. `Storage` 抽象
+
+```python
+class Storage(Protocol):
+    creators: CreatorRepository
+    videos: VideoRepository
+    transcripts: TranscriptRepository
+    task_runs: TaskRunRepository
+    events: EventRepository
+    manifests: ManifestRepository
+    platforms: PlatformRepository
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]: ...
+    async def close(self) -> None: ...
+    async def healthcheck(self) -> bool: ...
+```
+
+实现：
+- `SqliteStorage`（生产，aiosqlite + SQLAlchemy 2.0 async）
+- `InMemoryStorage`（测试，SQLite `:memory:`）
+
+---
+
+## 5. Alembic 迁移
+
+- `alembic/versions/0001_initial_schema.py` 起
+- 每个迁移必须有 `upgrade()` + `downgrade()`
+- CI 跑 `alembic upgrade head` + `alembic downgrade base` + `alembic upgrade head`，确保可逆
+- V1 → V2 数据迁移走 `tools/migrate_from_v1.py`，**不用 Alembic**
+
+迁移命名：`<rev>_<slug>.py`，如 `0001_initial_schema.py` / `0002_add_video_indexes.py`。
+
+---
+
+## 6. V1 → V2 字段映射
+
+| V1 字段 | V2 字段 | 备注 |
+|---|---|---|
+| `creators.platform_id` / `creator_platform_id` / `mid` | `creators.platform_id` | 统一命名（V1 §7.11 解决） |
+| `videos.creator_platform_id` | `videos.creator_id`（FK） | 通过 `(platform, platform_id)` 查 V2 `creators.id` |
+| `videos.transcript_status` / `transcript_char_count` | `transcripts` 表 | 拆出独立表 |
+| `videos.is_hidden`（不存在，走 JSON 墓碑） | `videos.is_hidden` | 内化为列（V1 §7.25 解决） |
+| `creators.json` | `creators` 表 | 废双源（V1 §7.7 解决） |
+| `hidden-videos.json` | `videos.is_hidden` | 废文件 |
+| `feishu-base.sqlite3` | `feishu_sync_state` 表 | 废独立镜像库 |
+
+---
+
+## 7. V3 重写时的契约
+
+V3 即使换 PostgreSQL：
+
+1. 表名、字段名、约束、索引一致
+2. Repository Protocol 一致
+3. Alembic 迁移可跨方言（SQLAlchemy Core 设计目标）
+4. 媒体路径仍相对存储（V3 换对象存储时只重写 Storage 实现）
+
+→ 业务代码零改动。

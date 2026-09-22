@@ -1,0 +1,40 @@
+# Intelligence Hub V2 — 飞书同步配置（模板）
+#
+# 复制为 config/feishu.yaml 并填真实值（feishu.yaml 已 gitignore）。
+# V2.2 才会用到；V2.0/V2.1 不需要这个文件。
+
+feishu:
+  enabled: false
+
+  # 多维表格（Base）配置
+  base:
+    app_token: ""                  # 飞书多维表格的 app_token
+    table_ids:
+      creators: ""                 # 博主表
+      videos: ""                   # 作品表
+      transcripts: ""              # 口播稿表
+
+  # 凭证（从飞书开放平台拿）
+  auth:
+    app_id: ""
+    app_secret: ""
+    # 或者用 user_access_token（lark-cli 登录后自动取）
+    use_lark_cli: true
+    lark_cli_profile: ""           # V1 经验：profile 名是 App ID 不是 "default"
+
+  # 同步行为
+  sync:
+    direction: "local_to_feishu"   # local_to_feishu / feishu_to_local / both
+    interval_minutes: 60
+    batch_size: 50
+    # 哪些字段同步
+    fields:
+      creators: ["name", "platform", "platform_id", "follower_count", "profile_url"]
+      videos: ["title", "platform", "platform_video_id", "published_at", "view_count", "like_count"]
+      transcripts: ["text", "char_count", "engine"]
+
+  # 文档同步（口播稿写到飞书文档）
+  docs:
+    enabled: false
+    folder_token: ""               # 飞书云空间文件夹 token
+    title_template: "{platform} - {creator_name} - {video_title}"

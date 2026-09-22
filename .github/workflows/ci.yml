@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: '同时跑 E2E（Playwright）'
+        type: boolean
+        default: false
+
+env:
+  UV_VERSION: '0.5.x'
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.12'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Python deps
+        run: uv sync --all-extras --all-groups
+      - name: Install frontend deps
+        run: npm --prefix frontend ci
+      - name: pre-commit (all files)
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Backend tests (L0-L4)
+  # ---------------------------------------------------------------------------
+  test-backend:
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        python-version: ['3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install
+        run: uv sync --all-extras --all-groups
+      - name: Alembic upgrade head
+        run: uv run alembic upgrade head
+      - name: pytest
+        run: uv run pytest -m "not real_network and not e2e" --junitxml=pytest-report.xml
+      - name: Coverage gate (global ≥80%, platforms/tasks ≥90%)
+        run: |
+          uv run coverage report --fail-under=80
+          uv run coverage report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*' --fail-under=90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-${{ matrix.python-version }}
+          path: htmlcov/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-report-${{ matrix.python-version }}
+          path: pytest-report.xml
+
+  # ---------------------------------------------------------------------------
+  # Frontend tests (L5)
+  # ---------------------------------------------------------------------------
+  test-frontend:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install
+        run: npm --prefix frontend ci
+      - name: Typecheck
+        run: npm --prefix frontend run typecheck
+      - name: Unit tests (vitest)
+        run: npm --prefix frontend run test -- --run --coverage
+      - name: Coverage gate (≥70%)
+        run: |
+          cd frontend && npx vitest run --coverage --coverage.thresholds.lines=70 --coverage.thresholds.functions=70 || exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+
+  # ---------------------------------------------------------------------------
+  # Build (vite build + uv build wheel)
+  # ---------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install
+        run: |
+          uv sync --all-extras --all-groups
+          npm --prefix frontend ci
+      - name: Build frontend
+        run: npm --prefix frontend run build
+      - name: Build wheel
+        run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/
+            frontend/dist/
+
+  # ---------------------------------------------------------------------------
+  # E2E (L6) — main 分支自动跑，PR 用 workflow_dispatch 手动触发
+  # ---------------------------------------------------------------------------
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || inputs.run_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install
+        run: |
+          uv sync --all-extras --all-groups
+          npm --prefix frontend ci
+          uv run playwright install --with-deps chromium
+      - name: Build
+        run: npm --prefix frontend run build
+      - name: Run Playwright
+        run: uv run playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+
+  # ---------------------------------------------------------------------------
+  # OpenAPI snapshot diff（契约看护：API schema 不允许意外破坏）
+  # ---------------------------------------------------------------------------
+  openapi-snapshot:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install
+        run: uv sync --all-extras --all-groups
+      - name: Dump OpenAPI
+        run: uv run python -c "import json; from intelligence_hub_v2.main import app; print(json.dumps(app.openapi(), indent=2, sort_keys=True))" > /tmp/openapi.json
+      - name: Diff with snapshot
+        run: |
+          if [ -f docs/specs/openapi-snapshot.json ]; then
+            diff -u docs/specs/openapi-snapshot.json /tmp/openapi.json || {
+              echo "::error::OpenAPI schema 漂了。如果是有意改的，跑 'make snapshot-api' 更新快照并写 ADR。"
+              exit 1
+            }
+          else
+            echo "::warning::docs/specs/openapi-snapshot.json 不存在，跳过比对"
+          fi
