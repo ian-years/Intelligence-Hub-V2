@@ -85,14 +85,22 @@ class EventRepository(BaseRepository):
         *,
         limit: int | None = None,
         after_id: int = 0,
+        since: datetime | None = None,
         event_type: EventType | None = None,
     ) -> list[StoredEvent]:
         """按时间正序取某个任务的事件（前端"任务详情 → 日志"用）。
 
         `after_id` 用于增量拉取：前端记住最后一条 id，刷新时只取更新的。
         比 `offset` 稳 —— 中间被 `prune()` 删掉行时 offset 会整体错位。
+
+        `since` 是 `event-schema.md §4` 里 `replay(task_id, since=)` 要的那个时间戳版
+        （SSE 断线重连后带 `Last-Event-ID` / `since=` 走这条）。
+        两个都给时按 AND 处理 —— "id 大于它**且**时刻不早于它"。正常调用方只用一个，
+        同时给不是错误也不特判，但别指望这样能变快。
         """
         stmt = select(_T).where(_T.c.task_id == task_id, _T.c.id > after_id).order_by(_T.c.id.asc())
+        if since is not None:
+            stmt = stmt.where(_T.c.timestamp >= since)
         if event_type is not None:
             stmt = stmt.where(_T.c.type == event_type.value)
         if limit is not None:

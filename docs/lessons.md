@@ -379,6 +379,62 @@ Task 3 之前还是**手抄**的四条。
 它比"没有看护"强（漏一条就红），但它自己也是第三处真相 ——
 新加约束时必须同时往那份清单里加一条，否则红的是"集合不相等"而不是"你忘了改"。
 
+#### 坑 13 · 两个任务在同一秒起跑，后一份清单会静默盖掉前一份（Task 4）
+
+**现象**：`test_two_runs_get_two_files_and_two_index_rows` 期望两个任务两份清单文件，
+实际只有**一份**，而 DB 里有两条索引都指向它。测试是绿的假象的反面 ——
+它一次跑出来就是红的，而且是"少了一个文件"这种看不出后果的红。
+
+**根因**：清单文件名按 Locked 的 `data-model.md §1` 生成：
+`<8位日期>-<6位时间>-<kind>.json`。同一秒 + 同一个 `kind` = 同一个名字。
+而 `all_platforms` 这个任务的存在理由就是让多个平台采集**并行**，
+所以"同一秒两个 douyin_collect"不是极端情况，是常态。
+写文件用的是"写 `.tmp` 再 `os.replace`"（这是为了防半截清单，本身没错），
+于是第二个任务的 replace **原子地**覆盖掉第一个 —— 原子性在这里反而帮凶：
+没有任何部分失败可供察觉。前一个任务的审计凭据消失，不报错。
+
+**解法**：文件名加 `task_id` 段 → `20260922-120000-douyin_collect-<task_id>.json`。
+时间戳仍在最前，"按名字排序 = 按时间排序"这个性质没动。
+这是**改了一份 Locked 的目录布局**，所以同步回写了 `data-model.md §1` 并写了理由。
+
+**判据**：`test_two_tasks_started_in_the_same_second_get_different_files`（`files.py` 层）+
+`test_two_runs_get_two_files_and_two_index_rows`（`manifest_writer` 层）。
+
+**看护**：上面两条。
+
+**可迁移的结论**：**凡是"用时间当唯一键"的产物文件名都要问一句同一秒怎么办。**
+V1 的清单用的正是这个名字（`downloads/manifests/<8位日期>-<6位时间>-<kind>.json`），
+本机至今没撞过 —— 但**没撞过不是它安全的证据**，我并没有验证过 V1 的并发形状
+（去数一下同时存活的采集进程才能下结论，这不值当）。
+V2 这边是明确要并行（`all_platforms` + 平台级 Semaphore），所以必须在有测试的时候改掉。
+
+#### 坑 14 · spec 草图里的 `else: builder.succeed()` 会把 `partial` 改成 `success`（Task 4）
+
+**现象**：照 `docs/specs/task-runner.md §2.6` 的 `manifest_writer` 草图抄，
+handler 里 `builder.partial({"downloaded": 1, "failed": 1})` 之后正常退出，
+清单落到盘上会变成 `status: "success"`，`failures[]` 里那条失败记录还在，
+但**没人会去看**——因为状态灯是绿的。
+
+**根因**：草图把"退出方式"当成"状态的唯一来源"。实际有两个说话的人：
+handler 知道"跑完了但有 item 失败"，wrapper 只知道"这里没抛异常"。
+`else:` 分支无条件覆盖，等于让信息少的一方否决信息多的一方。
+
+**解法**：一条判据（`core/manifest.py::_may_settle`），三个方向：
+- 没人设过 → 按退出方式补（这是契约二的结构性保证，必须保留）；
+- handler 设了 `success` 但随后抛出异常 → **异常赢**（否则就是 §1.3 的"看起来在跑"）；
+- handler 设了 `partial` / `failed` / `cancelled` / `timeout` → 不动。
+
+**判据**：两条方向相反的用例必须在 —— `test_handler_set_partial_survives` 与
+`test_success_then_raise_never_reports_success`。只留前一条会被改回草图那样还全绿，
+只留后一条会被改成"异常永远覆盖一切"也全绿。
+
+**看护**：上面两条 + `test_explicit_fail_in_handler_is_not_overwritten_by_the_raise`。
+已回写 `task-runner.md §2.6`（原草图保留，旁边标出这一行有 bug）。
+
+**可迁移的结论**：**设计文档里的代码片段是意图，不是成品**（经验 7 已经说过一次，
+这次是它的新形态）：草图短、看着无害、抄过去就绿。凡是草图里有
+`else: 设成某个具体值` 这种"无条件赋值"，先问"还有谁能比我更早地说这句话"。
+
 ---
 
 ## 第二部分 · V2 设计与实施过程中的经验
@@ -635,6 +691,68 @@ schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；�
 ① 它把"我认为的边界"变成可执行的句子，写的时候就得想清楚判据（那条 `max_length` 就是
 写出来才发现说不圆的）；② 幂等性与"结果永远是单段路径"这类**没法逐条列举**的性质，
 只有生成器能覆盖。抓到实现 bug 是偶得的红利，不是这层的 KPI。
+
+#### 经验 14 · 依赖注入的对象 vs 工厂：一个"close 之后还能用"的洞
+
+**现象**：给 `EventBus.replay()` 写"库出真错时要往外抛、不许变成空列表"这条用例时，
+我 `storage.close()` 之后再调 `bus.replay(...)`，期望 `StorageError` ——
+拿到的是裸 `sqlite3.OperationalError`，SQL 语句连参数都回显出来了。
+
+**根因**：`SqliteStorage.close()` 把 `self._sessionmaker` 置回 None，
+但 Repository 在构造时就**握着那个对象引用**了，置 None 只是让 `storage` 自己不再给，
+拦不住已经拿到手的引用。于是"关掉了"与"还能用"同时成立 —— 而且后者拿到的是驱动层异常。
+
+**这为什么会在生产里发生**：Task 9 的 lifespan 会 `close()` storage，
+而那一刻完全可能还有一个任务正在往事件流里写日志（`EventBus` 正是长期持有
+`storage.events` 的那个消费者）。症状是关服期间一屏看不懂的 traceback，
+而不是"存储已关闭"这一句能判断的话。
+
+**解法**：`BaseRepository.__init__` 收 `Callable[[], AsyncSession]`（`SqliteStorage.new_session`），
+不再收 sessionmaker 对象。关闭后工厂里的 `_require_sessionmaker()` 抛本仓库的 `StorageError`，
+文案同时覆盖两种情况（"还没 initialize()，或已经 close()"）。
+
+**判据**：`test_repositories_fail_our_way_after_close` —— 故意先把 Repository 取出来
+（`held = storage.platforms`），再 close，再调用。
+**必须先把引用拿走**，不然测的是 `storage.platforms` 这个属性而不是那个洞。
+
+**可迁移的结论**：注入**对象**等于把一份快照塞进构造器，注入**工厂**才是把状态判断留在原地。
+凡是"生命周期比被注入者短"的东西（连接池、engine、client），都该注工厂。
+
+#### 经验 15 · 双后端 fixture 的迁移要一次性摊销，且别在 auto 模式下用 session 作用域
+
+**现象**：Task 3 结束时全套 650 用例 56 秒；Task 4 加完 701 用例后我先量到 **502 秒**。
+一半时间确实是我在实现里绕了路（下面第一条），另一半是这台机器的 I/O 状态
+（V1 §7.23 早就记过"同一套代码用时抖三倍"，这次抖得更多）。
+
+**两处真开销**（各自可验证，不靠猜）：
+
+1. `run_migrations()` 在本机 ~0.7s：cProfile 指到 23 条 DDL 落盘、`_exec` 累计 520ms，
+   不是 alembic 导入的锅。`[file]` 档 240 多个用例各跑一遍 = 纯浪费。
+   → 全会话用同一条 `run_migrations()` 建一个**模板库**，每个用例 `shutil.copy` 一份
+   （100 KB 复制，亚毫秒），`initialize(migrate=False)` 打开它。
+   省的是重复，**不是覆盖**：起点仍是真迁移产物，迁移写错照样全红；
+   "空库从头建 / 可不可逆 / initialize 会不会真去迁移"三件事在 `test_migrations.py`
+   里各有不用模板的专责用例。
+2. `test_result_is_usable_as_a_real_path`（hypothesis + 真建目录真写文件）300 例 = 9.6s。
+   它的判据是"这个名字操作系统收不收"，50 个随机形状已经够，其余交给纯函数属性。
+
+**踩到的平台细节**：`asyncio_mode = "auto"` 会把**每个** fixture 包成协程，
+所以一个 `scope="session"` 的 fixture 会要求 session 事件循环，
+而依赖它的 function 作用域 async fixture 就直接报
+`ScopeMismatch`（错误还只点名 `storage`，不点名你新加的那个 —— 找起来很费劲）。
+解法不是去配 `asyncio_default_fixture_loop_scope = "session"`（那会让所有 function
+用例共用一个循环，`_Subscriber` 之类的 loop 绑定对象会互相污染），
+而是**用函数作用域 fixture + 进程内缓存**：`tmp_path_factory` 本身是 session 作用域的，
+可以在函数 fixture 里安全地建一个跨用例存活的目录。
+
+**判据（都是这台机器上实测的同一批用例，不是估算）**：
+全套 `pytest tests/`（带覆盖率门禁）**502.88s → 292.24s**，701 passed 不变；
+`tests/unit/storage tests/unit/core` 577 条改后 **180.91s** 全绿。
+剩下的 ~0.3s/用例主要是文件型 SQLite 的冷打开与杀软扫描，属于环境而不是代码
+（`[memory]` 档的 setup 也要 0.41s —— 那已经是"在内存里建 7 张表"的成本）。
+
+**纪律**：改完之后**不要用测试用时当门禁**（V1 §7.23 原文）。
+门禁是用例数与红绿；用时只用来定位"哪一处明显是我加的"。
 
 ---
 

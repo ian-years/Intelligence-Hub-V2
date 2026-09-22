@@ -16,7 +16,7 @@ data/                                  # 由 INTELLIGENCE_HUB_DATA_DIR 控制，
   intelligence_hub.sqlite3-wal         # WAL 日志
   intelligence_hub.sqlite3-shm         # 共享内存
   manifests/                           # 清单 JSON（审计 + 离线分析）
-    20260922-120000-douyin_collect.json
+    20260922-120000-douyin_collect-<task_id>.json
   media/
     douyin/<creator_name>/<video_id>-<safe_title>/
       media.mp4                        # 主媒体（合并后）
@@ -43,6 +43,17 @@ data/                                  # 由 INTELLIGENCE_HUB_DATA_DIR 控制，
 ```
 
 **媒体路径在 DB 里存相对路径**（相对 `data/`），整个数据目录可以搬走、备份、迁移。
+
+> **实施期修订（2026-09-22，Task 4）· 清单文件名多了 `task_id` 段。**
+> 原来锁的是 `<8位日期>-<6位时间>-<kind>.json`。**同一秒起跑的两个同 kind 任务会撞名**：
+> 后写的那份 `os.replace` 静默盖掉前一份，DB 里两条索引指向同一个文件，
+> 而文件内容是后那一份 —— 前一个任务的审计凭据凭空消失且不报错。
+> `all_platforms` 这个任务的存在就是为了让它们并行，所以这不是理论风险。
+> 看护：`test_two_tasks_started_in_the_same_second_get_different_files`（`files.py` 层）与
+> `test_two_runs_get_two_files_and_two_index_rows`（`manifest_writer` 层，第二条就是它抓出来的）。
+>
+> 时间戳仍是 **UTC** 且仍在最前面，所以"按文件名排序 = 按时间排序"这个性质没变；
+> 前缀段不变意味着 V1→V2 迁移脚本（Task 15）搬老清单时只需在尾巴上补 `task_id`。
 
 ---
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -314,7 +314,7 @@ class SqliteStorage:
                 await connection.run_sync(metadata.create_all)
 
         self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        self._repositories = _Repositories(self._sessionmaker)
+        self._repositories = _Repositories(self.new_session)
         logger.info(
             "storage.initialized",
             db_path=str(self._db_path),
@@ -424,9 +424,16 @@ class SqliteStorage:
             raise StorageError(msg)
         return self._engine
 
+    def new_session(self) -> AsyncSession:
+        """开一个新 session。Repository 握的是这个**方法**，不是 sessionmaker。"""
+        return self._require_sessionmaker()()
+
     def _require_sessionmaker(self) -> async_sessionmaker[AsyncSession]:
+        """未初始化**或已关闭**时抛。同一个 None 判断盖两种情况：
+        `close()` 就是把 `_sessionmaker` 置回 None，而 Repository 握的是本方法的引用。
+        """
         if self._sessionmaker is None:
-            msg = "SqliteStorage 还没 initialize()"
+            msg = "SqliteStorage 不可用（还没 initialize()，或已经 close()）"
             raise StorageError(msg)
         return self._sessionmaker
 
@@ -444,11 +451,13 @@ class _Repositories:
     这个叶子模块，`db → repositories.base → session` 是单向的，环已经断了。
     """
 
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-        self.platforms = PlatformRepository(sessionmaker)
-        self.creators = CreatorRepository(sessionmaker)
-        self.videos = VideoRepository(sessionmaker)
-        self.transcripts = TranscriptRepository(sessionmaker)
-        self.task_runs = TaskRunRepository(sessionmaker)
-        self.events = EventRepository(sessionmaker)
-        self.manifests = ManifestRepository(sessionmaker)
+    def __init__(self, session_factory: Callable[[], AsyncSession]) -> None:
+        # 传工厂而不是对象：让 Repository 在 `close()` 之后立刻红，
+        # 而不是握着一条已销毁的连接池去撞驱动层异常。理由见 `BaseRepository.__init__`。
+        self.platforms = PlatformRepository(session_factory)
+        self.creators = CreatorRepository(session_factory)
+        self.videos = VideoRepository(session_factory)
+        self.transcripts = TranscriptRepository(session_factory)
+        self.task_runs = TaskRunRepository(session_factory)
+        self.events = EventRepository(session_factory)
+        self.manifests = ManifestRepository(session_factory)

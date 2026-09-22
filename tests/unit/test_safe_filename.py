@@ -125,7 +125,10 @@ def test_function_is_idempotent(name: str) -> None:
     assert safe_filename(once) == once
 
 
-@settings(max_examples=300, deadline=None)
+# 50 而不是 300：这条每次都要建一个真目录、写一个真文件、再删掉，
+# 300 例在本机就是 9.6 秒 —— 而它验的是"这个名字操作系统收不收"，
+# 50 个随机形状已经够了，其余交给上面那些纯函数属性。
+@settings(max_examples=50, deadline=None)
 @given(innocent_text)
 def test_result_is_usable_as_a_real_path(name: str) -> None:
     """**终判据**：拿它建一个真目录、写一个真文件。

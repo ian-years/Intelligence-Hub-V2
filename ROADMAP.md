@@ -30,6 +30,8 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `check_schema_matches_migrations()` 差异 0 条；两档后端（`create_all` / 真迁移）跑同一批 486 条用例。
   看护清单见 `docs/specs/contract-tests.md §3.1`。
 - [ ] **EventBus**：asyncio.Queue 多播 + SQLite 持久化 + SSE 端点
+  —— 多播 + 持久化已完成（Task 4，`core/event_bus.py`，实现上有界队列 + 掉包记账）；
+  **SSE 端点仍欠**，在 Task 9，所以这一条整条不算勾。
 - [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
 - [ ] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
 - [ ] **抖音 Adapter**：移植 V1 `download_douyin_latest.py`，含 `parse_creator_url`（短链 302 → sec_uid，§7.1）、媒体下载（yt-dlp → 页面播放直链兜底，§7.2）、cookie 优先级阶梯
@@ -80,7 +82,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-3 ✅ / Task 4-16 待做
+- **V2.0 实施**：进行中 —— Task 1-4 ✅ / Task 5-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -90,7 +92,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 1 | 包骨架 + `errors.py` + `logging.py` + 共享 models | ✅ | `8c5f51a` | 15 passed |
 | 2 | 配置层 `AppConfig` / `PlatformConfig` 家族 / `ConfigManager` | ✅ | 见 git log | 96 passed（累计），覆盖率 96.02% |
 | 3 | DB schema + Alembic + Repository + Storage | ✅ | 见 git log | 650 passed（累计），覆盖率 95.07%，ruff + mypy 双绿 |
-| 4 | EventBus + `manifest_writer` 上下文管理器 | ⬜ | — | — |
+| 4 | EventBus + `manifest_writer` 上下文管理器 | ✅ | 见 git log | 701 passed（累计），覆盖率 95.39%，四关全绿 |
 | 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ⬜ | — | — |
 | 6 | DouyinAdapter（可与 Task 7 并行） | ⬜ | — | — |
 | 7 | BilibiliAdapter | ⬜ | — | — |

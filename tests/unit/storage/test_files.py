@@ -211,13 +211,26 @@ def test_manifest_path_uses_a_utc_stamp(files: FileStorage) -> None:
     """文件名要能排序。V1 用本地时间，V2 的清单还要和 DB 里 UTC 的
     `written_at` 对齐 —— 两套时区并存是自找麻烦。"""
     started = datetime(2026, 9, 22, 5, 56, 26, tzinfo=UTC)
-    path = files.manifest_path(started, "douyin_collect")
-    assert path == files.manifests_dir / "20260922-055626-douyin_collect.json"
+    path = files.manifest_path(started, "douyin_collect", "task-1")
+    assert path == files.manifests_dir / "20260922-055626-douyin_collect-task-1.json"
+
+
+def test_two_tasks_started_in_the_same_second_get_different_files(files: FileStorage) -> None:
+    """**这条是防数据覆盖的，不是防难看**。
+
+    只带"秒 + kind"的话，`all_platforms`（故意并行起跑）会让后一份
+    `os.replace` 静默盖掉前一份：DB 两条索引指向同一个文件，
+    前一个任务的审计凭据消失且不报错。
+    """
+    same = datetime(2026, 9, 22, 12, 0, 0, tzinfo=UTC)
+    first = files.manifest_path(same, "douyin_collect", "aaaaaaaa-1111")
+    second = files.manifest_path(same, "douyin_collect", "bbbbbbbb-2222")
+    assert first != second
 
 
 def test_manifest_path_sorts_lexically_like_it_sorts_chronologically(files: FileStorage) -> None:
-    earlier = files.manifest_path(datetime(2026, 9, 22, 9, 0, 0, tzinfo=UTC), "douyin")
-    later = files.manifest_path(datetime(2026, 12, 1, 8, 0, 0, tzinfo=UTC), "douyin")
+    earlier = files.manifest_path(datetime(2026, 9, 22, 9, 0, 0, tzinfo=UTC), "douyin", "t1")
+    later = files.manifest_path(datetime(2026, 12, 1, 8, 0, 0, tzinfo=UTC), "douyin", "t2")
     assert earlier.name < later.name
 
 
@@ -227,7 +240,7 @@ def test_manifest_path_sanitizes_the_kind(files: FileStorage) -> None:
     判据是**目录没变 + 只剩一个文件名段**（`../../escape` 净化成 `.._.._escape`，
     残留的两个点是名字的一部分，不是"上一级"）。
     """
-    path = files.manifest_path(datetime(2026, 1, 1, tzinfo=UTC), "../../escape")
+    path = files.manifest_path(datetime(2026, 1, 1, tzinfo=UTC), "../../escape", "t")
     assert path.parent == files.manifests_dir
     assert len(path.name.split("/")) == 1
     assert "\\" not in path.name
@@ -235,7 +248,7 @@ def test_manifest_path_sanitizes_the_kind(files: FileStorage) -> None:
 
 def test_manifest_path_drops_the_timezone_offset(files: FileStorage) -> None:
     """只取年月日时分秒。带 `+08:00` 的名字既不能排序也不好看。"""
-    path = files.manifest_path(datetime(2026, 9, 22, 13, 56, 26, tzinfo=UTC), "douyin")
+    path = files.manifest_path(datetime(2026, 9, 22, 13, 56, 26, tzinfo=UTC), "douyin", "t")
     assert "+" not in path.name and "T" not in path.name
 
 

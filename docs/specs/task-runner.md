@@ -219,14 +219,41 @@ async def manifest_writer(task_run: TaskRun, storage: Storage) -> AsyncIterator[
         builder.fail(e)
         raise
     else:
-        builder.succeed()
+        builder.succeed()          # ← 这一行有 bug，见下面的实施期修订
     finally:
         manifest = builder.finalize()         # 强制写终态，ended_at 必填
         await storage.manifests.write(manifest)
         await storage.task_runs.update(task_run.id, status=manifest.status, ended_at=manifest.ended_at)
 ```
 
+> **实施期修订（2026-09-22，Task 4）**，三处，都是"照草图抄会留下 bug"的那种：
+>
+> 1. **`else: builder.succeed()` 会把 handler 设的 `partial` 改成 `success`。**
+>    正常退出与"跑完了但有些 item 失败"是同一件事的两个说法，草图只看到前者。
+>    症状就是 V1 看板的老问题：两条爆款下载失败，界面显示全成功。
+>    实际实现是一条判据（`core/manifest.py::_may_settle`）：
+>    **没人设过 → 按退出方式补；handler 设过 `success` 却又抛异常 → 异常赢；
+>    handler 设过 `partial` / `failed` / `cancelled` / `timeout` → 不动。**
+>    看护：`test_handler_set_partial_survives` 与 `test_success_then_raise_never_reports_success`
+>    —— 两条方向相反，缺一条就会把规则改回草图那样而全绿。
+> 2. **收尾要 `await` 两次写，而草图里的方法名与实际 Repository 不一致。**
+>    实际是 `storage.manifests.record(task_id, manifest, file_path)`（文件是权威源、
+>    表是索引，所以要给相对路径）与 `storage.task_runs.finish(task_id, status=...,
+>    summary=..., manifest_path=..., error_text=..., ended_at=...)`，
+>    两者放在**同一个 `storage.transaction()`** 里：一半成功会得到"列表有记录、任务还在 running"。
+> 3. **`except TaskCancelled` 要单独一档，落到 `cancelled` 而不是 `failed`。**
+>    V2 的取消是协作式的（§2.5 `CancelToken` → runner 抛 `TaskCancelled`），
+>    所以它走的是 `Exception` 那条路，会被草图的 `builder.fail(e)` 标成失败。
+>    人主动停的不算失败，而且 `EventRepository.prune()` 给 `failed`/`timeout` 三倍保留期。
+>
+> 另外签名与实际不同（实际）：
+> `manifest_writer(task_name, task_id, kind, config_snapshot, *, storage, files, bus=None, timeout_seconds=None)`
+> —— 要收 `files` 才能算出清单路径（双写里的"盘"那一半），
+> `TaskRun` 对象不必传，`builder` 只要那四个字段。
+
 V1 §2 契约二（清单必须写终态）由此**结构性保证**，写不出半截清单。
+实现侧还有两条草图没写的纪律，见 `core/manifest.py` 的模块 docstring
+（文件写不成就不登记索引；收尾代码绝不盖掉正在传播的异常）。
 
 ---
 

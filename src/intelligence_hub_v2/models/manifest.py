@@ -31,6 +31,11 @@ def _coerce_stage(stage: str) -> StageLiteral:
     return stage if stage in _KNOWN_STAGES else "task"  # type: ignore[return-value]
 
 
+ManifestStatus = Literal["success", "partial", "failed", "timeout", "cancelled"]
+"""清单的终态。`ManifestBuilder` 与 `manifest_writer` 共用这一个定义 ——
+写两处 Literal 的话，加一个状态就会只改到一半。"""
+
+
 class Manifest(BaseModel):
     """任务清单（终态审计）。
 
@@ -45,7 +50,7 @@ class Manifest(BaseModel):
     task_name: str
     task_id: str
     kind: TaskKind
-    status: Literal["success", "partial", "failed", "timeout", "cancelled"]
+    status: ManifestStatus
     started_at: datetime
     ended_at: datetime
     summary: dict[str, int | str] = Field(default_factory=dict)
@@ -80,12 +85,32 @@ class ManifestBuilder:
         self._kind = kind
         self._config_snapshot = config_snapshot
         self._started_at = datetime.now(UTC)
-        self._status: Literal["success", "partial", "failed", "timeout", "cancelled"] | None = None
+        self._status: ManifestStatus | None = None
         self._summary: dict[str, int | str] = {}
         self._platforms: list[str] = []
         self._failures: list[FailureRecord] = []
         self._artifacts: list[ArtifactRef] = []
         self._error: str | None = None
+
+    @property
+    def started_at(self) -> datetime:
+        """任务开始时刻。`manifest_writer` 用它算清单文件名
+        （`data/manifests/<UTC 时间戳>-<kind>.json`），所以必须在构建期就可读，
+        而不是等 `finalize()` 之后才有 —— 写文件的时机在 finalize 之前就要定路径。
+        """
+        return self._started_at
+
+    @property
+    def status(self) -> ManifestStatus | None:
+        """已设定的终态；`None` = 还没人调过 succeed/partial/fail/timeout/cancel。
+
+        这个 getter 的存在理由很具体：`docs/specs/task-runner.md §2.6` 的
+        `manifest_writer` 草图在 `else` 分支无条件 `builder.succeed()`，
+        那会把 handler 自己设的 `partial` **覆盖成 success** —— 正是 V1 §2 契约二
+        要防的"看起来成功"。有了这个属性，ctx manager 才能写
+        「没人设过才补 success」。
+        """
+        return self._status
 
     def succeed(self, summary: dict[str, int | str] | None = None) -> None:
         self._status = "success"

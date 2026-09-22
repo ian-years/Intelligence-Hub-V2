@@ -26,11 +26,19 @@
   本机 `core.autocrlf=true` 会让 checkout 出 CRLF 的 `.py`，而 ruff 配的是 `line-ending = "lf"` ——
   实测内容完全相同的 CRLF 副本：`ruff format --check` 回 exit 1（diff 只有行尾），
   `ruff check` 全过。行尾从此由仓库定，不再依赖每个人的 git 配置
+- **Task 4** · 事件与清单：`core/event_bus.py`（`EventBus` Protocol + `InProcessEventBus`
+  多播与可选持久化 + 有界订阅队列「保新弃旧 + 掉包计数」+ `_Subscription` 摘除层）、
+  `core/manifest.py`（`manifest_writer`：五条退出路径全部落终态清单，
+  文件 + 索引 + 任务档案在同一个事务里，收尾代码不改写正在传播的异常）、
+  `storage/repositories/base.py` 改为注入"给我一个 session"的工厂、
+  `EventRepository.list_for_task()` 新增 `since=`、`models/manifest.py` 新增 `ManifestStatus`
+  与 `ManifestBuilder.started_at` / `.status`
 
 ### Added（测试与门禁）
-
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），
   全仓累计 650 passed、覆盖率 95.07%、`ruff` / `mypy --strict` 全绿
+- 事件与清单测试 **51 条**（`test_event_bus.py` 28 + `test_manifest.py` 21），
+  全仓累计 **701 passed**、覆盖率 **95.39%**、四关（format / check / mypy / 覆盖率门禁）全绿
 - `storage` fixture 参数化跑两档后端（`memory` = `create_all` / `file` = 真 Alembic），
   外加三条漂移看护：`check_schema_matches_migrations()`、`alembic upgrade/downgrade/upgrade` 往返、
   以及一条**验证漂移看护本身能发现漂移**的用例
@@ -70,6 +78,15 @@
   （迁移是在 `setup_logging()` **之后**跑的）→ `configure_logger` 属性开关，CLI 仍装自己的日志
 - 跨会话提醒：`CURRENT_SESSION` 原先住在 `storage/db.py`，使 `db.py` 无法在顶层 import
   repositories（循环），七个 Repository 被迫函数级导入 → 抽出叶子模块 `storage/session.py`
+- **清单文件名 `<日期>-<时间>-<kind>.json` 同一秒会撞名**：两个并行的采集任务里，
+  后一份 `os.replace` 会原子地、静默地盖掉前一份 —— DB 两条索引指向同一个文件，
+  前一个任务的审计凭据消失且不报错 → `manifest_path()` 多收一个 `task_id`（改了 Locked 布局）
+- `BaseRepository` 握着 sessionmaker **对象**，`storage.close()` 之后已经取出去的
+  Repository 照样能发查询，症状是裸 `sqlite3.OperationalError`（连接池已 dispose）
+  而不是本仓库的 `StorageError` → 改注入"给我一个 session"的工厂
+- `manifest_writer` 的终态规则：spec §2.6 草图 `else: builder.succeed()` 会把 handler
+  设的 `partial` 改成 `success`（绿灯 + `failures[]` 里躺着失败记录）。
+  实际规则是"没人设过才补、异常压过 success、handler 的其它终态不动"
 
 ## [0.1.0] — V2.0「骨架可用」（计划中）
 

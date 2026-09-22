@@ -5,7 +5,7 @@
 ```
 data/
   intelligence_hub.sqlite3
-  manifests/20260922-120000-douyin_collect.json
+  manifests/20260922-120000-douyin_collect-<task_id>.json
   media/<platform>/<creator_name>/<video_id>-<safe_title>/
       media.mp4                       # 主媒体（合并后）
       media.f137.mp4 + media.f140.m4a # 或 DASH 未合并分片（B站）
@@ -293,19 +293,28 @@ class FileStorage:
 
     # ---- 清单 ----
 
-    def manifest_path(self, started_at: datetime, kind: str) -> Path:
-        """`data/manifests/YYYYMMDD-HHMMSS-<kind>.json`。
+    def manifest_path(self, started_at: datetime, kind: str, task_id: str) -> Path:
+        """`data/manifests/YYYYMMDD-HHMMSS-<kind>-<task_id>.json`。
 
         时间戳按 **UTC** 格式化（不是本地时间）：文件名要能排序，
         而混合时区（或夏令时切换）会让排序与真实先后不一致。
         V1 用的是本地时间，单机没出问题，但 V2 的清单要进 DB 与
         `written_at`（UTC）对齐，两套时区并存是自找麻烦。
 
-        `kind` 是任务白名单里的名字（`douyin_collect` 等），过 `safe_filename`
-        是为了防"kind 来自 API 请求体"这种未来可能的路径。
+        **`task_id` 在文件名里是必须的，不是可选项。**
+        光有"秒 + kind"会撞：两个平台采集任务在同一秒起跑（`all_platforms`
+        就是故意让它们并行的），后写的那份 `os.replace` 会**静默覆盖**前一份，
+        于是 DB 里有两条索引指向同一个文件，而文件内容是后那一份 ——
+        前一个任务的审计凭据凭空消失，没有任何错误。（这条是 2026-09-22
+        `test_two_runs_get_two_files_and_two_index_rows` 当场抓出来的。）
+
+        `kind` 与 `task_id` 都过 `safe_filename`：`kind` 现在来自代码内的白名单，
+        `task_id` 来自 UUID，但"路径段来自外部输入"这类防线不该等到有人传错才生效。
         """
         stamp = started_at.strftime("%Y%m%d-%H%M%S")
-        return self.manifests_dir / f"{stamp}-{safe_filename(kind, max_length=48)}.json"
+        safe_kind = safe_filename(kind, max_length=48)
+        safe_task = safe_filename(task_id, max_length=40)
+        return self.manifests_dir / f"{stamp}-{safe_kind}-{safe_task}.json"
 
     # ---- cookie ----
 

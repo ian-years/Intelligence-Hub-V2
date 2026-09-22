@@ -389,6 +389,25 @@ async def test_close_releases_the_repositories() -> None:
     await storage.close()  # 幂等
 
 
+async def test_repositories_fail_our_way_after_close(tmp_path: Path) -> None:
+    """已经握在手里的 Repository，关掉 storage 之后调用也要红在**我们的**异常上。
+
+    这是 `BaseRepository.__init__` 收"给我一个 session 的工厂"而不是收 sessionmaker
+    的唯一理由。差别在这条用例里：握着对象的话这里会是裸
+    `sqlite3.OperationalError`（连接池已 dispose），API 层只能回一句看不懂的 500；
+    握工厂则 `_require_sessionmaker()` 当场判定"不可用"。
+
+    真会踩到的场景：Task 9 的 lifespan 关 storage 时，可能还有一个任务在写事件流。
+    """
+    storage = SqliteStorage(tmp_path / "close.sqlite3")
+    await storage.initialize()
+    held = storage.platforms  # 模拟"早就取出来的引用"（EventBus 就是这么持有 events 的）
+    await storage.close()
+
+    with pytest.raises(StorageError, match="不可用"):
+        await held.count()
+
+
 # ---------------------------------------------------------------------------
 # 跨 Repository 的事务
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ Repository 里看不到这个分支 —— 都藏在 `_scope()` 里，所以不�
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, NoReturn, TypeVar, cast
 
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.engine.result import Result
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from intelligence_hub_v2.errors import ConflictError, NotFoundError, StorageError
 from intelligence_hub_v2.storage.session import CURRENT_SESSION
@@ -68,8 +68,18 @@ class BaseRepository:
 
     entity: str = "record"
 
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-        self._sessionmaker = sessionmaker
+    def __init__(self, session_factory: Callable[[], AsyncSession]) -> None:
+        """收的是**工厂**（`SqliteStorage._require_sessionmaker`），不是 sessionmaker 本身。
+
+        差别只在关闭之后：握着对象的 Repository 在 `storage.close()` 之后仍能发起查询，
+        症状是驱动层一句裸 `sqlite3.OperationalError`（连接池已经 dispose 了），
+        而 API 层只能回一个看不懂的 500。握工厂的话，`_require_sessionmaker()`
+        当场抛本仓库的 `StorageError` —— 与"还没 initialize"是同一条判断。
+
+        这条在 V2.0 里会真的踩到：Task 9 的 lifespan 关闭 storage 时，
+        可能还有一个任务在往事件流里写日志。
+        """
+        self._session_factory = session_factory
 
     @asynccontextmanager
     async def _scope(self) -> AsyncIterator[AsyncSession]:
@@ -82,7 +92,7 @@ class BaseRepository:
         if ambient is not None:
             yield ambient
             return
-        async with self._sessionmaker() as session, session.begin():
+        async with self._session_factory() as session, session.begin():
             yield session
 
     # ---- 行 → Pydantic ----
