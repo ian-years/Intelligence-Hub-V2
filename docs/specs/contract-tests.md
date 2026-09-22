@@ -86,9 +86,9 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 `-k` 或按 node id 单跑时要带文件名，别以为只有一条。
 
 **仍未落地**（按计划属于后续任务）：§7.9（ASR 标点，V2.1）、
-§7.13 的 `diff -rq` 那半、§7.19（PATH 上的 ffmpeg / ffprobe，归 Task 8 的 preflight）、
-§7.22（按位抓取的 URL 直定位，归 Task 8 的 `BackfillTask`）、
-§7.24 的 L4 前端部分、以及下面 §4 的抽象基类整套（Task 14）。
+§7.13 的 `diff -rq` 那半、§7.19（PATH 上的 ffmpeg / ffprobe，已由 Task 8 preflight 在
+`summary["tools_missing"]` 里报出）、§7.22（按位抓取的 URL 直定位，归 V2.1 的 `BackfillTask`）、
+§7.24 的 L4 前端部分（Task 10-13 一起做）。
 
 **已落地**：
 
@@ -99,6 +99,13 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
   Task 7 补了一条**不对称**的看护：同一个 `yt_dlp` 组件在抖音亮黄（还有页面直链那条路）、
   在 B站 亮红（没有第二条路），见 `test_missing_yt_dlp_is_unreachable_here_not_degraded`。
   两处同色的话，其中一处一定在骗人。
+- §4 抽象基类 —— Task 14：`tests/contracts/test_platform_adapter.py` 的
+  `PlatformAdapterContractTests`（通用契约：名字规范 / `isinstance` Protocol /
+  `capabilities` 冻结声明 / `config_schema` 子类 / healthcheck 结构化 + `is_healthy` 只认 ok /
+  parse 非 URL id / 不支持字幕返 None）。抖音 / B站 各一个薄子类复用其 `make_adapter` 过契约
+  （**没有**改写两套大测试本身，见 `docs/lessons.md` 经验 22）。
+- §3 整张映射表的**存在性** —— Task 14 `tests/contracts/test_contract_guard_index.py`：
+  扫 `tests/` 树逐条比对"每条 §7 点名的看护用例还在"，改名/删除即红。
 
 ---
 

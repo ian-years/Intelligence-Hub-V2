@@ -37,10 +37,13 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   （Task 9，`api/v1/events.py`：`/api/events` 全局流 + `/api/tasks/runs/{id}/events` 单任务流，
   先 subscribe 再 replay，`sse-starlette` 出 `text/event-stream`）三条都齐 → 整条勾。
 - [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
-- [ ] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
-  —— Protocol / 注册表 / infra 五件包装完成（Task 5）；抖音与 B站 两个实现也落地了（Task 6/7），
-  `PLATFORMS` 与 `PLATFORM_CONFIG_SCHEMAS` 的差集已经是空集（注册表快照用例钉着）。
-  还差"契约测试抽象基类"（Task 14），**所以整条不勾**。
+- [x] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
+  —— 四件齐了。Protocol / 注册表 / infra 五件包装（Task 5）；抖音 + B站 两实现（Task 6/7）；
+  `PLATFORMS` 与 `PLATFORM_CONFIG_SCHEMAS` 差集为空（注册表快照用例钉着）；
+  **`PlatformAdapterContractTests` 抽象基类**（Task 14，`tests/contracts/test_platform_adapter.py`）
+  —— 抖音 / B站 各继承它跑通用契约（名字规范 / isinstance Protocol / capabilities 冻结声明 /
+  config_schema 子类 / healthcheck 结构化 + `is_healthy` 只认 ok / parse 交回非 URL id /
+  不支持字幕返 None）。V3 加平台继承即得整套。§7→用例名索引看护防文档说谎。
 - [ ] **抖音 Adapter**：移植 V1 `download_douyin_latest.py`，含 `parse_creator_url`（短链 302 → sec_uid，§7.1）、媒体下载（yt-dlp → 页面播放直链兜底，§7.2）、cookie 优先级阶梯
   —— 代码与契约测试已完成（Task 6：`platforms/douyin/`，91 条用例，§7.1/§7.2/§7.3 各有看护）。
   **整条不勾，因为"真机验过"这一半还没有**：跑通需要本机 CDP 桥 + 一个已登录的 Chrome，
@@ -107,7 +110,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-9 ✅ / Task 10-16 待做
+- **V2.0 实施**：进行中 —— Task 1-9、14 ✅ / Task 10-13、15、16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -127,7 +130,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 11 | 前端 API 层 + SSE + stores + Router + Layout | ⬜ | — | — |
 | 12 | 页面 Dashboard / Feed / Settings / Preflight | ⬜ | — | — |
 | 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ⬜ | — | — |
-| 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ⬜ | — | — |
+| 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ✅ | 见 git log | 1239 passed（累计，净增 31），覆盖率 93.89%，四关全绿；`PlatformAdapterContractTests` 基类 + 抖音/B站 两实例子类 + §7→用例名索引漂移看护 |
 | 15 | `tools/migrate_v1.py` | ⬜ | — | — |
 | 16 | CI 验证 + 端到端 smoke + 收尾文档 | ⬜ | — | — |
 
@@ -135,7 +138,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1208 passed，覆盖率 93.89%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1239 passed，覆盖率 93.89%（门禁 80%）
 .venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
 .venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
 .venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 77 source files
