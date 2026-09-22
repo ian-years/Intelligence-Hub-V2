@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from intelligence_hub_v2.infra.subprocess import run_subprocess
+from intelligence_hub_v2.logging import get_logger
+
+logger = get_logger(__name__)
+"""缺二进制的 probe 会往这里记一条 debug。没有这一句，"这台机器没装 ffprobe"
+在日志里就是个空白 —— 而它正是"为什么这批稿件的时长全是空的"那条线索的起点。"""
 
 __all__ = ["StreamInfo", "extract_audio", "has_audio_stream", "probe_streams"]
 
@@ -49,25 +54,36 @@ class ProbeFailure:
 
 
 async def probe_streams(media_path: Path, *, timeout: float = 30.0) -> list[StreamInfo]:
-    """列出所有流。文件不存在或 ffprobe 看不懂时返回**空列表**。
+    """列出所有流。文件不存在、ffprobe 看不懂、**或 ffprobe 根本没装**时返回空列表。
 
     空列表不等于"没有流"，也等于"问不出来" —— 调用方（`has_audio_stream`）
     必须把这两种情况一起当"问不出来"处理，这正是 V1 §7.21 那条兜底的意义。
+
+    `LookupError`（二进制不在 PATH）**在这里就地消化**是有意偏离"缺二进制要如实报错"
+    那条纪律的（见模块 docstring 与 `extract_audio`）：`extract_audio` 是在**产出用户
+    要的东西**，缺 ffmpeg 必须红；这里是在**问一个问题**，问不出来就有既定的兜底答案。
+    让它冒出去的话，"这台机器没装 ffprobe"会把一条已经下好的媒体变成采集失败 ——
+    而那台机器上 V1 一直是能跑完整条链路的（`shutil.which("ffprobe")` 实测为 None）。
+    缺 ffmpeg 这件事该红的位置是 preflight，不是每一次 probe。
     """
     if not media_path.is_file():
         return []
-    result = await run_subprocess(
-        [
-            FFPROBE,
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_streams",
-            str(media_path),
-        ],
-        timeout=timeout,
-    )
+    try:
+        result = await run_subprocess(
+            [
+                FFPROBE,
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(media_path),
+            ],
+            timeout=timeout,
+        )
+    except LookupError as exc:
+        logger.debug("ffprobe.unavailable", reason=str(exc), media=str(media_path))
+        return []
     if not result.ok:
         return []
     return _parse_streams(result.stdout)

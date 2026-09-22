@@ -37,6 +37,9 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   —— 前半条已完成（Task 5：Protocol / `AdapterDeps` / 显式注册表 / infra 五件包装）。
   后半条"契约测试抽象基类"在 Task 14，**所以整条不勾**（判据是整条都真机验过）。
 - [ ] **抖音 Adapter**：移植 V1 `download_douyin_latest.py`，含 `parse_creator_url`（短链 302 → sec_uid，§7.1）、媒体下载（yt-dlp → 页面播放直链兜底，§7.2）、cookie 优先级阶梯
+  —— 代码与契约测试已完成（Task 6：`platforms/douyin/`，91 条用例，§7.1/§7.2/§7.3 各有看护）。
+  **整条不勾，因为"真机验过"这一半还没有**：跑通需要本机 CDP 桥 + 一个已登录的 Chrome，
+  本会话没有那个状态（见 `docs/progress/2026-09-22.md` Task 6 的"未验证"清单）。
 - [ ] **B站 Adapter**：移植 V1 `download_bili_following_latest.py`，含 cookie 三档（§7.15）、DASH 未合并分片处理（§7.21）、字幕优先
 - [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
 - [ ] **任务调度**：`TaskRegistry` + 6 个核心任务（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）+ 平台级 Semaphore 限流 + CancelToken + 超时 + 清单双写（文件 + SQLite，强制终态）
@@ -84,7 +87,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-5 ✅ / Task 6-16 待做
+- **V2.0 实施**：进行中 —— Task 1-6 ✅ / Task 7-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -96,7 +99,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 3 | DB schema + Alembic + Repository + Storage | ✅ | 见 git log | 650 passed（累计），覆盖率 95.07%，ruff + mypy 双绿 |
 | 4 | EventBus + `manifest_writer` 上下文管理器 | ✅ | 见 git log | 701 passed（累计），覆盖率 95.39%，四关全绿 |
 | 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ✅ | 见 git log | 820 passed（累计），覆盖率 94.04%，四关全绿 |
-| 6 | DouyinAdapter（可与 Task 7 并行） | ⬜ | — | — |
+| 6 | DouyinAdapter（可与 Task 7 并行） | ✅ | 见 git log | 921 passed（累计，净增 101），覆盖率 94.43%，四关全绿；抖音模块 92-95% |
 | 7 | BilibiliAdapter | ⬜ | — | — |
 | 8 | TaskRunner + TaskRegistry + 6 个 handler | ⬜ | — | — |
 | 9 | FastAPI app + 全部 API 路由 + SSE | ⬜ | — | — |
@@ -112,14 +115,22 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -m pytest tests/ -q          # 96 passed，覆盖率 96.02%（门禁 80%）
-.venv/Scripts/python.exe -m ruff format src/ tests/
-.venv/Scripts/python.exe -m ruff check src/ tests/    # All checks passed
-.venv/Scripts/python.exe -m mypy src/                 # no issues found in 18 source files
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 921 passed，覆盖率 94.43%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
+.venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
+.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 47 source files
 ```
 
-**尚未安装的可选依赖**（Task 6/7/8 需要）：`yt-dlp` / `curl-cffi` / `zhconv` / `sherpa-onnx` /
-`numpy` / `playwright`。装法：`.venv/Scripts/python.exe -m pip install -e ".[media,asr,bridge]"`。
+全套 **71 秒**（带覆盖率）。Task 6 之前是 292 秒 —— 那笔账记在
+`docs/lessons.md` 坑 19（Windows 上每建一个 httpx 默认真传输的客户端要 2.1 秒）。
+
+**可选依赖已经装好了**（2026-09-22 实测：`yt_dlp` 2026.8.19 / `curl_cffi` / `zhconv` /
+`sherpa_onnx` / `numpy` / `playwright` 全部 `find_spec` 命中）。
+装法留在这里备用：`.venv/Scripts/python.exe -m pip install -e ".[media,asr,bridge]"`。
+**仍然缺的是 PATH 上的 `ffmpeg` / `ffprobe`**（V1 §7.19 那个"注册表里有、进程快照过期"
+的现象在这个 shell 里照样成立）—— Task 8 之前要走工作台的 PATH 补齐或重开宿主。
+`has_audio_stream()` 已经改成"缺二进制算问不出来"（坑 18），所以缺 ffprobe 不会再
+把一次成功的下载判成采集失败。
 
 **实施期对 spec 的偏离**全部记在 `docs/lessons.md`「V2 新增」一节（7 条坑）与
 「实施阶段」一节（5 条方法论），涉及的两份 spec 已就地加修订说明：

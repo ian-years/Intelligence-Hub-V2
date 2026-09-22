@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "error": "sec_uid_mismatch",
+  "expected": "MS4wLjABAAAAabc123def456",
+  "actual": "MS4wLjABAAAAOTHERperson"
+}

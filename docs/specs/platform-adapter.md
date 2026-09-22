@@ -238,13 +238,25 @@ class VideoMeta(BaseModel):
 class SingleFileArtifact(BaseModel):
     """单文件媒体（合并后的 mp4 / 抖音兜底片）。"""
     kind: Literal["single_file"] = "single_file"
-    path: Path                  # 相对 data/ 的路径
+    path: Path                  # 见下方"路径归谁算"（Task 6 修订）
     size_bytes: int
     media_source: Literal["yt_dlp", "page_play_url", "dash_merged"]
     yt_dlp_error: str | None = None    # 兜底时 yt-dlp 的失败原文（V1 §7.2）
     duration_seconds: float | None = None
     has_audio: bool = True
     has_video: bool = True
+
+> **修订（2026-09-22，Task 6）—— `path` 归谁算**：本 `path` 原写作"相对 `data/` 的路径"，
+> 实施时**不成立**：`AdapterDeps` 里没有 `FileStorage`（`storage/` 在依赖图最底层，
+> 适配器拿不到），而"相对 `data/`"这件事必须先知道数据根在哪。
+> 现在的口径是：**适配器返回 `dest` 下的路径**（`dest` 由调用方给），
+> 归一化成 `FileStorage.rel()` 是**入库那一层**（Task 8 的 handler）做的。
+> 为什么不给 `AdapterDeps` 加一个 `files` 字段：只有"写库"需要相对路径，
+> 采集本身不需要；为了省一次转换给所有适配器开一个 storage 形状的洞，
+> 等于允许适配器偷偷算路径 —— 那正是 §7.5（转写目录按平台不对称）的成因形状。
+> 判据：`tests/contracts/test_douyin_adapter.py::test_signed_play_url_never_reaches_the_artifact`
+> 只断言产物里不含 URL，不断言它是相对路径。
+> 这条同样适用于 `VideoAudioPairArtifact.video_path` / `audio_path`。
 
 class VideoAudioPairArtifact(BaseModel):
     """DASH 未合并分片（V1 §7.21 B站陷阱）。"""
@@ -348,10 +360,29 @@ class ListError(PlatformError):
 
 ### 4.1 抖音
 
+实现：`src/intelligence_hub_v2/platforms/douyin/`（Task 6 落地）。
+分四个模块，各自守一条线：`urls.py`（§7.1 的纯解析）、`listing.py`（页面 JS 与解析）、
+`media.py`（§7.2 兜底 + §7.3 阶梯落地）、`adapter.py`（装配与 Protocol）。
+
 - **`parse_creator_url` 必须跟随 302**：`v.douyin.com/<code>/` 短链不含身份，必须跟一次 302 才能拿到规范主页与 `sec_uid`（V1 §7.1）
 - **`download_media` 默认走兜底**：抖音对非浏览器客户端做风控（`a_bogus` 签名），yt-dlp 从来没有产出一片媒体，`yt_dlp_with_fallback` 是常态而不是故障（V1 §7.2）。`MediaArtifact.media_source` 几乎总是 `'page_play_url'`，`yt_dlp_error` 必须保留 yt-dlp 的失败原文
 - **CDN 播放直链是签名的、不带 cookie，几小时后失效**：不要把 URL 当持久数据
+  （所以契约里根本没有能放它的字段，`docs/adr/0011` 顺手删掉了配置里那个
+  `persist_play_url` 开关 —— 一个只有 `false` 合法的布尔不是配置）
 - **身份是 `sec_uid`，不是 URL 里的东西**
+- **只认作品网格里的链接**（`[data-e2e="user-post-list"]`），整页扫 `a[href*="/video/"]`
+  会在网格没渲染时把别人的作品算到本博主头上**而且报成功**（V1 实测踩过）。
+  网格为空是 `ok:false` + 原文 → `ListError`，**不是**空列表
+- **`sec_uid` 解析有一道域名闸门**（V2 补的，V1 没有）：`douyin.com` 子域 + `iesdouyin.com`
+  之外一律认不出。V1 的"路径以 `user/` 开头就取第二段"对任意站点成立，
+  于是 `https://example.com/user/x` 会生成一个看起来合法的 `platform_id`（坑 20）
+- **`since=` 在抖音这一侧是弱过滤**：网格卡片上没有发布时间，`published_at` 是 None。
+  口径是"判得了才跳过，判不了就放行"；真增量靠 `videos` 表按 `platform_video_id` 查重
+  （经验 18）
+- **cookie 阶梯的顺序只在 `capabilities` 里**（`docs/adr/0011`）；配置与 V1 的
+  `DOUYIN_YTDLP_COOKIES_FILE` / `_FROM_BROWSER` 只决定"这一档用哪个文件 / 哪个浏览器"。
+  浏览器档**默认不存在**（V1 §7.3：Windows 上那一档永远读不出来，而它的错会触发退档）。
+  **只有表头的 cookie 文件不算导出文件档**（§7.15 的另一半：它会让整条链路静默退成匿名档）
 
 ### 4.2 B站
 

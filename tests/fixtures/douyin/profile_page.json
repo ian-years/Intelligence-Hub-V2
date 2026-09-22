@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "sec_uid": "MS4wLjABAAAAabc123def456",
+  "nickname": "姜胡说",
+  "avatar_url": "https://p3.douyinpic.com/aweme-avatar/x~tplv-dy-aweme-avatar.jpeg",
+  "follower_count": "12.4万",
+  "videos": [
+    {
+      "id": "7412345678901234567",
+      "url": "https://www.douyin.com/video/7412345678901234567",
+      "title": "口播稿怎么写前三秒",
+      "likes": "1.2万"
+    },
+    {
+      "id": "7412345678901234568",
+      "url": "https://www.douyin.com/video/7412345678901234568",
+      "title": "为什么你的视频没人看",
+      "likes": "3456"
+    },
+    {
+      "id": "https://v.douyin.com/ad/",
+      "url": "https://v.douyin.com/ad/",
+      "title": "练字帖广告",
+      "likes": "9"
+    },
+    {
+      "id": "7412345678901234567",
+      "url": "https://www.douyin.com/video/7412345678901234567",
+      "title": "口播稿怎么写前三秒",
+      "likes": "1.2万"
+    }
+  ]
+}

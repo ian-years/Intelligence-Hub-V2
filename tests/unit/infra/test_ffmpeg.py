@@ -238,6 +238,28 @@ async def test_missing_ffmpeg_is_a_lookuperror_not_a_runtimeerror(
         await extract_audio(tmp_path / "media.mp4", tmp_path / "a.wav")
 
 
+async def test_probe_treats_a_missing_binary_as_an_unanswerable_question(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`extract_audio` 缺二进制必须红，`probe_streams` 缺二进制必须**空列表**。
+
+    同一个 `LookupError` 在两个函数里两种处置，看着不对称，其实是同一句话的两面：
+    前者在**产出用户要的东西**，做不出来就红；后者在**问一个问题**，
+    问不出来有既定的兜底答案（`has_audio_stream` → True）。
+    让它冒出去的话，"这台机器没装 ffprobe"会把一条已经下好的媒体变成采集失败 ——
+    而这台机器上 V1 一直跑得通整条链路（`shutil.which("ffprobe")` 实测为 None）。
+    """
+    media = tmp_path / "media.mp4"
+    media.write_bytes(b"x" * 32)
+
+    async def fake(*args: Any, **kwargs: Any) -> SubprocessResult:
+        raise LookupError("找不到可执行文件 'ffprobe'")
+
+    monkeypatch.setattr(ffmpeg_module, "run_subprocess", fake)
+    assert await probe_streams(media) == []
+    assert await has_audio_stream(media) is True
+
+
 async def test_the_output_directory_is_created(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

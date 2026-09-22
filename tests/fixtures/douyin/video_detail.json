@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "aweme_id": "7412345678901234567",
+  "play_urls": [
+    "https://v3-web.douyinvod.com/signed/abc?signature=XYZ&expires=1735689600",
+    "https://v26-web.douyinvod.com/signed/def?signature=QQQ&expires=1735689600"
+  ],
+  "error": ""
+}

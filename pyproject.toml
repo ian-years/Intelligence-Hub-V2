@@ -228,6 +228,11 @@ warn_required_dynamic_aliases = true
 minversion = "8.0"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 把仓库根加进 sys.path，让 `tests/` 能当命名空间包用
+# （`from tests.contracts._doubles import FakeBridge`）。
+# 不加这一行的话只能写 `from _doubles import ...`，那要求整个 tests/ 里
+# 文件名不撞车 —— Task 14 要抽一份四个平台共用的契约基类，撞车是迟早的事。
+pythonpath = ["."]
 addopts = [
     "--strict-markers",
     "--strict-config",

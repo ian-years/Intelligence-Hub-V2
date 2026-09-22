@@ -40,6 +40,15 @@
   `PlatformRegistry.inconsistencies()`）、`models/media.py`
   （`SingleFileArtifact` / `VideoAudioPairArtifact` / `audio_path_of()`）、
   `infra/` 五件包装（`subprocess` / `cdp_bridge` / `cookies` / `ytdlp` / `ffmpeg`）
+- **Task 6** · 抖音 Adapter（V1 §7.1 / §7.2 / §7.3 三条陷阱的落点）：
+  `platforms/douyin/urls.py`（sec_uid 三种形状 + **抖音系域名闸门** +
+  `as_http_url`/`require_http_url` + 中文计数法解析）、`listing.py`（主页与滚动两份页面 JS、
+  占位符注入后**检查没有残留**、`sec_uid_mismatch` 与"网格没渲染"两种红分开）、
+  `media.py`（cookie 阶梯落地 + 详情 JS 问播放直链 + `.part`→`os.replace` 落盘）、
+  `adapter.py`（`DouyinAdapter` + `@register("douyin")` + `_Pacer` 按 `per_minute` 上闸）、
+  `tests/contracts/_doubles.py`（`FakeBridge` / `FakeYtDlpRunner`）与
+  `tests/fixtures/douyin/` 七份页面模拟结果、`tests/unit/test_import_layers.py`
+  （六个入口各起子进程验导入顺序）
 
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），
@@ -55,6 +64,21 @@
   以及一条**验证漂移看护本身能发现漂移**的用例
 
 ### Changed
+- **`docs/adr/0011`：cookie 阶梯的顺序只有一处真源。**
+  `DouyinConfig.ytdlp_cookie_priority` 删除 —— 它与 `DouyinAdapter.capabilities.cookie_variants`
+  给的是**两个互相矛盾的顺序**（前者把浏览器档排在导出文件档之前），而 Protocol 写的是
+  "实现必须遵守 `capabilities` 的顺序"。同批删除 `persist_play_url`
+  （契约里没有任何能存放播放直链的字段 → 只有 `false` 合法的布尔不是配置）。
+  V1 的 `DOUYIN_YTDLP_COOKIES_FILE` / `_FROM_BROWSER` 保留兼容，但降级成
+  "这一档用哪个文件 / 哪个浏览器"的输入，不再决定顺序。
+  影响：`config/platforms.yaml` 抖音一节、`docs/specs/config-schema.md §3.1/§6`、
+  B站 的 `cookie_variant_order` 在 Task 7 按同一条处理。
+- **`MediaArtifact.path` 的归属改了**（`platform-adapter.md §2.4` 就地加修订说明）：
+  原写"相对 `data/`"，但 `AdapterDeps` 里没有 `FileStorage`，采集层算不出相对路径。
+  现在适配器返回 `dest` 下的路径，`FileStorage.rel()` 归一化由入库层（Task 8）做。
+- `infra/ytdlp.py` 不再**运行期**导入 `platforms.base`（`CookieVariant` 挪进 `TYPE_CHECKING`）。
+  它只出现在注解位置，而这条反方向的边在 `platforms/__init__.py` 接上适配器之后
+  会闭合成循环导入 —— 症状是"取决于谁先被 import"的红绿漂移（`docs/lessons.md` 坑 17）。
 - `config/platforms.yaml` 拍平：顶层键即平台名，删掉 `platforms:` 外层与 `defaults:` 块；
   原 `defaults:` 的运行时项升格为 `app.yaml` 的真实字段。`xiaohongshu` / `youtube` 整段注释到 V2.1
 - `Manifest` 新增 `error` 字段（任务级错误原文）；`FailureRecord.platform` 放宽为可空，
@@ -85,6 +109,15 @@
   钩子把它渲染成 `sa.DateTime()`（`UTCDateTime.impl is DateTime`，DDL 逐字相同）
 - Alembic 1.20 的 `version_path_separator` 弃用警告 × `filterwarnings = ["error"]`
   = 每个文件库用例抛 `MigrationError`（内存库全绿，只有 `[file]` 档红）→ 改用 `path_separator`
+- `infra/ffmpeg.probe_streams()` 让"ffprobe 没装"的 `LookupError` 冒出去，与它自己
+  "看不懂时返回空列表"的契约冲突（V1 §7.21 的兜底要求"问不出来算有音频"）——
+  后果是**一次已经下好的媒体被判成采集失败**，而这台机器 PATH 里本来就没有 ffprobe。
+  现在就地消化成空列表 + 一条 debug 日志；`extract_audio` 那边照旧必须红
+  （产出用户要的东西 vs 问一个问题，两种职责两种处置）
+- V1 抄来的 `sec_uid` 解析器接受**任何域名**的 `/user/x`，于是
+  `https://example.com/user/x` 能生成一个看起来完全合法的 `platform_id`
+  （V1 §7.1 那条脏行的另一个入口）。加了一道抖音系域名闸门，
+  相对路径（页面 JS 的 `a[href]`）照旧放过
 - Alembic `env.py` 的 `dictConfig` 会冲掉 structlog 的 processor 链与 `RotatingFileHandler`
   （迁移是在 `setup_logging()` **之后**跑的）→ `configure_logger` 属性开关，CLI 仍装自己的日志
 - 跨会话提醒：`CURRENT_SESSION` 原先住在 `storage/db.py`，使 `db.py` 无法在顶层 import

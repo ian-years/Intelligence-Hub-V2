@@ -33,10 +33,14 @@ from intelligence_hub_v2.models.transcript import Transcript
 from intelligence_hub_v2.models.video import VideoMeta
 
 if TYPE_CHECKING:
-    # **只能 TYPE_CHECKING**：`infra/ytdlp.py` 要引本模块的 `CookieVariant`
-    # 与 `PlatformConfig`，运行时反向引 infra 就是循环导入。
-    # 依赖方向图上 infra 在 platforms 下面，但这条边是"类型引用"不是"调用"，
-    # 所以方向图上不成立、代码里必须有 —— 记下来免得下一个人以为是疏忽。
+    # 依赖方向图上 infra 在 platforms 下面，本该可以运行期往下引 —— 但 Task 5/6 之后
+    # 这一头**也必须保持 TYPE_CHECKING**，因为 `platforms/__init__.py` 末尾要在导入期
+    # 把适配器装上（注册表要"实现了哪些平台"在导入时就固定）。于是链条变成：
+    #   platforms/__init__ → douyin.adapter → infra.cookies → infra/__init__
+    #     → infra.ytdlp → platforms.base（本模块，正在执行中）→ 循环
+    # Task 6 的实际解法是把 `infra/ytdlp.py` 那边对 `CookieVariant` 的运行期导入
+    # 也挪进 TYPE_CHECKING（它只出现在注解里），这一侧才不必破例。
+    # 两边各自的理由都写在那两个文件的 TYPE_CHECKING 块里，别只删一处。
     from intelligence_hub_v2.core.event_bus import EventBus
     from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
     from intelligence_hub_v2.infra.cookies import CookieManager

@@ -138,9 +138,23 @@ def test_douyin_config_defaults() -> None:
     assert cfg.use_cdp_bridge is True
     assert cfg.fallback_to_page_play_url is True
     # V1 §7.2：yt-dlp 对抖音从来没产出过媒体，兜底是常态不是故障
-    assert cfg.ytdlp_cookie_priority[0] == "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER"
-    assert cfg.ytdlp_cookie_priority[-1] == "none"
     assert cfg.advanced.retry_max == 3
+
+
+def test_douyin_cookie_ladder_order_is_not_a_config_field() -> None:
+    """ADR-0011：cookie 阶梯的**顺序**不许出现在平台配置里，它只归 `Capabilities`。
+
+    这条是结构看护，不是取值看护 —— 多加一个 `xxx_cookie_priority` 字段不会让任何
+    现有用例变红（它自带默认值），但它会重新造出 Task 6 收掉的那个形状：
+    同一条阶梯两处排顺序，而 `download_media` 的契约只认其中一处。
+    """
+    for field_name in DouyinConfig.model_fields:
+        assert "priority" not in field_name, field_name
+        assert "order" not in field_name, field_name
+    # V1 §7.3：Windows 上浏览器档永远读不出来，所以抖音默认**没有**这一档
+    # （B站 默认 "chrome"，两边不同是有意的）
+    assert DouyinConfig(display_name="抖音").ytdlp_cookies_from_browser is None
+    assert BilibiliConfig(display_name="B站").ytdlp_cookies_from_browser == "chrome"
 
 
 def test_bilibili_config_cookie_variant_order() -> None:

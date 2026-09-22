@@ -474,6 +474,109 @@ Could not copy 会退档；Unsupported URL 不退）。
 
 **看护**：`tests/unit/infra/test_ytdlp.py`。
 
+#### 坑 17 · `infra` 运行期反引 `platforms`，只在"谁先被 import"时才炸（Task 6）
+
+**现象**：把 `from ...douyin.adapter import DouyinAdapter` 接到
+`platforms/__init__.py` 末尾之后，单跑 `tests/unit/platforms/` 全红：
+`ImportError: cannot import name 'YtDlpResult' from partially initialized module
+'intelligence_hub_v2.infra.ytdlp'`。而单跑 `tests/unit/infra/` 是**绿的**。
+
+**根因**：`infra/ytdlp.py` 在运行期 `from platforms.base import CookieVariant`，
+而导入 `platforms.base` 会**先执行父包 `platforms/__init__.py`** —— 那里现在要装适配器，
+适配器又回头 import `infra.ytdlp`（还没执行完）：
+
+```
+infra.cookies → infra.ytdlp → platforms.base → platforms/__init__
+  → douyin.adapter → infra.ytdlp（半成品）→ ImportError
+```
+
+平时看不见，是因为只要先从 `platforms.*` 进门，链条就不会闭合。
+"取决于导入顺序"的坑在单进程测试套件里表现为**红绿随文件收集顺序漂移**。
+
+**解法**：把边掰正，而不是挪接线点。`CookieVariant` 在本仓库只出现在注解位置
+（dataclass 字段与函数签名），文件又有 `from __future__ import annotations`，
+所以挪进 `TYPE_CHECKING` 是零成本的；infra 从此不再运行期依赖 platforms。
+
+**为什么不在 `main.py` 里装配**：注册表要的是"**实现了哪些平台**在导入期就固定"。
+如果适配器只在应用启动时才登记，`test_the_shipped_platform_schemas_have_no_adapters_yet_by_design`
+那条快照就永远是绿的 —— 一个不会变红的看护等于没有看护。
+
+**判据 / 看护**：`tests/unit/test_import_layers.py` —— 六个入口各起**一个子进程**
+当第一个 import 跑一遍，外加"先从 infra 进门 / 先从 platforms 进门"两种顺序都要能读到
+`PLATFORMS["douyin"]`。同进程内模块只加载一次，这类环**只有换进程才照得出来**。
+
+#### 坑 18 · `probe_streams()` 让"ffprobe 没装"冒出去，一次已下好的媒体变成采集失败（Task 6）
+
+**现象**：抖音 `download_media` 里加了一句 `has_audio_stream(path)`，11 条媒体用例
+全红在 `LookupError: 找不到可执行文件 'ffprobe'`。
+
+**根因**：`infra/ffmpeg.py` 的模块纪律是"缺二进制要如实报找不到可执行文件"
+（`extract_audio` 那边对，还有专门用例钉着），但 `probe_streams` 照抄了同一条，
+而它的契约是**另一个形状**：文档自己写着"看不懂时返回空列表"，
+`has_audio_stream` 再按"问不出来算有音频"兜底（V1 §7.21）。
+空列表这一档没覆盖 `LookupError`，于是"问不出来"的两个来源只有一个走得到兜底。
+本机 PATH 里**真的没有 ffprobe**（V1 §7.19），所以任何调用方一碰就炸。
+
+**解法**：`probe_streams` 就地消化 `LookupError` → 空列表 + 一条 debug 日志。
+不对称是**有意**的，两边各有一条用例钉着：
+`extract_audio` 缺 ffmpeg 必须红（它在产出用户要的东西），
+`probe_streams` 缺 ffprobe 必须是"问不出来"（它在问一个问题）。
+"这台机器没装 ffmpeg"该红的位置是 preflight，不是每一次 probe。
+
+**看护**：`tests/unit/infra/test_ffmpeg.py::test_probe_treats_a_missing_binary_as_an_unanswerable_question`
+＋ `tests/contracts/test_douyin_adapter.py::TestDownloadMedia::test_an_unprobeable_file_is_still_reported_as_having_audio`。
+
+**补一句（又是经验 16）**：这个 `NameError: name 'logger' is not defined`
+是我给 `probe_streams` 补日志时**当场犯的**——那一轮只跑了 `pytest`，没先跑
+`ruff check`。同一个错误 ruff 的 F821 直接就能指出来。**改完就跑门禁**，
+攒到提交前只会让红点离原因更远。
+
+#### 坑 19 · 在 Windows 上每建一个 httpx 默认真传输的客户端要 2.1 秒（Task 6）
+
+**现象**：新写的 85 条抖音契约测试跑了 **125 秒**，而且几乎每条都均匀地占 1.4~4.5 秒
+—— 连 `parse_creator_url("MS4w…")` 这种零 I/O 的用例也是。
+
+**根因**：`make_deps()` 在 `http=None` 时默认建一个 `httpx.AsyncClient()`（默认真传输）。
+实测这台机器上 `httpx.AsyncClient()` **每次都**要 2.1~3.0 秒
+（不是进程内一次性开销；`trust_env=False` 一样慢，`ssl.create_default_context()` 本身
+只要 168 ms，所以大头在 httpcore 那条路径上）。而
+`httpx.AsyncClient(transport=httpx.MockTransport(...))` 是 **0 ms**。
+
+**解法**：测试里的默认客户端换成 MockTransport。这条改动**顺手修掉了一个更要紧的问题**：
+以前忘了传 `http=` 的用例会拿到一个能上真网的客户端，"离线契约测试"其实要看网络运气。
+现在默认是"任何真请求当场炸"，测试的离线性质由构造保证。
+
+**结果**：`tests/contracts` 125 秒 → 3.3 秒；全套 915 条 76 秒（带覆盖率）。
+
+**对项目本身的那一半结论（还没落地，Task 9 记账）**：生产端**必须全应用共用一个
+`AsyncClient`**（`AdapterDeps.http` 就是这个设计），不能每个适配器 / 每次桥调用各建一个 ——
+在这台 Windows 机器上那不是"稍微慢一点"，是每建一次白付 2 秒。
+`infra/cdp_bridge.py:BidgeClient` 在不注入客户端时会自己 lazy 建一个，
+装配层要显式把共享 client 传进去。
+
+#### 坑 20 · V1 的 `sec_uid` 解析器接受**任何域名**的 `/user/x`（Task 6 补的洞）
+
+**现象**：给 `parse_creator_url` 写"脏输入"用例时，
+`https://example.com/user/x` 被认成 sec_uid=`x` 的合法抖音主页，测试没红。
+
+**根因**：V1 的 `_sec_uid_in_url()` 最后一条兜底是"路径以 `user/` 开头就取第二段"，
+本意是给页面 JS 可能返回的相对 `href` 用的，但它对**带任意主机名的 URL 同样成立**；
+`?sec_uid=` 那条 query 分支也没有域名约束。于是任何第三方站点的一条
+`/user/anything` 链接都能生成一个"看起来合法"的 `platform_id`。
+V1 里它的实际后果是"对标库里混进别的号的行"，靠人眼发现，所以一直没人修 ——
+**V1 有这条不等于它对**。
+
+**解法**：三条解析分支之前加一道域名闸门 `is_douyin_host()`
+（`douyin.com` 子域 + `iesdouyin.com`；**无主机名的相对路径放过**，那正是这条兜底的存在理由）。
+
+**踩到的第二个坑**：判据写成 `_DOUYIN_HOST.match(host)`，于是
+`www.douyin.com` 因为开头的 `www.` 被判成"不是抖音"，**所有正常主页链接全部认不出**。
+模式里的 `(?:^|\.)` 已经挡住了 `notdouyin.com` 这种仿冒，所以该用 `search`。
+这条是契约测试当场抓出来的（8 条红），不是读代码读出来的。
+
+**看护**：`tests/contracts/test_douyin_adapter.py::TestParseCreatorUrl`
+（`test_unrecognisable_input_raises_parse_url_with_the_original_text[https://example.com/user/x]`
+是这一条的正身；参数化里另外五例守的是"别修过头把合法链接也挡掉"）。
 
 ---
 
@@ -820,6 +923,65 @@ schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；�
 **判据**：改完就跑 `ruff check` + `mypy`，再跑受影响的测试目录 —— 顺序不能倒过来。
 
 **看护**：`test_freshness_does_not_call_a_real_file_empty`。
+
+#### 经验 17 · "两处真相"的第三种形态：同一份顺序被写了两遍，而且互相矛盾（Task 6）
+
+**现象**：`DouyinConfig.ytdlp_cookie_priority` 与 `DouyinAdapter.capabilities.cookie_variants`
+都是"抖音的 cookie 阶梯"，前者是 `browser > exported_file > none`，
+后者是 `exported_file > browser > none`。**两个都是活字段**：
+前者进 `config/platforms.yaml`、进 JSON Schema、被前端渲染成表单；
+后者被调度器读、被 `download_media` 的契约要求"必须照它走"。
+实现只能挑一个，另一个当场变成撒谎的声明。
+
+**根因**：前 16 条坑里的"两处真相"都是**同一份数据抄了两份**（V1 §7.7 双源、
+§7.11 三种命名），这一条不一样：**两处都是权威，且给出不同的答案**。
+这种形状没有任何工具会红 —— 类型对、schema 对、测试各测各的（配置测试验
+"字段默认值是这个顺序"，适配器测试验"实现走了另一个顺序"），
+两边全绿。症状要等到某天画质掉了对比才发现。
+
+**解法（`docs/adr/0011`）**：一句话分工 —— **顺序归契约，资源归配置**。
+阶梯*顺序*只在 `Capabilities`（它是 `ClassVar`，注册表不实例化就能读，
+这正是 ADR-0004 定它的原因）；配置与 V1 的 env 名只回答
+"导出文件档用哪个路径 / 浏览器档用哪个浏览器"。于是 `ytdlp_cookie_priority` 删除。
+同一批删掉的还有 `persist_play_url`：`MediaArtifact` / `VideoMeta` / `videos` 表里
+**没有任何字段能存放播放直链**，也就是这个开关唯一的合法实现是什么都不做 ——
+一个只有 `false` 能用的布尔不是配置，是"这块还没想清楚"的化石。
+
+**判据**：加平台 / 加字段时问一句 —— *这个信息在别处是不是已经有一份权威了？*
+两份都是权威就必须当场收口，别指望以后有人发现。
+
+**看护**：`test_douyin_cookie_ladder_order_is_not_a_config_field`（结构看护：
+`DouyinConfig` 里不许再出现带 `priority`/`order` 的字段名 ——
+加一个这种字段**不会**让任何取值用例变红，只有这一条抓得到）＋
+`TestCookieLadder::test_order_comes_from_capabilities_and_starts_with_the_exported_file`＋
+`test_capabilities_and_the_config_defaults_agree_on_strategies`（策略字段两处必须一致）。
+
+#### 经验 18 · 平台给不出的字段就让它明着是 None，别造一个"看起来能过滤"的假象（Task 6）
+
+**现象**：`PlatformAdapter.list_creator_videos(since=...)` 是契约里写好的增量参数，
+但抖音主页网格的卡片 DOM 上**只有 id / 标题 / 点赞数，没有发布时间**。
+
+**两种走歪的方式**，方向相反但都贵：
+
+1. 拿 `updated_at`、页面里的"2小时前"文案或时间戳猜测去凑 `published_at` ——
+   凑出来的值会让 `since` **看起来在工作**，而它筛掉的其实是随机一部分。
+   看板上的症状是"这个博主的更新莫名少了一半"，最难查的那类。
+2. 因为凑不出来就把 `since` 实现成"没有发布时间就跳过" ——
+   整轮作品一条都不进，而日志是干净的（**过滤器没错，是数据判不了**）。
+
+**解法**：`published_at=None` 明着交出去，`since` 的口径写成
+"判得了才跳过，判不了就放行"，并在 docstring 里点名"这一侧是弱过滤，
+别把它当增量游标；真增量靠 `videos` 表按 `platform_video_id` 查重"（Task 8 的 handler 做）。
+V1 走的本来就是第二条路（`store.video_exists(...)` 查重），所以这不是 V2 的退化，
+是平台侧的限制被契约里一个看起来很正当的参数名掩盖住了。
+
+**判据**：契约里每个"过滤 / 排序"参数都要能回答*这个平台靠什么字段实现它*；
+答不出来就写进 docstring 并在测试里钉住"判不了时不许丢数据"。
+
+**看护**：`test_since_cannot_drop_undated_cards`（判不了 → 放行，
+＋ `test_a_real_publish_date_would_still_be_filtered`
+（判得了 → 真判，否则上一条是句永不生效的空话）＋
+`card_to_video_meta` 里 `duration_seconds=None` / `published_at=None` 的断言。
 
 
 ---

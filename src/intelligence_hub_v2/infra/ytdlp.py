@@ -23,11 +23,26 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from intelligence_hub_v2.errors import MediaDownloadError
 from intelligence_hub_v2.infra.subprocess import SubprocessResult, run_subprocess
 from intelligence_hub_v2.logging import get_logger
-from intelligence_hub_v2.platforms.base import CookieVariant
+
+if TYPE_CHECKING:
+    # **只能 TYPE_CHECKING**（这条边反了方向）：`CookieVariant` 住在 `platforms/base.py`，
+    # 而依赖图是 `platforms/ → infra/`。本模块的注解有 `from __future__ import annotations`
+    # 兜着，`CookieVariant` 只出现在注解位置（dataclass 字段与函数签名），运行期不求值，
+    # 所以挪进 TYPE_CHECKING 是零成本的。
+    #
+    # Task 6 之前这里是运行期导入，平时看不出问题；一旦 `platforms/__init__.py` 末尾
+    # 开始装适配器（`from ...douyin.adapter import DouyinAdapter`，注册表要的那份
+    # "导入期就固定实现了哪些平台"），链条就闭合成：
+    #   infra.cookies → infra.ytdlp → platforms.base → platforms/__init__
+    #     → douyin.adapter → infra.ytdlp（还没执行完）→ ImportError
+    # 也就是说"infra 运行期反引 platforms"这一条边，平时只是没人走，Task 5 的
+    # `base.py` 里那段"只能 TYPE_CHECKING"的注释说的正是它，只是当时只锁了 base 那一头。
+    from intelligence_hub_v2.platforms.base import CookieVariant
 
 logger = get_logger(__name__)
 

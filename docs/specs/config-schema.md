@@ -176,19 +176,29 @@ class PlatformConfig(BaseModel):
 
 ### 3.1 `DouyinConfig`
 
+> **修订（2026-09-22，Task 6，`docs/adr/0011`）**：原设计里这里有一个
+> `ytdlp_cookie_priority: tuple[str, ...]`，把 cookie 阶梯的**顺序**写成了配置字段
+> （`("env:...FROM_BROWSER", "env:...FILE", "file:cookies_file", "none")`）。
+> 它与 `DouyinAdapter.capabilities.cookie_variants = ("exported_file", "browser", "none")`
+> 是同一条阶梯的**两个互相矛盾的顺序**（前者把浏览器档排在导出文件档之前），
+> 而 `PlatformAdapter.download_media` 的契约写的是"必须遵守 `capabilities` 的顺序"。
+> 同时删掉 `persist_play_url`：契约里没有任何字段能存放播放直链，
+> 一个只有 `false` 合法值的布尔不是配置，是没想清楚的化石。
+>
+> 现在的分工：**顺序只归 `Capabilities`**；配置与 V1 的 env 名只回答
+> "导出文件档用哪个路径 / 浏览器档用哪个浏览器"。
+
 ```python
 class DouyinConfig(PlatformConfig):
     media_strategy: Literal["yt_dlp_with_fallback"] = "yt_dlp_with_fallback"
     list_strategy: Literal["browser_scroll"] = "browser_scroll"
     use_cdp_bridge: bool = True
 
-    ytdlp_cookie_priority: tuple[str, ...] = (
-        "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER",
-        "env:DOUYIN_YTDLP_COOKIES_FILE",
-        "file:cookies_file",
-        "none",
-    )
-    """yt-dlp cookie 优先级阶梯（V1 §7.3）。"""
+    ytdlp_cookies_from_browser: str | None = None
+    """浏览器档的目标浏览器。默认 None = **没有浏览器档**（V1 §7.3：
+    Windows 上这一档永远读不出来，而它的报错正好会触发退档，
+    于是白扔一次子进程 + 把真原因混进 cookie 报错）。
+    B站 那边默认 "chrome"，两边不同是有意的。"""
 
     fallback_to_page_play_url: bool = True
     """yt-dlp 失败时是否兜底到页面播放直链（V1 §7.2，常态）。"""
@@ -303,11 +313,18 @@ async def update_platform_config(
 | `INTELLIGENCE_HUB_CDP_BRIDGE__URL` | `cdp_bridge.url` |
 | `SENSEVOICE_MODEL_DIR` | `asr.model_dir`（兼容 V1） |
 | `SHERPA_ONNX_MODEL_DIR` | `asr.model_dir`（兼容 V1） |
-| `DOUYIN_YTDLP_COOKIES_FILE` | `platforms.douyin.cookies_file`（兼容 V1） |
+| `DOUYIN_YTDLP_COOKIES_FILE` | `platforms.douyin.cookies_file`（兼容 V1）**目前由适配器读**，见下 |
+| `DOUYIN_YTDLP_COOKIES_FROM_BROWSER` | `platforms.douyin.ytdlp_cookies_from_browser`（兼容 V1）**目前由适配器读** |
 | `BILI_YTDLP_COOKIES_FILE` | `platforms.bilibili.cookies_file`（兼容 V1） |
 | `BILI_YTDLP_COOKIES_FROM_BROWSER` | `platforms.bilibili.ytdlp_cookies_from_browser`（兼容 V1） |
 
 V1 的环境变量名保留兼容，但 V2 内部统一走 `INTELLIGENCE_HUB_*`。
+
+> **实施现状（Task 6，`docs/adr/0011`）**：`_build_platform_config()` 只吃 YAML，
+> 平台配置这一层**还没有接 env source**（上面三行 `DOUYIN_*` / `BILI_*` 的映射目前是纸面的）。
+> 抖音的兼容行为此落地在 `platforms/douyin/media.py:resolve_cookie_ladder()` 里读 `os.environ`。
+> **收口项**：等平台配置层接上 env source，把那句 `os.environ.get` 删掉改读配置 ——
+> 否则同一件事有两处真相。跟进记账见 `docs/lessons.md`「V2 新增」。
 
 ---
 

@@ -43,6 +43,12 @@ class DouyinConfig(PlatformConfig):
        所以"yt-dlp 未拿到媒体，已改用页面播放直链"是**常态而不是故障**。
     2. `list_strategy = 'browser_scroll'` + `use_cdp_bridge = True` ——
        列表枚举只能在已登录浏览器的页面上下文里做。
+    3. `ytdlp_cookies_from_browser = None`（B站 那边是 `"chrome"`）—— 同一个 cookie 库
+       在 Windows 上对抖音是"读不出来"，对 B站 是"读得出来但没必要"，两边默认值不同是有意的。
+
+    **这里没有任何字段决定 cookie 阶梯的顺序**：顺序是 `DouyinAdapter.capabilities`
+    的声明（`("exported_file", "browser", "none")`），本模型只回答"这一档用哪个文件、
+    哪个浏览器"。理由与 V1 的 env 名怎么兼容见 `docs/adr/0011`。
     """
 
     model_config = ConfigDict(extra="forbid", json_schema_extra={"ui:order": ["enabled"]})
@@ -53,22 +59,19 @@ class DouyinConfig(PlatformConfig):
     list_strategy: Literal["browser_scroll"] = "browser_scroll"
     use_cdp_bridge: bool = True
 
-    ytdlp_cookie_priority: tuple[str, ...] = (
-        "env:DOUYIN_YTDLP_COOKIES_FROM_BROWSER",
-        "env:DOUYIN_YTDLP_COOKIES_FILE",
-        "file:cookies_file",
-        "none",
-    )
-    """yt-dlp cookie 优先级阶梯（V1 §7.3）。
+    ytdlp_cookies_from_browser: str | None = None
+    """`--cookies-from-browser` 的目标浏览器。**默认 None = 没有浏览器档**。
 
-    每一项的语义：
-    - `env:<NAME>`: 读环境变量 `<NAME>`，值直接当 yt-dlp 参数
-      （`DOUYIN_YTDLP_COOKIES_FROM_BROWSER` → `--cookies-from-browser`，
-      `DOUYIN_YTDLP_COOKIES_FILE` → `--cookies`）
-    - `file:cookies_file`: 用本配置的 `cookies_file` 字段，文件存在才传
-    - `none`: 什么都不传
+    为什么默认关（V1 §7.3，`docs/adr/0011`）：Windows 上这一档**永远**读不出来 ——
+    Chrome 开着回 `Could not copy Chrome cookie database`，关着回
+    `Failed to decrypt with DPAPI`。而这两句都在"触发退档"的判据表里
+    （`infra.ytdlp.looks_like_cookie_failure`），所以开着它不是"白试一档"，
+    是"每条视频先白扔一个子进程，再把真原因混进 cookie 报错里"。
+    需要的人显式填 `"chrome"`，或者设 `DOUYIN_YTDLP_COOKIES_FROM_BROWSER`（兼容 V1，
+    env 优先于本字段，因为设 env 的人明确知道自己在做什么）。
 
-    顺序即优先级，**从左到右第一个可用的胜出**。
+    **它只决定"浏览器档用哪个浏览器"，不决定阶梯顺序** —— 顺序的唯一真源是
+    `DouyinAdapter.capabilities.cookie_variants`（ADR-0011）。
     """
 
     fallback_to_page_play_url: bool = True
@@ -77,13 +80,6 @@ class DouyinConfig(PlatformConfig):
     兜底时必须保留 yt-dlp 的失败原文（`MediaArtifact.yt_dlp_error`）——
     V1 早期一兜底成功就把原文丢掉，日志只剩"未拿到媒体"，
     等于没法判断该修什么。
-    """
-
-    persist_play_url: bool = False
-    """是否把播放直链写进库。**默认 False，且不该改成 True。**
-
-    CDN 播放直链是签名的、不带 cookie，几小时后失效（V1 §7.2）。
-    把 URL 当持久数据 = 库里躺一堆死链。
     """
 
     advanced: DouyinAdvanced = Field(default_factory=DouyinAdvanced)

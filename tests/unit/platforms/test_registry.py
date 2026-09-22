@@ -4,9 +4,10 @@
 `PLATFORM_CONFIG_SCHEMAS`、`PLATFORMS`）。V1 §7.10 那句"顺手猜的路由不存在"
 是同一类问题：症状出现在用户点击的那一刻，而原因在三个互不相干的字典里。
 
-注册表本身不 import 适配器实现（V2.0 到 Task 6/7 才有），
+注册表自己不 import 适配器实现（是 `platforms/__init__.py` 在末尾把两边接上的），
 所以这里的假适配器**必须满足 Protocol** —— 那既是注册表的测试，
 也是"这个 Protocol 真的可以照着实现"的证明。
+真适配器（抖音，Task 6）的契约测试在 `tests/contracts/test_douyin_adapter.py`。
 """
 
 from __future__ import annotations
@@ -287,16 +288,19 @@ def test_a_fully_wired_platform_reports_nothing() -> None:
 
 
 def test_the_shipped_platform_schemas_have_no_adapters_yet_by_design() -> None:
-    """**这条是快照，不是断言"应该这样"**：Task 6/7 会把它改红，那时正确的动作是
-    把 `PLATFORMS` 补上（说明忘了），而不是把这条删掉。
+    """**这条是快照，不是断言"应该这样"**：Task 7 会把它改红，那时正确的动作是
+    把 B站 适配器补上（说明忘了），而不是把这条删掉。
 
-    V2.0 的进度到这里，配置 schema 已经有抖音/B站，适配器还没有。
+    Task 6 之前这里写的是 `{"douyin", "bilibili"}`；抖音适配器落地并把 `@register`
+    接上之后，差集只剩 B站 —— 那次变红正是这条用例设计出来要触发的动作
+    （见 `docs/progress/2026-09-22.md` Task 6）。
     """
     missing = set(PLATFORM_CONFIG_SCHEMAS) - set(PLATFORMS)
-    assert missing == {"douyin", "bilibili"}, (
+    assert missing == {"bilibili"}, (
         f"配置 schema 与适配器的差集变了：{missing}。"
-        "Task 6/7 之后应当只剩空集（或明确注释掉的平台）。"
+        "Task 7 之后应当只剩空集（或明确注释掉的平台）。"
     )
+    assert PLATFORMS["douyin"].__module__.endswith("douyin.adapter")
 
 
 def test_registering_a_platform_without_a_config_schema_fails_at_import_time(
@@ -334,7 +338,9 @@ def test_registering_twice_is_refused_rather_than_silently_overwritten(
     class _Second(_Adapter):
         name = "douyin"
 
-    assert "douyin" not in PLATFORMS  # 本文件不装真适配器
+    # Task 6 之后真适配器已经在导入时装上了，所以先把这一格清空再演"重复登记"。
+    # `clean_registry` 负责跑完恢复原样 —— 少了那一步，这条会污染上面那条快照。
+    PLATFORMS.pop("douyin", None)
     register("douyin")(_Adapter)
     with pytest.raises(PlatformError, match="已被") as caught:
         register("douyin")(_Second)

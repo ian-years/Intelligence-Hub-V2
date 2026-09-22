@@ -38,9 +38,9 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 
 | V1 陷阱 | V2 测试 | 层 | 文件 |
 |---|---|---|---|
-| §7.1 抖音的身份是 `sec_uid`，不是 URL 里的东西；短链不含身份必须跟一次 302 | `test_douyin_short_url_follows_302_to_sec_uid` | L2 | `tests/contracts/test_douyin_adapter.py` |
-| §7.2 抖音对非浏览器客户端做风控，yt-dlp 必失败 → 页面播放直链兜底是常态；`yt_dlp_error` 原文必须保留 | `test_douyin_media_artifact_includes_source_and_yt_dlp_error` | L2 | `tests/contracts/test_douyin_adapter.py` |
-| §7.3 Windows 上 yt-dlp 读不了 Chrome 的 cookie 库；唯一稳定路径是 `--cookies <文件>` | `test_cookie_variant_ladder_order`（参数化覆盖四平台） | L2 | `tests/contracts/test_cookie_ladder.py` |
+| §7.1 抖音的身份是 `sec_uid`，不是 URL 里的东西；短链不含身份必须跟一次 302 | `test_share_link_follows_302_to_sec_uid`＋`test_sec_uid_recognised_from_each_shape`（5 形）＋`test_the_path_wins_over_a_conflicting_query_sec_uid`＋`test_url_encoded_in_the_sec_uid_slot_is_refused`＋`test_unrecognisable_input_raises_parse_url_with_the_original_text`（含 V2 新补的域名闸门，坑 20） | L2 | `tests/contracts/test_douyin_adapter.py` |
+| §7.2 抖音对非浏览器客户端做风控，yt-dlp 必失败 → 页面播放直链兜底是常态；`yt_dlp_error` 原文必须保留 | `test_fallback_marks_the_source_and_keeps_the_yt_dlp_original_text`＋`test_signed_play_url_never_reaches_the_artifact`＋`test_both_rounds_failures_are_reported_together`＋`test_missing_yt_dlp_binary_still_falls_back_and_says_so` | L2 | `tests/contracts/test_douyin_adapter.py` |
+| §7.3 Windows 上 yt-dlp 读不了 Chrome 的 cookie 库；唯一稳定路径是 `--cookies <文件>` | `TestCookieLadder`：`test_order_comes_from_capabilities_and_starts_with_the_exported_file`／`test_header_only_cookie_file_is_not_offered_as_a_login_rung`／`test_browser_rung_absent_unless_somewhere_names_a_browser`／`test_the_ladder_actually_reaches_yt_dlp_argv`。顺序的**唯一真源**是 `capabilities`，见 `docs/adr/0011`（经验 17） | L2 | `tests/contracts/test_douyin_adapter.py`（B站 那份在 `tests/contracts/test_bilibili_adapter.py`，Task 7） |
 | §7.5 转写落盘目录按平台不对称 | `test_transcript_path_unified_across_platforms` | L2 | `tests/contracts/test_transcript_path.py` |
 | §7.8 `safe_filename()` 不止换 `/`，还要处理 `..`、结尾点/空格、Windows 设备名 | `test_safe_filename_property_based`（hypothesis） | L0 | `tests/unit/test_safe_filename.py` |
 | §7.9 SenseVoice 不产标点，按静音切句补 `。`，否则 `split_sentences` 全废 | `test_asr_engine_punctuation_injection` | L2 | `tests/unit/asr/test_sherpa.py` |
@@ -85,10 +85,11 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 `test_videos_repo.py` 与 `test_creators_repo.py` 里**各有一条**（两行表格指的是两条），
 `-k` 或按 node id 单跑时要带文件名，别以为只有一条。
 
-**仍未落地**（按计划属于后续任务）：§7.1 / §7.2 / §7.3 / §7.9 / §7.13 / §7.14 / §7.15 /
-§7.16 / §7.19 / §7.21 / §7.22 的 L2-L4 部分（ adapters、桥、ASR、前端默认值、集成任务流）、
-§7.24 的 L4 前端部分、§2 契约二的 `manifest_writer` 那一半（Task 4）、
-以及下面 §4 的抽象基类整套（Task 14）。
+**仍未落地**（按计划属于后续任务）：§7.9 / §7.13 / §7.14 / §7.15 /
+§7.16 / §7.19 / §7.21 / §7.22 的 L2-L4 部分（B站 适配器、桥、ASR、前端默认值、集成任务流）、
+§7.24 的 L4 前端部分、以及下面 §4 的抽象基类整套（Task 14）。
+**已落地**：§7.1 / §7.2 / §7.3（Task 6 抖音 Adapter，`tests/contracts/test_douyin_adapter.py`）
+与 §7.20 的桥语义那一半（Task 5 `infra/cdp_bridge.py` + Task 6 `TestHealthcheck`）。
 
 ---
 

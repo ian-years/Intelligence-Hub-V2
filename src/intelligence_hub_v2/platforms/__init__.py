@@ -70,6 +70,7 @@ __all__ = [
     "BilibiliConfig",
     "Capabilities",
     "CookieVariant",
+    "DouyinAdapter",
     "DouyinAdvanced",
     "DouyinConfig",
     "ListStrategy",
@@ -81,3 +82,21 @@ __all__ = [
     "platform_defaults",
     "supported_platforms",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# 适配器实现（**必须放在 PLATFORM_CONFIG_SCHEMAS 之后**）
+# --------------------------------------------------------------------------- #
+#
+# `@register(name)` 在**导入期**就要查 `PLATFORM_CONFIG_SCHEMAS`（名字不在配置表里
+# 就直接抛，这是 registry.py 的设计）。而 `registry.py` 自己又要 import 本包拿那张表 ——
+# 于是这一句只能放在表定义之后：放前面会拿到"包还没执行完"的半成品，
+# 症状是一句看不出所以然的 ImportError。这不是风格问题，是这条依赖边的形状：
+# 配置 schema 表（下层）不能知道适配器（上层），所以由本包在末尾把两边接起来。
+#
+# 放在这里而不是 `main.py` 的装配点，为的是让"这个构建实现了哪些平台"
+# **在导入期就固定**。注册表快照用例（`tests/unit/platforms/test_registry.py`）
+# 靠这一点才会在"加了适配器却忘了更新快照"时主动变红。
+#
+# bilibili 的适配器在 Task 7 补，届时这里加一行。
+from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter  # noqa: E402
