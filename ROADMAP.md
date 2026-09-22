@@ -34,6 +34,8 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   **SSE 端点仍欠**，在 Task 9，所以这一条整条不算勾。
 - [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
 - [ ] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
+  —— 前半条已完成（Task 5：Protocol / `AdapterDeps` / 显式注册表 / infra 五件包装）。
+  后半条"契约测试抽象基类"在 Task 14，**所以整条不勾**（判据是整条都真机验过）。
 - [ ] **抖音 Adapter**：移植 V1 `download_douyin_latest.py`，含 `parse_creator_url`（短链 302 → sec_uid，§7.1）、媒体下载（yt-dlp → 页面播放直链兜底，§7.2）、cookie 优先级阶梯
 - [ ] **B站 Adapter**：移植 V1 `download_bili_following_latest.py`，含 cookie 三档（§7.15）、DASH 未合并分片处理（§7.21）、字幕优先
 - [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
@@ -82,7 +84,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-4 ✅ / Task 5-16 待做
+- **V2.0 实施**：进行中 —— Task 1-5 ✅ / Task 6-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -93,7 +95,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 2 | 配置层 `AppConfig` / `PlatformConfig` 家族 / `ConfigManager` | ✅ | 见 git log | 96 passed（累计），覆盖率 96.02% |
 | 3 | DB schema + Alembic + Repository + Storage | ✅ | 见 git log | 650 passed（累计），覆盖率 95.07%，ruff + mypy 双绿 |
 | 4 | EventBus + `manifest_writer` 上下文管理器 | ✅ | 见 git log | 701 passed（累计），覆盖率 95.39%，四关全绿 |
-| 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ⬜ | — | — |
+| 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ✅ | 见 git log | 820 passed（累计），覆盖率 94.04%，四关全绿 |
 | 6 | DouyinAdapter（可与 Task 7 并行） | ⬜ | — | — |
 | 7 | BilibiliAdapter | ⬜ | — | — |
 | 8 | TaskRunner + TaskRegistry + 6 个 handler | ⬜ | — | — |

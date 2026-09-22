@@ -168,8 +168,23 @@ ignore = [
     "EM",        # 测试里现编的异常消息不需要先赋值给变量
     "TRY",       # tryceratops 那套在测试里没有意义
     "ARG",       # 未使用的 fixture 参数 / lambda 形参
+    "ASYNC240",  # 测试里在 async 用例上做 pathlib 阻塞调用是常态（造 fixture 文件），
+                 # 换成 to_thread 只会让测试更难读，且没有任何并发要保护。
 ]
 "tools/**" = ["ANN", "PLR0913"]
+# infra：这一层是"外部世界的边界"，三条规则在这里都是误报。
+"src/intelligence_hub_v2/infra/**" = [
+    "ASYNC109",  # 这里的 `timeout=` 是**外部命令的预算**（yt-dlp 一条视频给 900 秒），
+                 # 不是 asyncio 调用的超时参数 —— 规则想防的"给 async 函数配 timeout
+                 # 而不用 asyncio.wait_for"正好是我们必须做的形状。
+    "ASYNC240",  # 事件循环里不许 pathlib 阻塞调用：infra 的 `.is_file()` / `.stat()`
+                 # 是"要不要发起子进程"的前置判断，几微秒；换成 to_thread 比原操作更慢，
+                 # 还会让"文件在不在"这条线索跨线程漂移。
+    "EM101",     # 不许在异常构造里写字面量：本仓库的 PlatformError(platform, stage, message)
+                 # 前两位**就是**元数据字面量，EM101 分不出它与消息字面量。
+                 # 消息仍然一律先赋给 `msg`（这条纪律照旧，见各文件的 raise 上方）。
+]
+"src/intelligence_hub_v2/platforms/**" = ["EM101"]
 "alembic/**" = ["ANN", "E501"]
 
 [tool.ruff.lint.isort]

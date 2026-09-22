@@ -34,11 +34,22 @@
   `EventRepository.list_for_task()` 新增 `since=`、`models/manifest.py` 新增 `ManifestStatus`
   与 `ManifestBuilder.started_at` / `.status`
 
+- **Task 5** · 平台契约与外部世界边界：`platforms/base.py` 补全
+  （`PlatformAdapter` Protocol + `AdapterDeps` + `HealthReport` + 数据类型 re-export）、
+  `platforms/registry.py`（`PLATFORMS` 显式注册表 + `register()` 导入期自洽检查 +
+  `PlatformRegistry.inconsistencies()`）、`models/media.py`
+  （`SingleFileArtifact` / `VideoAudioPairArtifact` / `audio_path_of()`）、
+  `infra/` 五件包装（`subprocess` / `cdp_bridge` / `cookies` / `ytdlp` / `ffmpeg`）
+
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），
   全仓累计 650 passed、覆盖率 95.07%、`ruff` / `mypy --strict` 全绿
 - 事件与清单测试 **51 条**（`test_event_bus.py` 28 + `test_manifest.py` 21），
   全仓累计 **701 passed**、覆盖率 **95.39%**、四关（format / check / mypy / 覆盖率门禁）全绿
+- 平台契约与 infra 测试 **119 条**（`tests/unit/infra/` 4 个文件 + `tests/unit/platforms/`），
+  全仓累计 **820 passed**、覆盖率 **94.04%**、四关全绿。
+  全部不碰网络与真二进制：yt-dlp / ffmpeg / 桥 一律 mock，
+  真机那一档留给 `@pytest.mark.real_network`（Task 6/7）
 - `storage` fixture 参数化跑两档后端（`memory` = `create_all` / `file` = 真 Alembic），
   外加三条漂移看护：`check_schema_matches_migrations()`、`alembic upgrade/downgrade/upgrade` 往返、
   以及一条**验证漂移看护本身能发现漂移**的用例
@@ -87,6 +98,16 @@
 - `manifest_writer` 的终态规则：spec §2.6 草图 `else: builder.succeed()` 会把 handler
   设的 `partial` 改成 `success`（绿灯 + `failures[]` 里躺着失败记录）。
   实际规则是"没人设过才补、异常压过 success、handler 的其它终态不动"
+- `_path_from_line()` 认不出"已经下载过了"：匹配串按记忆写成 `has already downloaded: `
+  （尾巴多个冒号），yt-dlp 从不这么写。症状是**库里有作品行、媒体列表为空**（坑 15）
+- cookie 退档判据只认"cookie 读不出来"，风控的 412/352 被当死链直接判负 ——
+  V1 §7.15 实测无 cookie 时 B站 枚举就是随机回这两个码，带导出 cookie 就过。
+  拆成 `looks_like_cookie_failure`（文案/预检）与 `should_escalate_cookie_rung`（处置）（坑 16）
+- `BridgeClient("https://")`（空主机）被接受，症状是所有请求"连不上"而不是配置少打了个 IP
+- `CookieFreshness.looks_empty` 被一次批量编辑写坏成"文件存在即空壳"——
+  返回类型仍是 bool、`mypy` 与 `ruff` 都不报，只有用例抓得到（经验 16）
+- `run_subprocess` 的超时路径会丢掉已读到的 stderr 尾部：加 `_Lines` 累加器，
+  边读边落一份，超时异常里带出"为什么这么慢"的唯一线索
 
 ## [0.1.0] — V2.0「骨架可用」（计划中）
 

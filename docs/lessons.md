@@ -413,10 +413,10 @@ V2 这边是明确要并行（`all_platforms` + 平台级 Semaphore），所以�
 **现象**：照 `docs/specs/task-runner.md §2.6` 的 `manifest_writer` 草图抄，
 handler 里 `builder.partial({"downloaded": 1, "failed": 1})` 之后正常退出，
 清单落到盘上会变成 `status: "success"`，`failures[]` 里那条失败记录还在，
-但**没人会去看**——因为状态灯是绿的。
+但**没人会去看** —— 因为状态灯是绿的。
 
 **根因**：草图把"退出方式"当成"状态的唯一来源"。实际有两个说话的人：
-handler 知道"跑完了但有 item 失败"，wrapper 只知道"这里没抛异常"。
+handler 知道"跑完了但有些 item 失败"，wrapper 只知道"这里没抛异常"。
 `else:` 分支无条件覆盖，等于让信息少的一方否决信息多的一方。
 
 **解法**：一条判据（`core/manifest.py::_may_settle`），三个方向：
@@ -424,7 +424,7 @@ handler 知道"跑完了但有 item 失败"，wrapper 只知道"这里没抛异�
 - handler 设了 `success` 但随后抛出异常 → **异常赢**（否则就是 §1.3 的"看起来在跑"）；
 - handler 设了 `partial` / `failed` / `cancelled` / `timeout` → 不动。
 
-**判据**：两条方向相反的用例必须在 —— `test_handler_set_partial_survives` 与
+**判据**：两条方向相反的用例必须同时在 —— `test_handler_set_partial_survives` 与
 `test_success_then_raise_never_reports_success`。只留前一条会被改回草图那样还全绿，
 只留后一条会被改成"异常永远覆盖一切"也全绿。
 
@@ -434,6 +434,46 @@ handler 知道"跑完了但有 item 失败"，wrapper 只知道"这里没抛异�
 **可迁移的结论**：**设计文档里的代码片段是意图，不是成品**（经验 7 已经说过一次，
 这次是它的新形态）：草图短、看着无害、抄过去就绿。凡是草图里有
 `else: 设成某个具体值` 这种"无条件赋值"，先问"还有谁能比我更早地说这句话"。
+
+#### 坑 15 · yt-dlp 的"已经下载过了"句式配了个不存在的冒号（Task 5）
+
+**现象**：`_artifacts_from()` 认不出"这条媒体其实早就下好了"，测试断言
+"三行输出认出三个文件"当场红成两个。
+
+**根因**：我照记忆写的匹配串是 `"has already downloaded: "`（尾巴带冒号）。
+yt-dlp 的真实句式是 `[download] media.mp4 has already been downloaded` —— 冒号在**前面**
+（`[download] ` 之后），而且从不在结尾。
+症状很值得记：**库里有作品行、媒体列表为空**，而排查的人会先去怀疑磁盘或权限。
+
+**解法**：改成"前缀 + 结尾短语"两段式解析，两种措辞（`has already been downloaded` /
+`has already downloaded`）都收；文件后缀仍是白名单，防止把 `[info]` 行认成产物。
+
+**判据**：`test_artifacts_are_taken_from_yt_dlp_reported_paths_only`。
+
+**看护**：`tests/unit/infra/test_ytdlp.py`。
+
+**为什么不用 glob 扫目录**（同一处实现的决定）：V1 §7.21 扫 `*.mp4` 会把自己产出的
+`postprocess/audio/part-001.m4a` 也认成源媒体，一条作品转两遍。
+
+#### 坑 16 · 退档判据只认"cookie 读不出来"，风控的 412/352 被当成死链（Task 5）
+
+**现象**：写阶梯测试时期望"412 会退到下一档"，实际只跑了一档就返回失败。
+
+**根因**：`looks_like_cookie_failure()` 那张表（V1 §7.15 抄来的）只收了
+**cookie 读取**类原文（`Could not copy Chrome cookie database` / `Failed to decrypt with DPAPI`）。
+而 V1 实测的另一半是：**无 cookie 时 B站 枚举随机回 352/412**，带导出 cookie 就过 ——
+那是"没带 cookie"的形状，不是"cookie 读不出来"。两类的处置动作相同（换一档再试），
+**原因与人要做的动作完全不同**（一个去修 DPAPI，一个去带 cookie）。
+
+**解法**：拆成两个函数。`looks_like_cookie_failure` 管文案与预检（该说什么话），
+`should_escalate_cookie_rung` 管处置（要不要再试一档）= 读取失败 ∪ 风控原文。
+合成一个的代价是"风控 412"被报成"cookie 读不出来"，于是人去找解密问题。
+
+**判据**：`test_the_escalation_boundary` 参数化五例（412 / 352 / Fresh cookies /
+Could not copy 会退档；Unsupported URL 不退）。
+
+**看护**：`tests/unit/infra/test_ytdlp.py`。
+
 
 ---
 
@@ -753,6 +793,34 @@ schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；�
 
 **纪律**：改完之后**不要用测试用时当门禁**（V1 §7.23 原文）。
 门禁是用例数与红绿；用时只用来定位"哪一处明显是我加的"。
+#### 经验 16 · 批量脚本改完**立刻**重跑门禁，别攒到提交前
+
+**现象**：`cookies.py` 里一处批量编辑把模块常量 `EMPTY_COOKIE_FILE_BYTES` 的定义丢了，
+引用还在。我先跑了 `ruff format` 就去做别的事，最后是一条测试跑出
+`NameError: name 'EMPTY_COOKIE_FILE_BYTES' is not defined` 才发现。
+
+**根因不是工具瞎**（这次专门验了）：单独造一个"函数里引用了不存在的模块常量"的最小文件，
+`ruff check` 回 `F821 Undefined name`，`mypy` 回 `Name "..." is not defined` —— **两个都抓得到**。
+抓不到是因为我那一轮**根本没跑门禁**：批量改完只跑了 format。
+
+**同一批里另一个工具真抓不到的**：`looks_empty` 被改坏成
+`return self.exists and self.size_bytes is not None` —— 仍然是合法的 bool，
+类型与 lint 全过，语义却从"空文件"变成"文件存在"。
+所以两条教训要分开记：
+① 门禁能抓的，别因为没跑而漏；② 门禁抓不到的（语义/方向错），只有**具体的用例**能抓，
+所以那种地方要写"这条在盯什么"的注释（现在 `cookies.py` 里就有）。
+
+**同一天第二次同类事故（就是写这条经验时发生的）**：用"按索引切片拼接"的脚本往
+`lessons.md` 里插新章节，`s[:i] + new + s[j:]` 的 `i` 指到了**上一节**（坑 14）的标题，
+于是把坑 14 整节替换掉了。`git diff` 才 3 行、`ruff`/`mypy` 完全不涉及 `.md`，
+所以没有任何工具会红 —— 只有"数一下章节标题"会发现。
+**结论**：批量改文档要么用带唯一上下文的精确替换（`Edit` 那一类），
+要么改完立刻 `grep -c '^#### '` 对一遍数量。
+
+**判据**：改完就跑 `ruff check` + `mypy`，再跑受影响的测试目录 —— 顺序不能倒过来。
+
+**看护**：`test_freshness_does_not_call_a_real_file_empty`。
+
 
 ---
 
