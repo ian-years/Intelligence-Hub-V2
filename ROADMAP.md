@@ -73,6 +73,12 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 - [ ] **DevEx**：Makefile + pre-commit + GitHub Actions CI（lint / test-backend / test-frontend / build / e2e 手动触发）+ `make ci-local` 一键本地跑全套
 - [ ] **文档**：10 份 ADR + 7 份 spec + AGENTS.md + README + CONTRIBUTING + architecture.md + lessons.md 全部落盘并 commit
 - [ ] **迁移脚本**：`tools/migrate_from_v1.py` dry-run + 真机跑通一次（creators / videos / transcripts / hidden-videos 墓碑内化），媒体 hardlink 回退 copy
+  —— 代码 + 离线用例完成（Task 15）。V1 以 `mode=ro` URI 打开（写它当场抛，不靠约定）；
+  幂等（`(platform, platform_id/platform_video_id)` 命中跳过）+ `.migration_state.json` 续跑；
+  墓碑从 `hidden-videos.json` 内化成 `videos.is_hidden`；V1 内联的 `clean_transcript` 落成 V2
+  `transcripts` 表 + 磁盘 `speech-clean.txt`；媒体 hardlink、跨卷退 copy。**整条不勾**：
+  这台机器没有真实 V1 `data/`（gitignore），dry-run 与真迁移是对**造出的 V1 schema** 跑的；
+  对真 V1 库那一次要你有数据时执行（命令已写进脚本 docstring）。
 
 **为什么先做抖音 + B站**：V1 §6 表里这两个平台真机已实测全通；抖音的 `a_bogus` 兜底与 B站的 cookie 三档 + DASH 分片是 V1 最难的两条经验，先用 V2 接口表达清楚，剩下两个平台照葫芦画瓢。
 
@@ -110,7 +116,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-9、14 ✅ / Task 10-13、15、16 待做
+- **V2.0 实施**：进行中 —— Task 1-9、14、15 ✅ / Task 10-13、16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -131,14 +137,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 12 | 页面 Dashboard / Feed / Settings / Preflight | ⬜ | — | — |
 | 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ⬜ | — | — |
 | 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ✅ | 见 git log | 1239 passed（累计，净增 31），覆盖率 93.89%，四关全绿；`PlatformAdapterContractTests` 基类 + 抖音/B站 两实例子类 + §7→用例名索引漂移看护 |
-| 15 | `tools/migrate_v1.py` | ⬜ | — | — |
+| 15 | `tools/migrate_v1.py` | ✅ | 见 git log | 1243 passed（累计，净增 4），覆盖率 93.89%，四关全绿；对**造出的 V1 schema** 验 dry-run/幂等/墓碑/媒体 hardlink/只读 |
 | 16 | CI 验证 + 端到端 smoke + 收尾文档 | ⬜ | — | — |
 
 **门禁现状**（每次提交前都要全绿）：
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1239 passed，覆盖率 93.89%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1243 passed，覆盖率 93.89%（门禁 80%）
 .venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
 .venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
 .venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 77 source files

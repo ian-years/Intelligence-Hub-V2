@@ -171,7 +171,10 @@ ignore = [
     "ASYNC240",  # 测试里在 async 用例上做 pathlib 阻塞调用是常态（造 fixture 文件），
                  # 换成 to_thread 只会让测试更难读，且没有任何并发要保护。
 ]
-"tools/**" = ["ANN", "PLR0913"]
+"tools/**" = ["ANN", "PLR0913", "E402", "PLR0917", "PLR0915"]
+# tools：一次性脚本。`migrate_from_v1.py` 在 import intelligence_hub_v2 之前要先
+# `sys.path.insert(仓库根)`（E402 是这条路必需的形状，不是忘了放顶部）；
+# CLI/内部 helper 把参数摊成多个位置形参是脚本形状（PLR0917），不值得为它加 dataclass。
 # infra：这一层是"外部世界的边界"，三条规则在这里都是误报。
 "src/intelligence_hub_v2/infra/**" = [
     "ASYNC109",  # 这里的 `timeout=` 是**外部命令的预算**（yt-dlp 一条视频给 900 秒），
