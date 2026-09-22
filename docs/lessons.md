@@ -1132,6 +1132,42 @@ V1 走的本来就是第二条路（`store.video_exists(...)` 查重），所以
 `test_success_writes_terminal_run_and_events`（断言的就是这个事件顺序）。
 
 
+### 实施阶段（V2.0）· Task 9（API 层）
+
+#### 坑 25 · `PUT /config` 改完开关，关掉的平台照样能被采（Task 9）
+
+**现象**：`available_task_names` 读 `ConfigManager`（活的），`/api/tasks` 立刻反映"抖音关了"；
+但 `TaskScheduler._gate` 读的是它自己 `__init__` 时 `dict(configs)` 的快照，`registry.enabled_platforms()`
+同理 —— 于是 `POST /tasks/douyin_collect/run` 照样放行，一个"在界面上关掉"的平台还能被采。
+`reload_platform()` 只换 manager 内存里那份，**没有回流到这三个握快照的组件**。
+
+**根因**：配置有三个运行期消费者（注册表 / 依赖袋 / 调度器），各自在装配时 snapshot 了一份，
+`ConfigManager` 改的是自己那份。这是"两处真相"的又一种形态：**写入口只有一个（manager），
+读入口却有四个**，改了写口没人通知读口。没有工具会红 —— 类型对、`/api/tasks` 也对，
+只有"关掉还能采"这个行为错，而它藏在门控代码里。
+
+**解法**：`AppState.apply_platform_config(name, cfg)` 是唯一"把新配置推到三处 + invalidate 实例"的入口。
+lifespan 注册它为 `reload_platform` 的订阅者；`PUT` 路由 reload 后也显式调一次（测试不跑 lifespan 时对确定）。
+
+**判据**：任何"改了权威源、但下游有缓存快照"的地方，都要有一个**单一**的"推送到所有快照"入口，
+不能靠每个写路径各 remember 一部分。写用例时要**同时断言权威源和缓存快照都变了** ——
+`test_put_config_persists_and_gates` 既看 `/api/tasks` 消失，也看 `scheduler._configs["douyin"].enabled`
+变 False；只断前者就会把这条 bug 放回代码里而全绿。
+
+#### 经验 21 · 绕开这版 starlette 的 `TestClient`（它要 `httpx2` 且 import 即弃用告警）
+
+**现象**：想跑真 ASGI lifespan 做端到端，`from fastapi.testclient import TestClient` 当场
+`ModuleNotFoundError: httpx2` → 再 `StarletteDeprecationWarning`，在 `filterwarnings=["error"]` 下直接红。
+
+**处置**：API 测试不跑 lifespan —— fixture 里手动 `storage.initialize()` + 预置平台镜像行 +
+`httpx.ASGITransport` 打路由（lifespan 的活单独在 `test_app_lifespan` 用直接调
+`build_components` / `_sync_platform_mirror` 覆盖）。**且写配置的用例一律走 tmp 目录那份
+`platforms.yaml`**，绝不 `PUT` 到仓库 `config/`（那会真改文件）。
+
+**顺带**：SSE 生成器**先 subscribe 再 replay** —— 原写法 replay 在前，消费者在 replay 阶段
+`aclose()` 会让 `finally` 引用一个还没绑定的 `subscription`（`NameError`）。顺序调正后 `finally`
+一定拿得到句柄，还顺手补上"追历史期间刚好跑完"那条 live 事件。
+
 ---
 
 ## 附录 · 如何新增一条经验

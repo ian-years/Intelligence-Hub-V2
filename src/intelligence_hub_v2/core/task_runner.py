@@ -233,7 +233,7 @@ class TaskScheduler:
         storage: SqliteStorage,
     ) -> None:
         self._runner = runner
-        self._configs = configs
+        self._configs: dict[str, PlatformConfig] = dict(configs)
         self._app = app_config
         self._storage = storage
         per = app_config.scheduler.max_concurrent_per_platform
@@ -271,6 +271,14 @@ class TaskScheduler:
         await self._guarded(definition, task_id, validated, token, snapshot)
         self._tokens.pop(task_id, None)
         return await self._storage.task_runs.get_or_raise(task_id)
+
+    def update_config(self, name: str, config: PlatformConfig) -> None:
+        """热重载后换掉调度器手里的平台配置（`_gate_platforms` 读的就是这一份）。
+
+        调度器在 `submit` 时按 `self._configs[platform].enabled` 决定放不放行；不改这里，
+        关掉一个平台之后它照样能被点名采集 —— 与"开关全局生效"的契约相反。
+        """
+        self._configs[name] = config
 
     def cancel(self, task_id: str) -> bool:
         """请求取消。**协作式**：置位 `CancelToken`，handler 在下一个 await 点自己停。

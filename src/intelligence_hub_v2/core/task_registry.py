@@ -267,13 +267,17 @@ class DepsFactory:
         http: httpx.AsyncClient,
         logger: structlog.BoundLogger,
     ) -> None:
-        self._configs = configs
+        self._configs: dict[str, PlatformConfig] = dict(configs)
         self._app = app_config
         self._storage = storage
         self._events = events
         self._http = http
         self._logger = logger
         self._cookies = CookieManager(files)
+
+    def update_config(self, name: str, config: PlatformConfig) -> None:
+        """热重载后换掉某平台的配置。`PlatformRegistry` / `TaskScheduler` 各有一份同样的动作。"""
+        self._configs[name] = config
 
     def __call__(self, platform: str) -> AdapterDeps:
         cls = PLATFORMS.get(platform)

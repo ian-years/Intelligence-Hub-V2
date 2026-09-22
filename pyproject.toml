@@ -189,6 +189,15 @@ ignore = [
 # `TaskCancelled` 前两位同样是元数据字面量，与上面 infra 那条同一个判据。
 # 消息照旧一律先赋给 `msg`（EM101 豁免只放行 platform/stage 这类常量，不是让内联长文案）。
 "src/intelligence_hub_v2/tasks/**" = ["EM101"]
+# api：FastAPI 的三条官方写法会被这几条误判成坑，逐条豁免并留原因。
+"src/intelligence_hub_v2/api/**" = [
+    "B008",     # 在参数默认值里写 `Depends(...)` / `Query(...)` 是 FastAPI 的依赖注入惯用法，
+                # 不是 B001 想防的"默认值里做有副作用的函数调用"（每次调用都构造对象是框架契约）。
+    "PLR0917",  # 路由把 query/body 摊成多个带默认值的形参是 FastAPI 的形状，"参数太多"在这里没意义。
+]
+# main：uvicorn / apscheduler 故意延迟导入（各自一 import 就拉起一堆子模块/线程），
+# 这个代价不该压进模块加载期；`create_app` 在函数里 import apscheduler 是有意的。
+"src/intelligence_hub_v2/main.py" = ["PLC0415"]
 "alembic/**" = ["ANN", "E501"]
 
 [tool.ruff.lint.isort]

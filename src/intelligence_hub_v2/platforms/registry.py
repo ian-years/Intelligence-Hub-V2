@@ -174,6 +174,17 @@ class PlatformRegistry:
         else:
             self._instances.pop(name, None)
 
+    def update_config(self, name: str, config: PlatformConfig) -> None:
+        """热重载后把某平台的新配置换进来，并丢掉它的缓存实例。
+
+        注册表握的是一份 `configs` 快照（`AGENTS.md §2`：它是运行期读配置的入口）。
+        `ConfigManager.reload_platform()` 只更新 manager 自己那份内存，不会自动回流到这里 ——
+        所以"改完开关立刻生效"这一步必须显式做，否则 `enabled_platforms()` 还看着旧值，
+        刚被关掉的平台照样能被采集。与 `invalidate` 合在一起：换配置 + 换实例一个动作。
+        """
+        self._configs[name] = config
+        self._instances.pop(name, None)
+
     # ---- 自洽性 ----
 
     def inconsistencies(self) -> list[str]:

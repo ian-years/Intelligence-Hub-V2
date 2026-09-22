@@ -23,15 +23,19 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 **完成判据**（每条都要真机验过才算）：
 
-- [ ] **后端骨架**：FastAPI 起服务、`/api/health` 通、CORS、structlog JSON 日志、自定义异常层次、全局异常处理器
+- [x] **后端骨架**：FastAPI 起服务、`/api/health` 通、CORS、structlog JSON 日志、自定义异常层次、全局异常处理器
+  —— 2026-09-23 Task 9 完成。`create_app` + lifespan 装配全链、`/api/health`、CORS 按
+  `app.cors_origins` 条件挂载、`_register_exception_handlers` 把 `NotFoundError`→404 /
+  `ConflictError`→409 / `TaskRejected`→422 / `ValidationError`→422 统一映射（看护 `test_api_*`）。
 - [x] **数据层**：SQLAlchemy Core schema（platforms / creators / videos / transcripts / task_runs / task_events / manifests）+ Alembic 初始迁移 + Repository 层 + `update_fields()` 字段级更新（V1 §7.4 看护）
   —— 2026-09-22 Task 3 完成。真机判据：`alembic upgrade head` → `downgrade base` → `upgrade head`
   往返通过；`alembic check` 回 `No new upgrade operations detected.`；
   `check_schema_matches_migrations()` 差异 0 条；两档后端（`create_all` / 真迁移）跑同一批 486 条用例。
   看护清单见 `docs/specs/contract-tests.md §3.1`。
-- [ ] **EventBus**：asyncio.Queue 多播 + SQLite 持久化 + SSE 端点
-  —— 多播 + 持久化已完成（Task 4，`core/event_bus.py`，实现上有界队列 + 掉包记账）；
-  **SSE 端点仍欠**，在 Task 9，所以这一条整条不算勾。
+- [x] **EventBus**：asyncio.Queue 多播 + SQLite 持久化 + SSE 端点
+  —— 多播 + 持久化（Task 4，`core/event_bus.py`，有界队列 + 掉包记账）+ **SSE 端点**
+  （Task 9，`api/v1/events.py`：`/api/events` 全局流 + `/api/tasks/runs/{id}/events` 单任务流，
+  先 subscribe 再 replay，`sse-starlette` 出 `text/event-stream`）三条都齐 → 整条勾。
 - [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
 - [ ] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
   —— Protocol / 注册表 / infra 五件包装完成（Task 5）；抖音与 B站 两个实现也落地了（Task 6/7），
@@ -103,7 +107,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-8 ✅ / Task 9-16 待做
+- **V2.0 实施**：进行中 —— Task 1-9 ✅ / Task 10-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -118,7 +122,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 6 | DouyinAdapter（可与 Task 7 并行） | ✅ | 见 git log | 921 passed（累计，净增 101），覆盖率 94.43%，四关全绿；抖音模块 92-95% |
 | 7 | BilibiliAdapter | ✅ | 见 git log | 1090 passed（累计，净增 169），覆盖率 94.32%，四关全绿；B站 模块 90-100% |
 | 8 | TaskRunner + TaskRegistry + 6 个 handler | ✅ | 见 git log | 1172 passed（累计，净增 82），覆盖率 94.67%，四关全绿；`tasks/` 各模块 92-100%，`task_runner` 93% / `task_registry` 94% |
-| 9 | FastAPI app + 全部 API 路由 + SSE | ⬜ | — | — |
+| 9 | FastAPI app + 全部 API 路由 + SSE | ✅ | 见 git log | 1208 passed（累计，净增 36），覆盖率 93.89%，四关全绿；`api/` 各路由 82-100%，`main.py` 58%（lifespan 胶水 + cli 未全覆盖） |
 | 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ⬜ | — | — |
 | 11 | 前端 API 层 + SSE + stores + Router + Layout | ⬜ | — | — |
 | 12 | 页面 Dashboard / Feed / Settings / Preflight | ⬜ | — | — |
@@ -131,10 +135,10 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1172 passed，覆盖率 94.67%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1208 passed，覆盖率 93.89%（门禁 80%）
 .venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
 .venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
-.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 64 source files
+.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 77 source files
 ```
 
 全套 **约 109 秒**（带覆盖率）。Task 8 之前是 ~50 秒 —— 净增的 82 条用例里有一部分
