@@ -1,0 +1,242 @@
+"""`tasks/collect.py`：单平台采集。查重即增量（记账 ③）、档位进清单（记账 ④）。"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from tests.unit.tasks.conftest import (
+    FakeAdapter,
+    FakeBus,
+    FakeConfig,
+    FakeRegistry,
+    make_ctx,
+    make_video_meta,
+)
+
+from intelligence_hub_v2.errors import ListError, MediaDownloadError, TaskCancelled
+from intelligence_hub_v2.models.creator import CreatorDraft
+from intelligence_hub_v2.models.event import EventType
+from intelligence_hub_v2.models.media import SingleFileArtifact, VideoAudioPairArtifact
+from intelligence_hub_v2.tasks.collect import make_collect_handler
+from intelligence_hub_v2.tasks.params import CollectParams
+
+PLATFORM = "douyin"
+
+
+async def _seed_creator(storage, *, pid: str = "c1", name: str = "姜胡说") -> int:
+    creator = await storage.creators.insert(
+        CreatorDraft(
+            platform=PLATFORM,
+            platform_id=pid,
+            name=name,
+            profile_url=f"https://douyin.com/user/{pid}",
+            is_tracking=True,
+        )
+    )
+    return creator.id
+
+
+def _single_artifact(video, dest: Path) -> SingleFileArtifact:
+    path = dest / "media.mp4"
+    path.write_bytes(b"x" * 32)
+    return SingleFileArtifact(
+        path=path,
+        size_bytes=32,
+        media_source="page_play_url",
+        cookie_rung="匿名（登录档画质不可用）",
+        has_audio=True,
+    )
+
+
+async def test_downloads_new_videos_and_writes_relative_paths(storage, files) -> None:
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "v1"), make_video_meta(PLATFORM, "v2")],
+        artifact_factory=_single_artifact,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+    bus = FakeBus()
+    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=bus)
+
+    result = await make_collect_handler(PLATFORM)(ctx, CollectParams())
+
+    assert result.status == "success"
+    assert result.summary["downloaded"] == 2
+    assert await storage.videos.count() == 2
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    assert row is not None
+    # 记账：DB 存相对 `data/` 的 posix 路径，不是绝对 Windows 路径
+    assert not Path(row.media_path or "").is_absolute()
+    assert "\\" not in (row.media_path or "")
+    assert row.media_source == "page_play_url"
+    meta = json.loads(row.metadata_json)
+    assert meta["cookie_rung"] == "匿名（登录档画质不可用）"
+    assert len([e for e in bus.events if e.type is EventType.VIDEO_ADDED]) == 2
+
+
+async def test_second_run_skips_existing_ids_is_the_incremental_truth(storage, files) -> None:
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=_single_artifact
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+    handler = make_collect_handler(PLATFORM)
+
+    first = await handler(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+    second = await handler(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert first.summary["downloaded"] == 1
+    assert second.summary["downloaded"] == 0
+    assert second.summary["skipped_existing"] == 1
+    assert await storage.videos.count() == 1
+    # 已经存在的那条不该再调下载
+    assert adapter.download_calls == ["v1"]
+
+
+async def test_one_download_failure_makes_partial_and_keeps_original_text(storage, files) -> None:
+    await _seed_creator(storage)
+    seen: list[str] = []
+
+    def factory(video, dest: Path):
+        seen.append(video.platform_video_id)
+        if video.platform_video_id == "bad":
+            raise MediaDownloadError(PLATFORM, "media", "阶梯走完仍失败: 412 blocked")
+        return _single_artifact(video, dest)
+
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "ok"), make_video_meta(PLATFORM, "bad")],
+        artifact_factory=factory,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.status == "partial"
+    assert result.summary["downloaded"] == 1
+    assert result.summary["failed"] == 1
+    assert any("412 blocked" in f.error for f in result.failures)
+    assert await storage.videos.count() == 1
+
+
+async def test_list_failure_does_not_swallow_original_or_continue_silently(storage, files) -> None:
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, list_error=ListError(PLATFORM, "list", "Request is blocked by server (412)")
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.status == "failed"  # 一位都没收到 + 有失败
+    assert any("412" in f.error for f in result.failures)
+    assert result.summary["failed"] == 1
+
+
+async def test_no_tracked_creators_is_success_with_zero(storage, files) -> None:
+    adapter = FakeAdapter(PLATFORM, videos=[])
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.status == "success"
+    assert result.summary["creators"] == 0
+
+
+async def test_explicit_creator_ids_bypass_tracking_filter(storage, files) -> None:
+    cid = await _seed_creator(storage)
+    # 直接把它移出跟踪：显式点名仍然要能采到（V1 §7.22 按位任务不看开关）。
+    await storage.creators.set_tracking(cid, False)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=_single_artifact
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()),
+        CollectParams(creator_ids=[cid]),
+    )
+
+    assert result.summary["downloaded"] == 1
+
+
+async def test_dash_pair_stores_audio_track_as_aux_and_marks_no_merge(storage, files) -> None:
+    await _seed_creator(storage)
+
+    def factory(video, dest: Path):
+        (dest / "media.f137.mp4").write_bytes(b"v" * 40)
+        (dest / "media.f140.m4a").write_bytes(b"a" * 10)
+        return VideoAudioPairArtifact(
+            video_path=dest / "media.f137.mp4",
+            audio_path=dest / "media.f140.m4a",
+            video_size_bytes=40,
+            audio_size_bytes=10,
+            cookie_rung="带导出的登录 cookie",
+        )
+
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=factory
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    assert row is not None
+    assert row.media_source == "dash_split"
+    aux = json.loads(row.media_aux_paths_json)
+    assert len(aux) == 1 and aux[0].endswith(".m4a")
+    meta = json.loads(row.metadata_json)
+    assert meta["size_bytes"] == 50  # 两条轨之和（total_size_bytes）
+
+
+async def test_silent_video_is_recorded_as_no_audio_not_faked_as_transcribable(
+    storage, files
+) -> None:
+    await _seed_creator(storage)
+
+    def factory(video, dest: Path):
+        path = dest / "media.mp4"
+        path.write_bytes(b"v" * 8)
+        return SingleFileArtifact(path=path, size_bytes=8, media_source="yt_dlp", has_audio=False)
+
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=factory
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    assert row is not None
+    assert json.loads(row.metadata_json)["has_audio"] is False
+
+
+async def test_cancel_propagates_as_task_cancelled_not_failure(storage, files) -> None:
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=_single_artifact
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
+    ctx.cancel_token.cancel()
+
+    with pytest.raises(TaskCancelled):
+        await make_collect_handler(PLATFORM)(ctx, CollectParams())

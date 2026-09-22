@@ -132,6 +132,18 @@ class TaskContext:
     """任务启动时的平台配置快照（审计用，进清单）。"""
 ```
 
+> **实施期修订（2026-09-23，Task 8）**，两处，都是"照 §2.2/§2.3 抄会缺东西"：
+>
+> 1. **`TaskContext` 多一个 `files: FileStorage` 字段**。草图的字段表里没有它，
+>    但 `platform-adapter.md §2.4` 的 Task 6 修订定了"`MediaArtifact.path` 的
+>    相对 `data/` 归一化由 handler 做"（因为 `AdapterDeps` 里没有 `FileStorage`）。
+>    handler 拿不到 `files` 就归一化不了媒体路径，所以注入袋必须带上它。
+> 2. **`TaskDefinition` 多一个 `implemented: bool = True` 字段**。V2.0 登记 12 个任务、
+>    只实现 6 个。没有这个旗标，另外 6 个会出现在 `/api/tasks` 里"点了报 500" ——
+>    与注册表"实现了才登记"（`registry.py`）同一条判据。`available_task_names` 与
+>    `TaskScheduler` 的跑前门都过这一关；点名运行一个未实现任务红在 `NotImplementedError`，
+>    而不是"找不到任务"。
+
 ### 2.4 `TaskResult`
 
 ```python

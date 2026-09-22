@@ -1094,6 +1094,43 @@ V1 走的本来就是第二条路（`store.video_exists(...)` 查重），所以
 **看护**：`tests/fixtures/bilibili/*` 每个文件的 `_comment` 与
 `tests/contracts/test_bilibili_adapter.py::TestRealFixturesAreActuallyReal`。
 
+### 实施阶段（V2.0）· Task 8（任务调度）
+
+#### 坑 24 · 老坑 19（httpx 默认真传输 2.1 秒）在**测试替身**里又咬了一口（Task 8）
+
+**现象**：Task 8 的 handler 测试第一版跑完 **37 秒 / 29 条**，每条均匀 ~2 秒。
+不是逻辑慢，是 `make_deps()` 里 `httpx.AsyncClient()` 用了默认真传输 ——
+每建一个就去碰一次系统证书存储（坑 19 记的是适配器测试，这次是运行器/handler 测试）。
+
+**为什么又踩**：坑 19 的解法是"注入 MockTransport"，但那是记在**适配器**测试的上下文里的。
+写 `TaskContext` 的假 `AdapterDeps` 时我没往那想，因为 handler 测试"根本不发请求" ——
+可 httpx 的 2.1 秒发生在**构造期**，不在请求期。"这里不用网络"不等于"这里建客户端不要钱"。
+
+**解法**：假 deps 一律 `httpx.AsyncClient(transport=httpx.MockTransport(...))`。
+37 秒 → 4.7 秒，用例数不变。
+
+**判据**：任何测试里 `new` 一个 `httpx.AsyncClient` 而没有注入 transport 的，都是坑 19 的复发点。
+建客户端要钱这件事与"这段代码会不会发请求"无关。
+
+#### 经验 20 · 调度层把计划里的"两个文件 / 一个字段表"收成了"一个函数 / 两个契约旗标"（Task 8）
+
+三处"照计划抄会留下第二处真相"的地方，都当场改了并回写：
+
+1. **collect 一份实现，两平台复用**。计划列了 `douyin_collect.py` + `bilibili_collect.py` 两个文件。
+   两平台采集流程逐步骤相同、差异全在适配器里 —— 抄两份是四十行近似复制，
+   正是 V1「B站 与抖音各写一份 cookie 阶梯，漂过一次」的形状。收成 `make_collect_handler(platform)`。
+2. **`TaskContext` 补 `files`**。`platform-adapter.md §2.4` 说媒体路径归一化归 handler，
+   但 `§2.3` 的 `TaskContext` 字段表里没有 `FileStorage`，而 `AdapterDeps` 也没有。
+   不在这里补，handler 就只能自己再拼一遍 `data/` 路径 —— 那是 `FileStorage` 之外第二处路径真源。已回写 `§2.3`。
+3. **`TaskDefinition` 补 `implemented`**。12 个任务登记、6 个实现。没有这个旗标，
+   未实现的会进 `/api/tasks` 变成一个点了报 500 的按钮 —— 和"注册了没实现等于对前端撒谎"同判据。
+   `task_is_available` 与跑前门都过这一关。已回写 `§2.2`。
+
+**还有一条时序不是巧合**：`TaskRunner` 的 `task.finished` 事件**在 `manifest_writer` 出块之后**才发，
+所以广播顺序是 `task.started → manifest.written → task.finished`。反过来发会得到
+"前端收到完成、点进去清单 404"。清单是权威源，必须先于"我完成了"落盘 —— 看护在
+`test_success_writes_terminal_run_and_events`（断言的就是这个事件顺序）。
+
 
 ---
 

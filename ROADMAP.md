@@ -51,6 +51,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   而 V2 的 `data/cookies/` 现在没有）。整条不勾。
 - [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
 - [ ] **任务调度**：`TaskRegistry` + 6 个核心任务（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）+ 平台级 Semaphore 限流 + CancelToken + 超时 + 清单双写（文件 + SQLite，强制终态）
+  —— 代码 + 离线用例完成（Task 8：`core/task_runner.py` / `core/task_registry.py` /
+  `tasks/`）。12 个任务全登记、V2.0 只给 6 个真 handler（其余 6 个 `implemented=False`，
+  不进 `/api/tasks`、点名运行红在 `NotImplementedError`）。`TaskRunner` 五条退出路径
+  （成功/partial/报告失败/抛异常/取消/超时）都在 `manifest_writer` 上落终态 + 发对应事件，
+  `TaskScheduler` 收口平台开关门 + 全局/每平台 Semaphore + 协作式 `CancelToken`。
+  **整条不勾，因为"真机验过"这一半还没有**：采集类任务（douyin_collect/bilibili_collect）
+  跑通仍需本机 CDP 桥 + 已登录 Chrome + ffmpeg，与 Task 6/7 同一前置。Task 9 通了之后
+  随抖音/B站 里程碑一起补那一跑。
 - [ ] **前端骨架**：React + TS + Vite + Tailwind + shadcn/ui 装好，孟菲斯设计令牌（色板、形状、排版、图案、动效）落 `tailwind.config.ts` + CSS 变量 + `tokens.json`
 - [ ] **前端三页**：Dashboard（四平台健康卡片 + 最近任务 + 最新作品）/ Feed（虚拟滚动 + 过滤 + 隐藏）/ Settings（平台开关 + JSON Schema 自动渲染表单 + Preflight 子页）
 - [ ] **前后端打通**：OpenAPI → TS 类型自动生成（`openapi-typescript`）+ TanStack Query + SSE 订阅 + 平台开关切到后端通
@@ -91,11 +99,11 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ---
 
-## 当前状态（2026-09-22）
+## 当前状态（2026-09-23）
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-7 ✅ / Task 8-16 待做
+- **V2.0 实施**：进行中 —— Task 1-8 ✅ / Task 9-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -109,7 +117,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ✅ | 见 git log | 820 passed（累计），覆盖率 94.04%，四关全绿 |
 | 6 | DouyinAdapter（可与 Task 7 并行） | ✅ | 见 git log | 921 passed（累计，净增 101），覆盖率 94.43%，四关全绿；抖音模块 92-95% |
 | 7 | BilibiliAdapter | ✅ | 见 git log | 1090 passed（累计，净增 169），覆盖率 94.32%，四关全绿；B站 模块 90-100% |
-| 8 | TaskRunner + TaskRegistry + 6 个 handler | ⬜ | — | — |
+| 8 | TaskRunner + TaskRegistry + 6 个 handler | ✅ | 见 git log | 1172 passed（累计，净增 82），覆盖率 94.67%，四关全绿；`tasks/` 各模块 92-100%，`task_runner` 93% / `task_registry` 94% |
 | 9 | FastAPI app + 全部 API 路由 + SSE | ⬜ | — | — |
 | 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ⬜ | — | — |
 | 11 | 前端 API 层 + SSE + stores + Router + Layout | ⬜ | — | — |
@@ -123,14 +131,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1090 passed，覆盖率 94.32%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1172 passed，覆盖率 94.67%（门禁 80%）
 .venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
 .venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
-.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 53 source files
+.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 64 source files
 ```
 
-全套 **71 秒**（带覆盖率）。Task 6 之前是 292 秒 —— 那笔账记在
-`docs/lessons.md` 坑 19（Windows 上每建一个 httpx 默认真传输的客户端要 2.1 秒）。
+全套 **约 109 秒**（带覆盖率）。Task 8 之前是 ~50 秒 —— 净增的 82 条用例里有一部分
+走真 SQLite 内存库 + 真清单落盘（集成层），这笔账记在 `docs/lessons.md` 经验 15 的延长线上。
 
 **可选依赖已装且部分真跑过**（2026-09-22）：`yt_dlp` 2026.8.19 是从 venv 里直接调用的
 （`yt-dlp -J <BV…>` 拿到 15 条 formats、`--flat-playlist` 拿到那句真 412），
