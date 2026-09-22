@@ -578,6 +578,89 @@ V1 里它的实际后果是"对标库里混进别的号的行"，靠人眼发现
 （`test_unrecognisable_input_raises_parse_url_with_the_original_text[https://example.com/user/x]`
 是这一条的正身；参数化里另外五例守的是"别修过头把合法链接也挡掉"）。
 
+#### 坑 21 · 设计文档写着"列表走公开 API"，实测那个接口匿名回的是一个 HTML 风控页（Task 7）
+
+**现象**：`platform-adapter.md §4.2` 与 Task 7 的计划草图都写着
+B站 `list_strategy='api'`（博主作品列表走公开 web-interface）。
+照这个假设动手前先用 `curl` 问了一次
+`x/space/wbi/arc/search?mid=…&ps=10`，回的是 `<!DOCTYPE html>…`，不是 JSON。
+
+**根因**：那个接口 2023 年起要 WBI 签名（`wbi/img_key` 派生的 mixin + 参数排序哈希）。
+yt-dlp 的 `BiliSpaceVideo` 抽取器内部实现了签名，所以 V1 用
+`yt-dlp --flat-playlist` 一直是通的；设计阶段把它记成了"公开 API"。
+如果照 `'api'` 实现，等于在 V2 里重写一遍 yt-dlp 已经维护的那套签名 ——
+对面改版时我们要跟着改，而 yt-dlp 社区也会改。**两处维护同一个签名算法**是纯负债。
+
+**顺带量到的两件事**（都进了 fixtures 与用例）：
+匿名 `yt-dlp --flat-playlist` 回 `Request is blocked by server (412)` —— V1 §7.15
+那句原文在**今天**仍然成立，而且它正好在 `should_escalate_cookie_rung()` 的表里，
+所以"带 cookie 的第一档先跑、风控才退档"这条链是真的；
+`yt-dlp -J` 匿名能看到 15 条 formats（视频轨 `acodec=none` + 音频轨 `m4a`），
+证实 §7.21 那对未合并分片是**默认形状**而不是偶发。
+
+**解法**：`list_strategy` 取值收窄成 `yt_dlp_flat | external_manifest`，
+公开 web-interface 保留它真正能做的角色（逐条 `view` / `player/v2` 字幕 / `card` 资料，
+三个都实测匿名 `code:0`）。见 `docs/adr/0011` 的 Task 7 追记。
+
+**一般化**：**照设计文档动手之前，先用一次真请求量一下对面**。
+"接口叫什么名字"是可查的，"这个接口匿名能不能通、回什么形状"只能问它本人。
+
+**看护**：`TestRealFixturesAreActuallyReal`（fixture 里标了"真样本"的东西必须真的可解析）
+＋ `test_the_412_stderr_is_the_text_the_escalation_table_knows`。
+
+#### 坑 22 · 两个 bug 都是"第一次跑真响应"抓出来的，而它们长得完全不像同类（Task 7）
+
+**现象**：B站 适配器第一次对着真 fixture 跑，红了两个：
+
+1. `fetch_creator_profile()` 读 `payload["card"]` → 永远 None →
+   报"card 接口没有 card 字段"。真形状是 `{"code":0,"data":{"card":{…}}}` ——
+   **B站 所有业务负载都嵌在 `data` 一层里**（view / player / card 三家一致）。
+2. `entries_to_cards()` 收到清单里一条 `"not a dict"` →
+   `AttributeError: 'str' object has no attribute 'get'`。
+   `parse_dump_json_lines` 那一路确实筛过类型，但 `entries_to_cards`
+   是**公开出口**，外部清单那条路也喂它。
+
+**为什么它们值得单独记**：两个都**不可能**被类型检查或 lint 抓到
+（`payload: dict[str, Any]` 里取什么是自由的；`Sequence[Mapping[str, Any]]` 的注解
+在运行期什么都不是）。它们只在"喂进去的东西真长成那样"时现身。
+凭印象编的 fixture 会让两个都安静地躲过去 —— 因为编的时候我就会写成
+`{"card": {...}}`（我以为的形状）。
+
+**解法**：① 统一在 `_get_json()` 那层判 `code` 并交回整个 payload，取值处显式过 `data`；
+② `entry_to_card()` 开头加 `isinstance` 早退，并把原因写在注释里
+（"这条是被用例抓出来的"，不写成"防御性编程"）。
+
+**看护**：`test_creator_profile_comes_from_the_real_card_response`、
+`test_entries_to_cards_respects_limit_and_skips_junk`、
+`test_malformed_track_items_are_skipped`（字幕轨那边同一族：非 dict / 缺 url /
+`javascript:` 一律丢）。
+
+#### 坑 23 · 一次**成功**的下载被写成"带着错误"（Task 7，改了契约字段）
+
+**现象**：`test_merged_download_is_reported_as_yt_dlp_with_size` 红在
+`assert artifact.yt_dlp_error is None`，而实际值是一句
+"没有可用的导出 cookie，只能匿名或走浏览器档"。
+
+**根因**：这是我自己写出来的语义冲突。§7.15 要求"清单 note 必须写清是哪一档"
+（档位差别是画质，不写就没人知道这批视频为什么糊），而 `MediaArtifact`
+里**只有一个**能放这句话的字段 —— `yt_dlp_error`。
+第一次实现就把阶梯说明塞进去了，于是"成功但降级"与"失败"共用一个格子。
+Task 14 那条通用契约用例（`media_source != yt_dlp` 时 error 必须非空）也会
+被这个用法带偏：它会把"记录档位"变成"必须编一句错误"。
+
+**解法**：一个字段只说一件事。`yt_dlp_error` 收窄回"**只装失败原文**"，
+新增 `MediaArtifact.cookie_rung`（`YtDlpCookieVariant.label` 原文）。
+抖音的页面直链兜底那一路 `cookie_rung=None` —— 那条路不经过 yt-dlp，
+没有档位可记，**不编一个 `"page_context"` 假标签**（编了就会有人去查那条档不存在的路径）。
+理由与影响写在 `docs/adr/0011` 的 Task 7 追记。
+
+**一般化**：加字段之前先问"现有字段能不能同时回答两件事"。
+如果答案是"能，但要靠读者自己分辨"，那就是不能。
+
+**看护**：`test_a_clean_success_records_the_rung_not_an_error`（B站）、
+`test_an_anonymous_download_still_says_which_rung_it_used`（B站）、
+`test_yt_dlp_success_marks_the_source_and_keeps_error_none`（抖音补了 rung 断言）。
+
 ---
 
 ## 第二部分 · V2 设计与实施过程中的经验
@@ -982,6 +1065,34 @@ V1 走的本来就是第二条路（`store.video_exists(...)` 查重），所以
 ＋ `test_a_real_publish_date_would_still_be_filtered`
 （判得了 → 真判，否则上一条是句永不生效的空话）＋
 `card_to_video_meta` 里 `duration_seconds=None` / `published_at=None` 的断言。
+
+#### 经验 19 · 接口型适配器：先抓真响应再写解析层，凭印象编的 fixture 会让 bug 安静躲过去（Task 7）
+
+**做法**（B站 适配器开工前）：`curl` 了四个公开接口，把回的东西裁一裁直接当 fixture — —
+`x/web-interface/view`、`x/player/v2`、`x/web-interface/card` 都匿名可访问（`code:0`），
+`yt-dlp --flat-playlist` 匿名那句 412 也存成真样本，`yt-dlp -J` 的 15 条 formats
+证实了未合并分片是默认形状。拿不到的两样（非空 `subtitles[]` 与 flat-playlist 条目）
+在文件里用 `_comment` 写明"合成"，并注明为什么合成、按什么口径合成。
+
+**回报是当场可见的**：坑 22 那两个 bug（`data` 嵌套、非 dict 条目）都是
+**第一次把真响应喂进解析层**时红的。凭印象编 fixture 的话它们一定躲过去 ——
+我编的时候就会把它写成 `{"card": {...}}`，也就是我以为的形状。
+这不是"测试写得好"，是**输入选对了**：测试只能证伪我想到要问的问题。
+
+**顺带的三条纪律**：
+
+1. fixture 里加一条 `TestRealFixturesAreActuallyReal`，断言"标了真样本的东西仍可解析"。
+   它红了意味着**对面改了字段**，或当初那份其实是编的 —— 两种都要立刻知道。
+2. 数值型字段**不要断言具体值**（粉丝数两次抓取就不一样）。断言形状与量级：
+   `isinstance(fans, int) and fans > 10_000`。
+3. 凭证与隐私：`player/v2` 的 `ip_info` 里是抓包机器的公网 IP，
+   **进 fixture 之前删掉**；`data/cookies/*` 那种会话凭证永远不进。
+
+**判据**：动任何"对面说了算"的形状（HTTP 接口、外部命令的 stdout、第三方文件格式）之前，
+先问一次真的并把回答留下。设计文档能告诉你接口叫什么，不会告诉你它匿名能不能通。
+
+**看护**：`tests/fixtures/bilibili/*` 每个文件的 `_comment` 与
+`tests/contracts/test_bilibili_adapter.py::TestRealFixturesAreActuallyReal`。
 
 
 ---

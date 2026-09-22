@@ -51,6 +51,22 @@ class SingleFileArtifact(BaseModel):
     等于永远判断不出该修什么。这个字段就是为了让那句原文有个家。
     """
 
+    cookie_rung: str | None = None
+    """这次下载**实际**用的是哪一档 cookie（`YtDlpCookieVariant.label` 的原文）。
+
+    V1 §7.15 / `platform-adapter.md §4.2`：档位差别往往不是"能不能下"，是**画质**
+    （B站 实测：登录档 21 条视频轨/最高 1772p@59.94，匿名 15 条/886p@29.97）。
+    所以"这次是匿名档下的"这句话必须能一路走到清单里，否则症状是过几天发现
+    这批视频糊了，而没人知道为什么。
+
+    为什么不塞进 `yt_dlp_error`：那个字段的语义是"**失败**原文"，
+    一次成功的匿名下载在里面写一句"没有可用的导出 cookie"，
+    读的人会先去找哪一步失败了（`test_yt_dlp_error_stays_none_on_a_clean_success`
+    就是这条边界被踩过一次之后加的）。
+
+    `docs/adr/0011` 的 Task 7 追记里有这个字段为什么现在才加的完整理由。
+    """
+
     duration_seconds: float | None = None
     has_audio: bool = True
     has_video: bool = True
@@ -70,6 +86,10 @@ class VideoAudioPairArtifact(BaseModel):
     audio_size_bytes: int = Field(ge=0)
     media_source: Literal["dash_split"] = "dash_split"
     yt_dlp_error: str | None = None
+    cookie_rung: str | None = None
+    """同 `SingleFileArtifact.cookie_rung`。分片情形下它尤其有用：
+    "登录档才能拿到的 4K 视频轨 + 匿名才能拿到的音频轨"这种混搭是能出现的。"""
+
     duration_seconds: float | None = None
 
 

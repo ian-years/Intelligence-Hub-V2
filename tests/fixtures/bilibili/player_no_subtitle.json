@@ -1,0 +1,18 @@
+{
+  "_comment": "真样本：GET api.bilibili.com/x/player/v2?bvid=BV1GJ411x7h7&cid=137649199（2026-09-22，匿名）。已删 ip_info（含公网 IP）。这条视频确实没有字幕轨。",
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "aid": 80433022,
+    "bvid": "BV1GJ411x7h7",
+    "cid": 137649199,
+    "subtitle": {
+      "allow_submit": false,
+      "lan": "",
+      "lan_doc": "",
+      "subtitles": [],
+      "subtitle_position": null,
+      "font_size_type": 0
+    }
+  }
+}

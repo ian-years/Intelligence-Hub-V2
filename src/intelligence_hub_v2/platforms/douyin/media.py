@@ -34,8 +34,16 @@ import httpx
 
 from intelligence_hub_v2.errors import MediaDownloadError
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
-from intelligence_hub_v2.infra.cookies import EMPTY_COOKIE_FILE_BYTES, CookieManager
-from intelligence_hub_v2.infra.ytdlp import YtDlpCookieVariant, plan_cookie_variants
+from intelligence_hub_v2.infra.cookies import CookieManager
+from intelligence_hub_v2.infra.ytdlp import (
+    YtDlpCookieVariant,
+    netscape_file_blocker,
+    pick_exported_cookie_file,
+    plan_cookie_variants,
+)
+from intelligence_hub_v2.infra.ytdlp import (
+    progress_from_ytdlp_line as progress_from_ytdlp_line_imported,
+)
 from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.task import ProgressCallback
 from intelligence_hub_v2.platforms.base import CookieVariant
@@ -194,19 +202,9 @@ class CookieLadder:
         return tuple(variant.kind for variant in self.variants)
 
 
-def _usable_netscape_file(path: Path | None) -> str | None:
-    """这个路径能不能当"导出文件档"。能用返回 None，不能用返回**原因**。"""
-    if path is None:
-        return "没有配路径"
-    if not path.is_file():
-        return "文件不存在"
-    try:
-        size = path.stat().st_size
-    except OSError as exc:  # 权限、正被别的进程删
-        return f"读不到（{exc}）"
-    if size <= EMPTY_COOKIE_FILE_BYTES:
-        return f"只有表头（{size} 字节），一条 cookie 都没有 = 未登录"
-    return None
+# "这个路径能不能当导出文件档"的判据住在 `infra.ytdlp.netscape_file_blocker`，
+# 两个平台共用一份（V1 §7.15 的教训原文就是"两家各写一份 cookie 阶梯，漂过一次"）。
+_usable_netscape_file = netscape_file_blocker
 
 
 def _candidate_cookie_files(
@@ -249,14 +247,8 @@ def resolve_cookie_ladder(
 
     candidates = _candidate_cookie_files(config=config, cookies=cookies, environ=env)
     warnings: list[str] = []
-    cookie_file: Path | None = None
-    winner = ""
-    for source, path in candidates:
-        blocker = _usable_netscape_file(path)
-        if blocker is None:
-            cookie_file, winner = path, source
-            break
-        warnings.append(f"{source} {path} 不可用：{blocker}")
+    cookie_file, winner, rejections = pick_exported_cookie_file(candidates)
+    warnings.extend(rejections)
     if cookie_file is not None and winner.startswith("环境变量") and len(candidates) > 1:
         # 配置文件说"用 A"，环境变量的存在把答案换成了 B。这个覆盖本身是合法的
         # （V1 兼容），但**必须在报告里看得见** —— 否则排查的人会照着 YAML 那一行想。
@@ -440,14 +432,6 @@ async def download_first_play_url(
     return DirectDownload(path=None, attempted=total, failures=tuple(failures))
 
 
-def progress_from_ytdlp_line(line: str) -> float | None:
-    """从 yt-dlp 的一行进度里认出一个 0.0~1.0。
-
-    认不出返回 None 而不是 0.0：`[download] 100% of ...` 之外 yt-dlp 还会打
-    `[info]` / `[h2s]` / `[ExtractInfo]` 之类的行，把那些报成 0% 会让前端的进度条
-    反复跳回起点 —— 看着像卡住，实际在下。
-    """
-    match = re.search(r"\[download\]\s+(\d+(?:\.\d+)?)%", line)
-    if match is None:
-        return None
-    return min(1.0, float(match.group(1)) / 100.0)
+# yt-dlp 输出行的解析住在 `infra.ytdlp`（那是"外部命令的输出格式"知识，
+# 而 B站 那条链路要的是同一份）。这里转一道，保持 `douyin.media` 这个入口有效。
+progress_from_ytdlp_line = progress_from_ytdlp_line_imported

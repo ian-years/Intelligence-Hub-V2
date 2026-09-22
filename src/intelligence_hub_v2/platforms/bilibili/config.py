@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from intelligence_hub_v2.platforms.base import CookieVariant, PlatformConfig
+from intelligence_hub_v2.platforms.base import PlatformConfig
 
 
 class BilibiliAdvanced(BaseModel):
@@ -61,11 +61,20 @@ class BilibiliAdvanced(BaseModel):
 class BilibiliConfig(PlatformConfig):
     """B站配置。
 
-    与抖音的关键差别：B站的列表枚举走公开 web-interface（`list_strategy='api'`），
-    媒体走纯 yt-dlp，**都不需要 CDP 桥**（`use_cdp_bridge=False`）。
-    但枚举在无 cookie 时会随机回 `Request is rejected by server (352)` /
+    与抖音的两条关键差别：不需要 CDP 桥（`use_cdp_bridge=False`），
+    且**枚举与下载是两条独立的路，两条都得带导出 cookie**（V1 §7.15）。
+    无 cookie 时 B站随机回 `Request is rejected by server (352)` /
     `Request is blocked by server (412)`，**同一台机器上一条过一条不过**
-    —— 所以"我手动跑通了"不能证明链路稳（V1 §7.15）。
+    —— 所以"我手动跑通了"不能证明链路稳。
+
+    `list_strategy` 的取值在 Task 7 改过：设计文档写的是 `'api'`（博主作品列表走公开
+    web-interface），但实测 `x/space/wbi/arc/search` **不带 WBI 签名时回的是一个 HTML
+    风控页而不是 JSON**（2026-09-22 现场验的，见 `docs/adr/0011` 的"Task 7 追记"），
+    而 V1 一直跑通的是 `yt-dlp --flat-playlist`。所以这里收窄成
+    `yt_dlp_flat | external_manifest`，**留一个实现不了的 `'api'` 就是在骗前端**
+    （同 `DouyinConfig.persist_play_url` 被删的理由）。
+    公开 web-interface 还在，只是它的角色是**逐条作品的元数据**
+    （`x/web-interface/view`，实测匿名可访问）而不是列表枚举。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -73,33 +82,22 @@ class BilibiliConfig(PlatformConfig):
     display_name: str = "B站"
 
     media_strategy: Literal["yt_dlp"] = "yt_dlp"
-    list_strategy: Literal["api", "external_manifest"] = "api"
+    list_strategy: Literal["yt_dlp_flat", "external_manifest"] = "yt_dlp_flat"
     """`external_manifest` 是 V1 `bilibili-download` 技能那条路：
     吃一份外部浏览器清单（JSON），命中清单的博主跳过内置枚举。"""
 
     use_cdp_bridge: bool = False
 
-    cookie_variant_order: tuple[CookieVariant, ...] = (
-        "exported_file",
-        "browser",
-        "anonymous",
-    )
-    """cookie 三档阶梯，**顺序排死**：导出文件 > `--cookies-from-browser` > 匿名。
-
-    V1 §7.15 的坑：老代码第一档是 `--cookies-from-browser chrome`，
-    而它在 Windows 上**永远**读不出来；老代码又只在错误文本命中
-    "读 cookie 失败"那几句时才退档，而新那句 `Could not copy Chrome cookie database`
-    不在表里，于是退档不触发、整条判死。
-
-    所以两条纪律：
-    1. 导出文件必须排第一（`refresh_bridge_cookies` 的产物）
-    2. 判据函数要认全所有 cookie 失败原文（`looks_like_cookie_failure()`）
-    """
-
     ytdlp_cookies_from_browser: str | None = "chrome"
     """`--cookies-from-browser` 的目标浏览器。置空即跳过浏览器档。
 
-    兼容 V1 的 `BILI_YTDLP_COOKIES_FROM_BROWSER` 环境变量。
+    兼容 V1 的 `BILI_YTDLP_COOKIES_FROM_BROWSER` 环境变量（env 优先于本字段）。
+
+    与抖音默认值不同的理由：B站 这一档**不是必死**（非 Windows 上它是真能用的登录态），
+    而抖音那一档在 V1 实测里从来没成功过。顺序仍不在这里 ——
+    三档的顺序是 `BilibiliAdapter.capabilities.cookie_variants` 的声明
+    （`exported_file > browser > anonymous`，V1 §7.15 血泪排出来的），
+    见 `docs/adr/0011`。
     """
 
     external_browser_manifest_path: Path | None = None

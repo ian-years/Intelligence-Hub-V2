@@ -34,13 +34,21 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   **SSE 端点仍欠**，在 Task 9，所以这一条整条不算勾。
 - [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
 - [ ] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
-  —— 前半条已完成（Task 5：Protocol / `AdapterDeps` / 显式注册表 / infra 五件包装）。
-  后半条"契约测试抽象基类"在 Task 14，**所以整条不勾**（判据是整条都真机验过）。
+  —— Protocol / 注册表 / infra 五件包装完成（Task 5）；抖音与 B站 两个实现也落地了（Task 6/7），
+  `PLATFORMS` 与 `PLATFORM_CONFIG_SCHEMAS` 的差集已经是空集（注册表快照用例钉着）。
+  还差"契约测试抽象基类"（Task 14），**所以整条不勾**。
 - [ ] **抖音 Adapter**：移植 V1 `download_douyin_latest.py`，含 `parse_creator_url`（短链 302 → sec_uid，§7.1）、媒体下载（yt-dlp → 页面播放直链兜底，§7.2）、cookie 优先级阶梯
   —— 代码与契约测试已完成（Task 6：`platforms/douyin/`，91 条用例，§7.1/§7.2/§7.3 各有看护）。
   **整条不勾，因为"真机验过"这一半还没有**：跑通需要本机 CDP 桥 + 一个已登录的 Chrome，
   本会话没有那个状态（见 `docs/progress/2026-09-22.md` Task 6 的"未验证"清单）。
 - [ ] **B站 Adapter**：移植 V1 `download_bili_following_latest.py`，含 cookie 三档（§7.15）、DASH 未合并分片处理（§7.21）、字幕优先
+  —— 代码与 169 条用例完成（Task 7）。**已真机验过的部分**（2026-09-22 本机，匿名）：
+  `x/web-interface/view` / `x/player/v2` / `x/web-interface/card` 三个接口的真响应形状
+  （存成 `tests/fixtures/bilibili/`，见 `docs/lessons.md` 经验 19）、
+  `yt-dlp -J` 的 15 条 formats（证实未合并 DASH 是默认形状）、
+  `yt-dlp --flat-playlist` 匿名那句真 `Request is blocked by server (412)`。
+  **未验**：带登录 cookie 的实际媒体下载、非空字幕轨（两者都要有效会话 cookie，
+  而 V2 的 `data/cookies/` 现在没有）。整条不勾。
 - [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
 - [ ] **任务调度**：`TaskRegistry` + 6 个核心任务（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）+ 平台级 Semaphore 限流 + CancelToken + 超时 + 清单双写（文件 + SQLite，强制终态）
 - [ ] **前端骨架**：React + TS + Vite + Tailwind + shadcn/ui 装好，孟菲斯设计令牌（色板、形状、排版、图案、动效）落 `tailwind.config.ts` + CSS 变量 + `tokens.json`
@@ -87,7 +95,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - **设计阶段**：完成（10 节决策全部锁定，详见 `docs/adr/`）
 - **实施计划**：完成（`docs/plans/v2.0-implementation.md`，16 个任务，67h 估时）
-- **V2.0 实施**：进行中 —— Task 1-6 ✅ / Task 7-16 待做
+- **V2.0 实施**：进行中 —— Task 1-7 ✅ / Task 8-16 待做
 - **V1 工作区**：未动
 
 ### 实施进度明细
@@ -100,7 +108,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 4 | EventBus + `manifest_writer` 上下文管理器 | ✅ | 见 git log | 701 passed（累计），覆盖率 95.39%，四关全绿 |
 | 5 | `PlatformAdapter` Protocol + Registry + infra 包装 | ✅ | 见 git log | 820 passed（累计），覆盖率 94.04%，四关全绿 |
 | 6 | DouyinAdapter（可与 Task 7 并行） | ✅ | 见 git log | 921 passed（累计，净增 101），覆盖率 94.43%，四关全绿；抖音模块 92-95% |
-| 7 | BilibiliAdapter | ⬜ | — | — |
+| 7 | BilibiliAdapter | ✅ | 见 git log | 1090 passed（累计，净增 169），覆盖率 94.32%，四关全绿；B站 模块 90-100% |
 | 8 | TaskRunner + TaskRegistry + 6 个 handler | ⬜ | — | — |
 | 9 | FastAPI app + 全部 API 路由 + SSE | ⬜ | — | — |
 | 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ⬜ | — | — |
@@ -115,17 +123,18 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ```bash
 cd E:/08-Codework/Intelligence-Hub-V2
-.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 921 passed，覆盖率 94.43%（门禁 80%）
+.venv/Scripts/python.exe -X utf8 -m pytest tests/ -q   # 1090 passed，覆盖率 94.32%（门禁 80%）
 .venv/Scripts/python.exe -X utf8 -m ruff format --check src/ tests/
 .venv/Scripts/python.exe -X utf8 -m ruff check src/ tests/    # All checks passed
-.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 47 source files
+.venv/Scripts/python.exe -X utf8 -m mypy src/                 # no issues found in 53 source files
 ```
 
 全套 **71 秒**（带覆盖率）。Task 6 之前是 292 秒 —— 那笔账记在
 `docs/lessons.md` 坑 19（Windows 上每建一个 httpx 默认真传输的客户端要 2.1 秒）。
 
-**可选依赖已经装好了**（2026-09-22 实测：`yt_dlp` 2026.8.19 / `curl_cffi` / `zhconv` /
-`sherpa_onnx` / `numpy` / `playwright` 全部 `find_spec` 命中）。
+**可选依赖已装且部分真跑过**（2026-09-22）：`yt_dlp` 2026.8.19 是从 venv 里直接调用的
+（`yt-dlp -J <BV…>` 拿到 15 条 formats、`--flat-playlist` 拿到那句真 412），
+`curl_cffi` / `zhconv` / `sherpa_onnx` / `numpy` / `playwright` `find_spec` 命中但未使用。
 装法留在这里备用：`.venv/Scripts/python.exe -m pip install -e ".[media,asr,bridge]"`。
 **仍然缺的是 PATH 上的 `ffmpeg` / `ffprobe`**（V1 §7.19 那个"注册表里有、进程快照过期"
 的现象在这个 shell 里照样成立）—— Task 8 之前要走工作台的 PATH 补齐或重开宿主。

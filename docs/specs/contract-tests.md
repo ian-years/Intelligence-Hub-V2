@@ -44,13 +44,13 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | §7.5 转写落盘目录按平台不对称 | `test_transcript_path_unified_across_platforms` | L2 | `tests/contracts/test_transcript_path.py` |
 | §7.8 `safe_filename()` 不止换 `/`，还要处理 `..`、结尾点/空格、Windows 设备名 | `test_safe_filename_property_based`（hypothesis） | L0 | `tests/unit/test_safe_filename.py` |
 | §7.9 SenseVoice 不产标点，按静音切句补 `。`，否则 `split_sentences` 全废 | `test_asr_engine_punctuation_injection` | L2 | `tests/unit/asr/test_sherpa.py` |
-| §7.13 技能脚本物理上有两份（仓库 + 用户级），会漂 | `test_skill_script_no_drift`（diff -rq） | L0 | `tests/unit/test_skill_drift.py` |
-| §7.14 `tests/test_bilibili_browser_listing.py` 找不到生产者脚本时是 `SkipTest` 不是 fail | `test_bilibili_listing_runs_when_script_present`（强制不 skip） | L2 | `tests/contracts/test_bilibili_adapter.py` |
-| §7.15 B站 cookie 分两条路（枚举 + 媒体下载），都得带导出文件；档位差别是画质 | `test_bilibili_cookie_variants_argv`（参数化覆盖三档） | L2 | `tests/contracts/test_bilibili_adapter.py` |
-| §7.16 B站搜索兜底要 Node 版 playwright + `NODE_PATH`，pip 那个不算数 | `test_bilibili_search_fallback_detects_missing_node_playwright` | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.13 技能脚本物理上有两份（仓库 + 用户级），会漂 | 清单形状不认识时报错**点名仓库内那份生产者**：`test_an_unreadable_manifest_raises_naming_the_producer`；`diff -rq` 的 L0 那条留到 Task 14 | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.14 找不到生产者时是 SkipTest 不是 fail | 一律**红**，没有 skip 这条路：`test_exit_zero_with_nothing_parsed_is_still_a_failure`、`test_a_missing_manifest_file_is_reported_with_its_path`、`test_an_unreadable_manifest_raises_naming_the_producer`（缺文件 / 空结果 / 形状不对三种都覆盖） | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.15 B站 cookie 分两条路（枚举 + 媒体下载），都得带导出文件；档位差别是画质 | `test_the_enumeration_carries_the_same_cookie_rungs_as_download`（两条路的 argv 各断一次）＋ `test_three_rungs_in_the_v1_order` ＋ `test_header_only_file_is_not_a_login_rung` ＋ `test_a_clean_success_records_the_rung_not_an_error` | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.16 B站搜索兜底要 Node 版 playwright + `NODE_PATH`，pip 那个不算数 | `test_search_fallback_is_refused_rather_than_silently_skipped`：勾了它而 V2 尚未实现时**如实红**，不静默跳过 | L2 | `tests/contracts/test_bilibili_adapter.py` |
 | §7.19 "注册表里有 PATH" ≠ "进程拿得到"；工作台已收口（`prepare_runtime_environment()`） | `test_prepare_runtime_environment_merges_registry_path` | L0 | `tests/unit/test_runtime_env.py` |
 | §7.20 桥的浏览器被人关掉后 formerly 会一直报绿；现已收口（`/health` 503 + 真请求自愈） | `test_bridge_health_returns_503_when_browser_dead` + `test_bridge_self_heal_on_first_request` + `test_bridge_503_semantics_not_bridge_down` | L2 | `tests/contracts/test_bridge_client.py` |
-| §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `test_bilibili_media_artifact_handles_dash_split` | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `TestDashSplit`：`test_pair_reaches_the_caller_as_a_video_audio_pair`、`test_only_yt_dlp_reported_paths_are_considered`（不扫目录）、`test_two_webm_tracks_are_told_apart_by_size`、`test_a_pair_artifact_points_the_transcriber_at_the_audio_track`（与 `audio_path_of()` 接通） | L2 | `tests/contracts/test_bilibili_adapter.py` + `test_bilibili_helpers.py` |
 | §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | `test_backfill_task_uses_creator_url_not_full_scan` | L3 | `tests/integration/tasks/test_backfill.py` |
 | §7.24 「持续跟踪」的值必须是真布尔，且默认值只能有一处 | `test_creator_tracking_default_is_true` + `test_set_tracking_rejects_non_bool` + `test_tracking_default_single_source_of_truth` | L1 + L4 | `tests/unit/storage/test_creators.py` + `tests/integration/api/test_creators.py` |
 | §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_writer_finalizes_on_all_exit_paths`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/tasks/test_manifest.py` |
@@ -85,11 +85,20 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 `test_videos_repo.py` 与 `test_creators_repo.py` 里**各有一条**（两行表格指的是两条），
 `-k` 或按 node id 单跑时要带文件名，别以为只有一条。
 
-**仍未落地**（按计划属于后续任务）：§7.9 / §7.13 / §7.14 / §7.15 /
-§7.16 / §7.19 / §7.21 / §7.22 的 L2-L4 部分（B站 适配器、桥、ASR、前端默认值、集成任务流）、
+**仍未落地**（按计划属于后续任务）：§7.9（ASR 标点，V2.1）、
+§7.13 的 `diff -rq` 那半、§7.19（PATH 上的 ffmpeg / ffprobe，归 Task 8 的 preflight）、
+§7.22（按位抓取的 URL 直定位，归 Task 8 的 `BackfillTask`）、
 §7.24 的 L4 前端部分、以及下面 §4 的抽象基类整套（Task 14）。
-**已落地**：§7.1 / §7.2 / §7.3（Task 6 抖音 Adapter，`tests/contracts/test_douyin_adapter.py`）
-与 §7.20 的桥语义那一半（Task 5 `infra/cdp_bridge.py` + Task 6 `TestHealthcheck`）。
+
+**已落地**：
+
+- §7.1 / §7.2 / §7.3 —— Task 6 抖音，`tests/contracts/test_douyin_adapter.py`（91 条）
+- §7.13 / §7.14 / §7.15 / §7.16 / §7.21 —— Task 7 B站，
+  `tests/contracts/test_bilibili_adapter.py`（91 条）＋ `test_bilibili_helpers.py`（纯函数逐形状）
+- §7.20 的桥语义 —— Task 5 `infra/cdp_bridge.py` ＋ 两个平台的 `TestHealthcheck`。
+  Task 7 补了一条**不对称**的看护：同一个 `yt_dlp` 组件在抖音亮黄（还有页面直链那条路）、
+  在 B站 亮红（没有第二条路），见 `test_missing_yt_dlp_is_unreachable_here_not_degraded`。
+  两处同色的话，其中一处一定在骗人。
 
 ---
 

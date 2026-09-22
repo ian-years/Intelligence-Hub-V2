@@ -214,6 +214,13 @@ class DouyinAdvanced(BaseModel):
 
 ### 3.2 `BilibiliConfig`
 
+> **修订（2026-09-22，Task 7，`docs/adr/0011`）**：这里的
+> `cookie_variant_order: tuple[CookieVariant, ...]` 已删除 —— 它与
+> `BilibiliAdapter.capabilities.cookie_variants` 是同一份顺序写两遍。
+> 同时 `list_strategy` 的取值从 `'api' | 'external_manifest'` 收窄成
+> `'yt_dlp_flat' | 'external_manifest'`：空间列表那个接口匿名回 HTML 风控页，
+> 留一个没有实现路径的取值等于给前端渲染出一个点了没反应的选项。
+
 ```python
 class BilibiliConfig(PlatformConfig):
     media_strategy: Literal["yt_dlp"] = "yt_dlp"

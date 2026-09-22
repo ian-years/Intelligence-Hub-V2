@@ -79,3 +79,38 @@ B站那边同形：`BilibiliConfig.cookie_variant_order` 与 `Capabilities.cooki
   适配器里那句 `os.environ.get(...)` 就该删掉，改读 `config.cookies_file`。
   跟进位置：`docs/lessons.md`「V2 新增」+ Task 9 的装配点。
 - B站 Task 7 会碰到同一件事，届时按本 ADR 处理，不再单独开 ADR。
+
+## Task 7 追记（2026-09-22，落地 B站 Adapter 时）
+
+本 ADR 的第 4 条预告的三件事都做了，另外补一条**新的契约字段**。
+
+1. **`BilibiliConfig.cookie_variant_order` 删除。** 它与
+   `BilibiliAdapter.capabilities.cookie_variants` 是"同一份顺序写两遍"
+   （值目前一致，所以是漂移风险而不是已发生的矛盾）。
+   看护改成结构性的：`test_no_config_field_carries_a_second_order`
+   （B站 那边 `test_douyin_cookie_ladder_order_is_not_a_config_field` 同款）。
+
+2. **顺带收掉一个同形状的谎言：`BilibiliConfig.list_strategy` 的 `'api'` 取值。**
+   设计文档说 B站 的空间作品列表走"公开 web-interface"。实测不成立 ——
+   `x/space/wbi/arc/search` 不带 WBI 签名时回的是**一个 HTML 风控页**而不是 JSON
+   （2026-09-22 现场 `curl` 验的），而把 yt-dlp 已经实现的那套 WBI 签名重写一遍
+   不是 V2 该养的债。V1 一直跑通的是 `yt-dlp --flat-playlist`。
+   所以取值收窄成 `yt_dlp_flat | external_manifest`，默认前者。
+   **判据与 `persist_play_url` 那条一模一样**：一个前端能渲染出来、
+   后端没有实现路径的配置取值，就是在给用户撒谎。
+   公开 web-interface 没有作废，它的角色是**逐条作品的元数据**
+   （`x/web-interface/view`，实测匿名 `code:0`）与**字幕轨**（`x/player/v2`）。
+
+3. **新增 `MediaArtifact.cookie_rung`。** 这是本 ADR 落地时才暴露出来的契约缺口：
+   §7.15 要求"清单 note 必须写清是哪一档"（档位差别是画质，不写就没人知道
+   这批视频为什么糊），而 `MediaArtifact` 里只有一个能放这句话的字段 ——
+   `yt_dlp_error`。于是第一次实现把阶梯说明写进了它，
+   结果是**一次成功的匿名下载带着一个非空 error**，
+   读的人（与 Task 14 那条通用契约用例）都会先去找"哪一步失败了"。
+   一个字段不能同时是"失败原文"和"情况说明"。
+   所以：`yt_dlp_error` 语义收窄回"只装失败原文"，档位说明走 `cookie_rung`
+   （`YtDlpCookieVariant.label` 的原文，抖音的页面直链兜底那一路是 `None`
+   —— 那条路不经过 yt-dlp，没有档位可记，**不编一个假标签**）。
+   两个平台的产物类型都加，`SingleFileArtifact` 与 `VideoAudioPairArtifact` 同一语义。
+   看护：`test_a_clean_success_records_the_rung_not_an_error`（B站）＋
+   `test_yt_dlp_success_marks_the_source_and_keeps_error_none`（抖音，补了 rung 断言）。

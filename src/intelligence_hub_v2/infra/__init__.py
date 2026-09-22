@@ -25,6 +25,7 @@ from intelligence_hub_v2.infra.ffmpeg import (
     has_audio_stream,
     probe_streams,
 )
+from intelligence_hub_v2.infra.pacing import RatePacer
 from intelligence_hub_v2.infra.subprocess import (
     SubprocessResult,
     SubprocessTimeoutError,
@@ -34,13 +35,17 @@ from intelligence_hub_v2.infra.ytdlp import (
     YtDlpResult,
     YtDlpRunner,
     looks_like_cookie_failure,
+    netscape_file_blocker,
+    pick_exported_cookie_file,
     plan_cookie_variants,
+    progress_from_ytdlp_line,
 )
 
 __all__ = [
     "BridgeClient",
     "BridgeHealth",
     "CookieManager",
+    "RatePacer",
     "StreamInfo",
     "SubprocessResult",
     "SubprocessTimeoutError",
@@ -49,7 +54,10 @@ __all__ = [
     "extract_audio",
     "has_audio_stream",
     "looks_like_cookie_failure",
+    "netscape_file_blocker",
+    "pick_exported_cookie_file",
     "plan_cookie_variants",
     "probe_streams",
+    "progress_from_ytdlp_line",
     "run_subprocess",
 ]

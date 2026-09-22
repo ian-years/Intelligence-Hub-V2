@@ -1,0 +1,117 @@
+{
+  "_comment": "真样本：GET api.bilibili.com/x/web-interface/card?mid=486906719（2026-09-22，匿名，code=0）。裁到解析层读的字段。",
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "card": {
+      "mid": "486906719",
+      "name": "索尼音乐中国",
+      "approve": false,
+      "sex": "保密",
+      "rank": "10000",
+      "face": "https://i2.hdslb.com/bfs/face/6bc95d0670863d36bf9167a37b825c39ce258506.jpg",
+      "face_nft": 0,
+      "face_nft_type": 0,
+      "DisplayRank": "0",
+      "regtime": 0,
+      "spacesta": 0,
+      "birthday": "",
+      "place": "",
+      "description": "",
+      "article": 0,
+      "attentions": [],
+      "fans": 947952,
+      "friend": 8,
+      "attention": 8,
+      "sign": "官方营业，欢迎一键三连~~~",
+      "level_info": {
+        "current_level": 6,
+        "current_min": 0,
+        "current_exp": 0,
+        "next_exp": 0
+      },
+      "pendant": {
+        "pid": 0,
+        "name": "",
+        "image": "",
+        "expire": 0,
+        "image_enhance": "",
+        "image_enhance_frame": "",
+        "n_pid": 0
+      },
+      "nameplate": {
+        "nid": 9,
+        "name": "出道偶像",
+        "image": "https://i0.hdslb.com/bfs/face/3f2d64f048b39fb6c26f3db39df47e6080ec0f9c.png",
+        "image_small": "https://i0.hdslb.com/bfs/face/90c35d41d8a19b19474d6bac672394c17b444ce8.png",
+        "level": "高级勋章",
+        "condition": "所有自制视频总播放数>=50万，数据次日更新"
+      },
+      "Official": {
+        "role": 3,
+        "title": "索尼音乐中国官方账号",
+        "desc": "",
+        "type": 1
+      },
+      "official_verify": {
+        "type": 1,
+        "desc": "索尼音乐中国官方账号"
+      },
+      "vip": {
+        "type": 1,
+        "status": 0,
+        "due_date": 1629043200000,
+        "vip_pay_type": 0,
+        "theme_type": 0,
+        "label": {
+          "path": "",
+          "text": "",
+          "label_theme": "",
+          "text_color": "",
+          "bg_style": 0,
+          "bg_color": "",
+          "border_color": "",
+          "use_img_label": true,
+          "img_label_uri_hans": "",
+          "img_label_uri_hant": "",
+          "img_label_uri_hans_static": "https://i0.hdslb.com/bfs/vip/d7b702ef65a976b20ed854cbd04cb9e27341bb79.png",
+          "img_label_uri_hant_static": "https://i0.hdslb.com/bfs/activity-plat/static/20220614/e369244d0b14644f5e1a06431e22a4d5/KJunwh19T5.png",
+          "label_id": 0,
+          "label_goto": null,
+          "img_label_uri_i18n": "",
+          "img_label_uri_i18n_static": "",
+          "label_type": 0
+        },
+        "avatar_subscript": 0,
+        "nickname_color": "",
+        "role": 0,
+        "avatar_subscript_url": "",
+        "tv_vip_status": 0,
+        "tv_vip_pay_type": 0,
+        "tv_due_date": 0,
+        "avatar_icon": {
+          "icon_resource": {}
+        },
+        "ott_info": {
+          "vip_type": 0,
+          "pay_type": 0,
+          "pay_channel_id": "",
+          "status": 0,
+          "overdue_time": 0
+        },
+        "super_vip": {
+          "is_super_vip": false
+        },
+        "vipType": 1,
+        "vipStatus": 0
+      },
+      "is_senior_member": 0,
+      "name_render": null
+    },
+    "following": false,
+    "archive_count": 258891,
+    "article_count": 0,
+    "follower": 947952,
+    "like_num": 7087538
+  }
+}

@@ -84,6 +84,34 @@ class FakeYtDlpRunner:
         self.emit_lines = list(emit_lines)
         self.calls: list[dict[str, Any]] = []
 
+    async def flat_playlist(
+        # `timeout=` 同样是被替身的真实签名的一部分（`YtDlpRunner.flat_playlist`）。
+        self,
+        url: str,
+        *,
+        variants: Sequence[Any] = (),
+        playlist_items: int | None = None,
+        timeout: float | None = None,  # noqa: ASYNC109
+    ) -> Any:
+        """`--flat-playlist --dump-json` 那一趟。
+
+        记 `variants` 是**这条替身存在的最大理由**：V1 §7.15 说"枚举与下载是两条路，
+        两条都得带导出 cookie"，而老代码只在下载那条带了。
+        没有这一格的记录，那条坑就没有任何看护。
+        """
+        self.calls.append(
+            {
+                "url": url,
+                "variants": list(variants),
+                "playlist_items": playlist_items,
+                "kind": "flat_playlist",
+                "timeout": timeout,
+            }
+        )
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
     async def download(
         self,
         url: str,

@@ -157,20 +157,29 @@ def test_douyin_cookie_ladder_order_is_not_a_config_field() -> None:
     assert BilibiliConfig(display_name="B站").ytdlp_cookies_from_browser == "chrome"
 
 
-def test_bilibili_config_cookie_variant_order() -> None:
-    """V1 §7.15：三档排死 导出文件 > browser > 匿名，顺序就是契约。"""
+def test_bilibili_config_defaults() -> None:
     cfg = BilibiliConfig(display_name="B站")
-    assert cfg.cookie_variant_order == ("exported_file", "browser", "anonymous")
     assert cfg.prefer_subtitles is True
     assert cfg.media_strategy == "yt_dlp"
-    assert cfg.list_strategy == "api"
+    # Task 7 收的：设计文档写 'api'，实测空间列表那个接口匿名回 HTML 风控页，
+    # V1 跑通的从来是 yt-dlp --flat-playlist。留一个实现不了的取值就是骗前端。
+    assert cfg.list_strategy == "yt_dlp_flat"
     assert cfg.use_cdp_bridge is False
     assert cfg.advanced.dash_split_handling == "auto"
 
 
-def test_bilibili_config_rejects_unknown_cookie_variant() -> None:
+def test_bilibili_config_declares_no_cookie_ladder_order() -> None:
+    """ADR-0011：顺序只归 `BilibiliAdapter.capabilities`，配置里不许有第二份。
+
+    `cookie_variant_order` 被删是因为它与 `capabilities.cookie_variants`
+    是**同一份顺序写两遍**（值目前一致，所以它只是漂移风险而不是已发生的矛盾 ——
+    抖音那边已经矛盾了，见 ADR-0011 的背景）。
+    """
+    for field_name in BilibiliConfig.model_fields:
+        assert "priority" not in field_name, field_name
+        assert "order" not in field_name, field_name
     with pytest.raises(ValueError, match="cookie_variant_order"):
-        BilibiliConfig(display_name="B站", cookie_variant_order=("telepathy",))  # type: ignore[arg-type]
+        BilibiliConfig(display_name="B站", cookie_variant_order=("exported_file",))  # type: ignore[call-arg]
 
 
 def test_capabilities_is_frozen() -> None:
@@ -439,6 +448,11 @@ def test_shipped_config_files_load() -> None:
     # V2.0 只注册抖音 + B站
     assert mgr.platform_names() == ["douyin", "bilibili"]
     assert mgr.enabled_platforms() == ["douyin", "bilibili"]
+    # 发货的 YAML 里不许再躺着一个没人读的键（extra="forbid" 会当场红，
+    # 但这条断言的红比 ConfigError 好读得多）
+    raw = (Path("config/platforms.yaml")).read_text(encoding="utf-8")
+    assert "cookie_variant_order" not in raw
+    assert "ytdlp_cookie_priority" not in raw
 
     douyin = mgr.get_platform("douyin")
     assert douyin.media_strategy == "yt_dlp_with_fallback"
@@ -446,7 +460,7 @@ def test_shipped_config_files_load() -> None:
     assert douyin.cookies_file == Path("data/cookies/douyin.com.txt")
 
     bili = mgr.get_platform("bilibili")
-    assert bili.cookie_variant_order == ("exported_file", "browser", "anonymous")
+    assert bili.list_strategy == "yt_dlp_flat"
     assert bili.use_cdp_bridge is False
     assert bili.prefer_subtitles is True
 
@@ -488,8 +502,4 @@ def test_shipped_platforms_yaml_survives_write_roundtrip(tmp_path: Path) -> None
     after = {name: mgr2.get_platform(name).model_dump(mode="json") for name in names}
 
     assert after == before
-    assert mgr2.get_platform("bilibili").cookie_variant_order == (
-        "exported_file",
-        "browser",
-        "anonymous",
-    )
+    assert mgr2.get_platform("bilibili").ytdlp_cookies_from_browser == "chrome"

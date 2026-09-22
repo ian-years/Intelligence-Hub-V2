@@ -1,0 +1,38 @@
+{
+  "_comment": "合成样本：.agents/skills/bilibili-download 产出的清单形状（parsed 键 + creator.mid + selected[]）。",
+  "generated_by": "download_bilibili.py (repo copy)",
+  "parsed": [
+    {
+      "creator": {
+        "mid": "486906719",
+        "name": "索尼音乐中国"
+      },
+      "selected": [
+        {
+          "bvid": "BV1GJ411x7h7",
+          "title": "清单里的第一条",
+          "url": "https://www.bilibili.com/video/BV1GJ411x7h7/"
+        },
+        {
+          "platform_video_id": "BV1xx411c7mD",
+          "title": "用另一个键名的第二条"
+        },
+        {
+          "title": "没有 bvid 的脏条目，必须被跳过"
+        }
+      ]
+    },
+    {
+      "creator": {
+        "mid": "999999999",
+        "name": "别的博主"
+      },
+      "selected": [
+        {
+          "bvid": "BV1otherother",
+          "title": "不该出现在这一位的结果里"
+        }
+      ]
+    }
+  ]
+}

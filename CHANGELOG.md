@@ -49,6 +49,16 @@
   `tests/contracts/_doubles.py`（`FakeBridge` / `FakeYtDlpRunner`）与
   `tests/fixtures/douyin/` 七份页面模拟结果、`tests/unit/test_import_layers.py`
   （六个入口各起子进程验导入顺序）
+- **Task 7** · B站 Adapter（V1 §7.13 / §7.14 / §7.15 / §7.16 / §7.21 的落点）：
+  `platforms/bilibili/urls.py`（`mid` / `bvid` 提取 + b23.tv 短链判定 + 协议相对地址补齐）、
+  `listing.py`（`--flat-playlist` 输出解析、外部浏览器清单、`x/web-interface/view` 元数据）、
+  `media.py`（三档 cookie 阶梯 + **未合并 DASH 分片按文件名配对**，绝不扫目录）、
+  `subtitles.py`（`x/player/v2` 字幕轨 → `Transcript`，"没问到"与"确实没有"分开）、
+  `adapter.py`（`BilibiliAdapter` + `@register("bilibili")`）；
+  `infra/pacing.py`（`RatePacer`，两个适配器共用一份节流）；
+  `tests/contracts/_doubles.py` 加 `flat_playlist` 记录；
+  `tests/fixtures/bilibili/` 九份，其中四份是 2026-09-22 打真接口抓回来的响应
+  （其余在文件里用 `_comment` 标了合成原因）。`tests/unit/test_import_layers.py` 的入口加到六个。
 
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），
@@ -73,6 +83,24 @@
   "这一档用哪个文件 / 哪个浏览器"的输入，不再决定顺序。
   影响：`config/platforms.yaml` 抖音一节、`docs/specs/config-schema.md §3.1/§6`、
   B站 的 `cookie_variant_order` 在 Task 7 按同一条处理。
+- **`BilibiliConfig.list_strategy` 的取值从 `'api'` 收窄成 `'yt_dlp_flat' | 'external_manifest'`**
+  （`docs/adr/0011` Task 7 追记）。设计文档说空间作品列表走公开 web-interface，
+  实测 `x/space/wbi/arc/search` 匿名请求回的是 **HTML 风控页**而不是 JSON（它要 WBI 签名），
+  而 V1 一直跑通的是 `yt-dlp --flat-playlist`。留一个没有实现路径的取值等于给前端
+  渲染出一个点了没反应的选项 —— 与删 `persist_play_url` 是同一条判据。
+  `config/platforms.yaml` 的 B站 一节同步。公开 web-interface 没有作废，
+  角色换成逐条作品元数据 / 字幕轨 / 博主资料（三个接口都实测匿名 `code:0`）。
+- **`BilibiliConfig.cookie_variant_order` 删除**（ADR-0011 第 4 条预告的收口）：
+  它与 `BilibiliAdapter.capabilities.cookie_variants` 是同一份顺序写两遍。
+  结构看护改成"配置模型里不许出现带 order/priority 的字段名"。
+- **`MediaArtifact` 新增 `cookie_rung`**：V1 §7.15 要求"清单 note 必须写清是哪一档"
+  （档位差别是画质不是能不能下），而原来唯一能放这句话的格子是 `yt_dlp_error`，
+  于是一次**正常的匿名下载**带着一个非空 error，读的人先去找"哪一步失败了"。
+  现在 `yt_dlp_error` 语义收窄回"只装失败原文"，档位走 `cookie_rung`；
+  抖音的页面直链兜底那一路是 `None`（那条路不经过 yt-dlp，**不编一个假标签**）。
+- `netscape_file_blocker` / `pick_exported_cookie_file` / `progress_from_ytdlp_line`
+  三件从抖音私有实现提到 `infra/ytdlp.py`，两个平台共用一份
+  （V1 §7.15 的原文教训就是"两家各写一份 cookie 阶梯，漂过一次"）。
 - **`MediaArtifact.path` 的归属改了**（`platform-adapter.md §2.4` 就地加修订说明）：
   原写"相对 `data/`"，但 `AdapterDeps` 里没有 `FileStorage`，采集层算不出相对路径。
   现在适配器返回 `dest` 下的路径，`FileStorage.rel()` 归一化由入库层（Task 8）做。
@@ -141,6 +169,16 @@
   返回类型仍是 bool、`mypy` 与 `ruff` 都不报，只有用例抓得到（经验 16）
 - `run_subprocess` 的超时路径会丢掉已读到的 stderr 尾部：加 `_Lines` 累加器，
   边读边落一份，超时异常里带出"为什么这么慢"的唯一线索
+- B站 `fetch_creator_profile()` 读 `payload["card"]`，而真形状嵌在 `data` 一层里
+  （`{"code":0,"data":{"card":…}}`）。症状是"每位博主都没昵称"而**不报错**，
+  第一次把真响应喂进解析层才红（坑 22）
+- B站 `entries_to_cards()` 收到一条非 dict 的清单条目时抛
+  `AttributeError: 'str' object has no attribute 'get'`。它是公开出口，
+  外部清单那条路也喂它 —— 现在早退并跳过那一行，而不是让整位博主失败
+- B站 枚举的两条红调了两次才对：先写成"空手时前一层已抛，判 `search_fallback_node_playwright`
+  那一支是死代码"，改成捕获 `ListError` 之后又走偏 —— 那句真 412 被替换成了"未实现"。
+  现在的分层是**硬失败原样抛**（保留风控原文），**只有空手**才分兜底/抽取失败两条红。
+  看护 `test_a_hard_failure_keeps_its_text_even_with_the_fallback_switched_on`
 
 ## [0.1.0] — V2.0「骨架可用」（计划中）
 

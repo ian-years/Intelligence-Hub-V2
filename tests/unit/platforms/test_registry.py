@@ -288,19 +288,23 @@ def test_a_fully_wired_platform_reports_nothing() -> None:
 
 
 def test_the_shipped_platform_schemas_have_no_adapters_yet_by_design() -> None:
-    """**这条是快照，不是断言"应该这样"**：Task 7 会把它改红，那时正确的动作是
-    把 B站 适配器补上（说明忘了），而不是把这条删掉。
+    """**这条是快照，不是断言"应该这样"**：它红过的次数就是"有人加了配置忘了实现"的次数。
+
+    Task 6 落地抖音时它从 `{"douyin","bilibili"}` 变 `{"bilibili"}`，
+    Task 7 落地 B站 后变成空集 —— 两次都是它设计出来要触发的动作。
 
     Task 6 之前这里写的是 `{"douyin", "bilibili"}`；抖音适配器落地并把 `@register`
     接上之后，差集只剩 B站 —— 那次变红正是这条用例设计出来要触发的动作
     （见 `docs/progress/2026-09-22.md` Task 6）。
     """
     missing = set(PLATFORM_CONFIG_SCHEMAS) - set(PLATFORMS)
-    assert missing == {"bilibili"}, (
-        f"配置 schema 与适配器的差集变了：{missing}。"
-        "Task 7 之后应当只剩空集（或明确注释掉的平台）。"
+    assert missing == set(), (
+        f"配置 schema 与适配器的差集不是空集：{missing}。"
+        "V2.0 的判据是抖音 + B站 两个都有实现；"
+        "多出来一个没实现的平台名，说明配置表被改了却没走 ADR。"
     )
     assert PLATFORMS["douyin"].__module__.endswith("douyin.adapter")
+    assert PLATFORMS["bilibili"].__module__.endswith("bilibili.adapter")
 
 
 def test_registering_a_platform_without_a_config_schema_fails_at_import_time(

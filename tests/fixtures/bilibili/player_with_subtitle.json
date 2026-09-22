@@ -1,0 +1,36 @@
+{
+  "_comment": "合成样本：subtitles[] 的单条形状按公开口径写，**本会话没取到真非空样本**（这条视频匿名回空数组，而 UGC/AI 字幕多数要登录态）。解析层因此每步都 isinstance 兜底，读不出来就当没有轨。",
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "bvid": "BV1GJ411x7h7",
+    "cid": 137649199,
+    "subtitle": {
+      "allow_submit": false,
+      "lan": "zh-CN",
+      "lan_doc": "中文",
+      "subtitles": [
+        {
+          "id": 1,
+          "lan": "zh-CN",
+          "lan_doc": "中文",
+          "is_subtitle": true,
+          "ai_type": 0,
+          "ai_status": 0,
+          "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/abc.json?auth=bogus",
+          "subtitle_url_v2": "",
+          "type": 1
+        },
+        {
+          "id": 2,
+          "lan": "en-US",
+          "lan_doc": "English",
+          "ai_type": 1,
+          "subtitle_url": "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/en.json"
+        }
+      ],
+      "subtitle_position": null,
+      "font_size_type": 0
+    }
+  }
+}

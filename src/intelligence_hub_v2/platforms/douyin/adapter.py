@@ -36,6 +36,7 @@ import httpx
 from intelligence_hub_v2.errors import MediaDownloadError, PlatformError
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
 from intelligence_hub_v2.infra.ffmpeg import has_audio_stream
+from intelligence_hub_v2.infra.pacing import RatePacer
 from intelligence_hub_v2.infra.ytdlp import YtDlpResult, YtDlpRunner
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
 from intelligence_hub_v2.models.media import MediaArtifact, SingleFileArtifact
@@ -131,7 +132,7 @@ class DouyinAdapter:
         self._config: DouyinConfig = config
         self._deps = deps
         self._log = deps.logger
-        self._pacer = _Pacer(per_minute=config.rate_limit.per_minute)
+        self._pacer = RatePacer(per_minute=config.rate_limit.per_minute)
         # 这两个是测试的替换点：默认值合计约 12 秒，用例里等 12 秒
         # 就把契约测试变成了集成测试。
         self.page_budget = PageBudget()
@@ -467,7 +468,11 @@ class DouyinAdapter:
                 rung=str(result.variant),
             )
         return await self._single_file_artifact(
-            main, size_bytes, media_source="yt_dlp", yt_dlp_error=None
+            main,
+            size_bytes,
+            media_source="yt_dlp",
+            yt_dlp_error=None,
+            cookie_rung=str(result.variant) if result.variant else None,
         )
 
     async def _via_page_play_url(
@@ -507,6 +512,9 @@ class DouyinAdapter:
             raise MediaDownloadError(PLATFORM, "media", msg)
 
         size_bytes = await asyncio.to_thread(_stat_size, download.path)
+        # 兜底这条路**不经过 yt-dlp**，所以没有"哪一档 cookie"可记 —— 桥的页面上下文
+        # 就是登录态本身。留 None 而不是编一个 "page_context" 假装它是阶梯上的一档。
+        page_rung = None
         # 签名直链不进返回值：CDN 直链几小时后失效（V1 §7.2），
         # 库里躺一堆死链比库里少一条链更难查。看护见
         # `test_signed_play_url_never_reaches_the_artifact`。
@@ -518,11 +526,21 @@ class DouyinAdapter:
             yt_dlp_error=yt_dlp_error,
         )
         return await self._single_file_artifact(
-            download.path, size_bytes, media_source="page_play_url", yt_dlp_error=yt_dlp_error
+            download.path,
+            size_bytes,
+            media_source="page_play_url",
+            yt_dlp_error=yt_dlp_error,
+            cookie_rung=page_rung,
         )
 
     async def _single_file_artifact(
-        self, path: Path, size_bytes: int, *, media_source: MediaSource, yt_dlp_error: str | None
+        self,
+        path: Path,
+        size_bytes: int,
+        *,
+        media_source: MediaSource,
+        yt_dlp_error: str | None,
+        cookie_rung: str | None = None,
     ) -> SingleFileArtifact:
         """收成 `SingleFileArtifact`。两处不是走形式的细节：
 
@@ -540,6 +558,7 @@ class DouyinAdapter:
             size_bytes=size_bytes,
             media_source=media_source,
             yt_dlp_error=yt_dlp_error,
+            cookie_rung=cookie_rung,
             has_audio=await has_audio_stream(path),
         )
 
@@ -596,30 +615,6 @@ class DouyinAdapter:
         （Task 8 的 per-platform Semaphore 那一层）。
         """
         await self._pacer.wait()
-
-
-class _Pacer:
-    """一个"每分钟最多 N 次"的闸门。
-
-    用 `loop.time()`（单调钟）而不是 `time.time()`：墙上时钟被 NTP 往回拨一下
-    就能让一次等待变成 40 年。
-    """
-
-    def __init__(self, *, per_minute: int) -> None:
-        self._interval = 60.0 / max(1, per_minute)
-        # 0.0 = "还没放行过"。第一次 wait() 算出来的 delta 是负数（单调钟早就过了 0 点），
-        # 于是第一趟不等待 —— 这是对的：闸门不该在开工前先憋住第一个请求。
-        self._last = 0.0
-
-    async def wait(self) -> None:
-        if self._interval <= 0:
-            return
-        loop = asyncio.get_running_loop()
-        now = loop.time()
-        delta = self._interval - (now - self._last)
-        if delta > 0:
-            await asyncio.sleep(delta)
-        self._last = loop.time()
 
 
 def _stat_size(path: Path) -> int:

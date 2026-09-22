@@ -30,6 +30,7 @@ from tests.contracts._doubles import FakeBridge, FakeYtDlpRunner
 from intelligence_hub_v2.errors import BridgeError, ListError, MediaDownloadError, PlatformError
 from intelligence_hub_v2.infra.cdp_bridge import BridgeHealth
 from intelligence_hub_v2.infra.cookies import COOKIE_FILE_HEADER, CookieManager
+from intelligence_hub_v2.infra.pacing import RatePacer
 from intelligence_hub_v2.infra.ytdlp import YtDlpCookieVariant, YtDlpResult
 from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.creator import CreatorRef
@@ -38,7 +39,7 @@ from intelligence_hub_v2.models.video import VideoMeta
 from intelligence_hub_v2.platforms.base import AdapterDeps, Capabilities, PlatformAdapter
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
 from intelligence_hub_v2.platforms.douyin import media as media_module
-from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter, _Pacer
+from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter
 from intelligence_hub_v2.platforms.douyin.config import DouyinConfig
 from intelligence_hub_v2.platforms.douyin.listing import (
     COLLECT_AFTER_SCROLL_FUNCTION,
@@ -1119,7 +1120,7 @@ class TestRateLimit:
             slept.append(delay)
 
         monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-        pacer = _Pacer(per_minute=30)
+        pacer = RatePacer(per_minute=30)
         await pacer.wait()
         assert slept == [], "第一趟不该先憋住"
         await pacer.wait()
@@ -1130,7 +1131,7 @@ class TestRateLimit:
         验闸门本身没被写歪 —— 否则"测试通过"只证明了关掉的那部分能关掉。"""
         shipped = DouyinConfig(display_name="抖音")  # per_minute 默认 30
         adapter = make_adapter(tmp_path, config=shipped)
-        assert adapter._pacer._interval == pytest.approx(2.0)
+        assert adapter._pacer.interval_seconds == pytest.approx(2.0)
 
 
 class TestContractShape:

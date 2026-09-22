@@ -66,6 +66,7 @@ def platform_defaults(platform: str) -> dict[str, object]:
 
 __all__ = [
     "PLATFORM_CONFIG_SCHEMAS",
+    "BilibiliAdapter",
     "BilibiliAdvanced",
     "BilibiliConfig",
     "Capabilities",
@@ -98,5 +99,5 @@ __all__ = [
 # **在导入期就固定**。注册表快照用例（`tests/unit/platforms/test_registry.py`）
 # 靠这一点才会在"加了适配器却忘了更新快照"时主动变红。
 #
-# bilibili 的适配器在 Task 7 补，届时这里加一行。
+from intelligence_hub_v2.platforms.bilibili.adapter import BilibiliAdapter  # noqa: E402
 from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter  # noqa: E402

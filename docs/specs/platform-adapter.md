@@ -241,7 +241,8 @@ class SingleFileArtifact(BaseModel):
     path: Path                  # 见下方"路径归谁算"（Task 6 修订）
     size_bytes: int
     media_source: Literal["yt_dlp", "page_play_url", "dash_merged"]
-    yt_dlp_error: str | None = None    # 兜底时 yt-dlp 的失败原文（V1 §7.2）
+    yt_dlp_error: str | None = None    # **只装失败原文**（V1 §7.2）
+    cookie_rung: str | None = None     # 实际用了哪一档 cookie（V1 §7.15；见 docs/adr/0011 追记）
     duration_seconds: float | None = None
     has_audio: bool = True
     has_video: bool = True
@@ -350,7 +351,7 @@ class ListError(PlatformError):
 | 平台 | name | capabilities | 里程碑 |
 |---|---|---|---|
 | 抖音 | `douyin` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser','none'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp_with_fallback' | V2.0 |
-| B站 | `bilibili` | needs_browser=False, needs_cookies=True, cookie_variants=('exported_file','browser','anonymous'), supports_subtitles=True, supports_dash_split=True, list_strategy='api', media_strategy='yt_dlp' | V2.0 |
+| B站 | `bilibili` | needs_browser=False, needs_cookies=True, cookie_variants=('exported_file','browser','anonymous'), supports_subtitles=True, supports_dash_split=True, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.0 |
 | 小红书 | `xiaohongshu` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp' | V2.1 |
 | YouTube | `youtube` | needs_browser=False, needs_cookies=False, cookie_variants=(), supports_subtitles=True, supports_dash_split=False, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.1 |
 
@@ -388,7 +389,18 @@ class ListError(PlatformError):
 
 - **cookie 三档阶梯**（V1 §7.15）：`exported_file > browser > anonymous`，每档画质不同（登录档 1772p@59.94，匿名档 886p@29.97）。`download_media` 必须按 `capabilities.cookie_variants` 顺序尝试，**清单 note 必须写清是哪一档**
 - **DASH 未合并分片**（V1 §7.21）：yt-dlp 合并成功只留 `<名字>.mp4`，没做成留 `<名字>.f<格式号>.mp4` + `<名字>.f<格式号>.m4a`。`MediaArtifact` 用 `VideoAudioPairArtifact` 表达。转写层认音频轨
-- **列表枚举走公开 web-interface**，但无 cookie 时随机回 `Request is rejected by server (352)` / `Request is blocked by server (412)`，**同一台机器上一条过一条不过**，所以必须带导出 cookie
+- **列表枚举走 `yt-dlp --flat-playlist`**（`docs/adr/0011` 的 Task 7 追记：
+  设计文档原来写的 `'api'` 实测不成立 —— `x/space/wbi/arc/search` 匿名请求回 HTML 风控页），
+  但无 cookie 时随机回 `Request is rejected by server (352)` /
+  `Request is blocked by server (412)`，**同一台机器上一条过一条不过**，
+  所以**枚举与下载两条路都得带导出 cookie**（2026-09-22 本机匿名实测复现了那句 412）
+- **逐条作品的元数据与字幕轨走公开 web-interface**（实测匿名可访问）：
+  `x/web-interface/view`（标题/时长/发布时间/`pages[].cid`）、
+  `x/player/v2`（字幕轨列表）、`x/web-interface/card`（博主资料）。
+  B站 把业务失败编在 HTTP 200 里（`{"code":-404,...}`），**只看状态码会把"不存在"当成功**
+- **`since=` 在 B站 这一侧是实过滤**（与抖音相反）：网格那边没有发布时间，
+  所以要逐条问 `view`。因此实现口径是"**传了 `since` 才发这些请求**"——
+  没要求按时间过滤时不为填字段多发 N 个请求（一位博主 30 条 × 20 位 = 600 个）
 - **字幕优先**：`fetch_subtitles` 命中时 `PostprocessTask` 跳过 ASR
 
 ### 4.3 小红书

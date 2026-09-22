@@ -59,18 +59,19 @@ bilibili:
   # B站列表枚举走公开 web-interface，媒体走纯 yt-dlp，都不需要桥。
   # 但无 cookie 枚举会随机回 352/412，**同一台机器上一条过一条不过**（V1 §7.15）。
   use_cdp_bridge: false
-  # cookie 三档阶梯，顺序排死：导出文件 > --cookies-from-browser > 匿名。
+  # cookie 三档：导出文件 > --cookies-from-browser > 匿名。
+  # **顺序不在这一节里**，它是 BilibiliAdapter.capabilities 的声明（docs/adr/0011）；
+  # 这里只回答"导出文件档用哪个路径 / 浏览器档用哪个浏览器"。
   # 档位差别往往不是"能不能下"，是**画质**：
   #   BV1cSec6tEux 登录档 21 条视频轨/最高 1772p@59.94，匿名 15 条/886p@29.97
   #   BV1ZUYf6JEfo 登录档视频轨 34.6 MB + 音轨 2.5 MB，匿名整片合并才 18.6 MB
   # 所以清单 note 必须写清是哪一档。
-  cookie_variant_order:
-    - "exported_file"
-    - "browser"
-    - "anonymous"
   ytdlp_cookies_from_browser: "chrome"          # 置空即跳过浏览器档
   media_strategy: "yt_dlp"
-  list_strategy: "api"                          # 公开 web-interface
+  # 枚举走 yt-dlp --flat-playlist（V1 实测能跑通的那条）。空间列表那个公开接口
+  # 需要 WBI 签名，匿名请求回的是 HTML 风控页，所以 'api' 这个取值被收掉了 ——
+  # 公开 web-interface 仍然在用，只是它的角色是逐条作品的元数据而不是列表。
+  list_strategy: "yt_dlp_flat"
   # 外部浏览器清单（V1 .agents/skills/bilibili-download 那条路）。
   # 填路径则命中清单的博主跳过内置枚举；生产者是仓库内那份脚本，不是用户级副本（V1 §7.13）。
   external_browser_manifest_path: null

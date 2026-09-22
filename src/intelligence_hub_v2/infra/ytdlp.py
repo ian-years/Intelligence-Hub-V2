@@ -20,12 +20,14 @@ V1 §7.15 是这整个模块的存在理由，两条：
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from intelligence_hub_v2.errors import MediaDownloadError
+from intelligence_hub_v2.infra.cookies import EMPTY_COOKIE_FILE_BYTES
 from intelligence_hub_v2.infra.subprocess import SubprocessResult, run_subprocess
 from intelligence_hub_v2.logging import get_logger
 
@@ -51,7 +53,10 @@ __all__ = [
     "YtDlpResult",
     "YtDlpRunner",
     "looks_like_cookie_failure",
+    "netscape_file_blocker",
+    "pick_exported_cookie_file",
     "plan_cookie_variants",
+    "progress_from_ytdlp_line",
     "should_escalate_cookie_rung",
 ]
 
@@ -156,6 +161,53 @@ class YtDlpResult:
         if not self.attempts:
             return "yt-dlp 没有产生任何尝试记录"
         return "；".join(f"{label}→exit {code}" for label, code, _ in self.attempts)
+
+
+def netscape_file_blocker(path: Path | None) -> str | None:
+    """这个路径能不能当"导出文件档"。能用返回 None，不能用返回**原因**。
+
+    两道判据，第二道是 V1 §7.15 的另一半坑：**只有表头的 cookie 文件**传出去
+    yt-dlp 一声不吭，只是按匿名处理 —— 于是用户以为拿了登录档。
+    比"文件不存在"更阴，因为整条链路都是绿的，症状要隔几天才浮出来
+    （"这批视频怎么这么糊"）。所以它连"导出文件档"都不算。
+
+    为什么住在 infra：这条判据是**平台无关**的，而 V1 的教训原文就是
+    "B站 与抖音各自实现了一份 cookie 阶梯，两处漂移过一次"
+    （见本包 `__init__.py` 的纪律第 3 条）。两个适配器各写一遍
+    `size <= EMPTY_COOKIE_FILE_BYTES` 就是在重演那个形状。
+    """
+    if path is None:
+        return "没有配路径"
+    if not path.is_file():
+        return "文件不存在"
+    try:
+        size = path.stat().st_size
+    except OSError as exc:  # 权限、正被别的进程删
+        return f"读不到（{exc}）"
+    if size <= EMPTY_COOKIE_FILE_BYTES:
+        return f"只有表头（{size} 字节），一条 cookie 都没有 = 未登录"
+    return None
+
+
+def pick_exported_cookie_file(
+    candidates: Sequence[tuple[str, Path]],
+) -> tuple[Path | None, str, list[str]]:
+    """按优先级走一遍候选文件，返回（选中的路径, 它是哪一档来的, 落选原因）。
+
+    候选由调用方排好序并**带上给人看的来源标签**（"配置 cookies_file" /
+    "环境变量 X" / "data/cookies 约定路径"）—— 落选原因必须能指明是哪一处配置，
+    否则"为什么没带上登录 cookie"这句话只剩一半。
+    """
+    selected: Path | None = None
+    winner = ""
+    rejections: list[str] = []
+    for source, path in candidates:
+        blocker = netscape_file_blocker(path)
+        if blocker is None:
+            selected, winner = path, source
+            break
+        rejections.append(f"{source} {path} 不可用：{blocker}")
+    return selected, winner, rejections
 
 
 def plan_cookie_variants(
@@ -352,6 +404,25 @@ class YtDlpRunner:
             cwd=cwd if cwd is not None and cwd.is_dir() else None,
             on_stdout_line=on_line,
         )
+
+
+_PROGRESS_LINE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
+
+
+def progress_from_ytdlp_line(line: str) -> float | None:
+    """从 yt-dlp 的一行进度里认出一个 0.0~1.0，认不出返回 **None**。
+
+    `--newline` 是 `YtDlpRunner._base_args()` 里加的：yt-dlp 默认用回车符刷同一行，
+    按行读就永远读不到进度，回调形同不存在。
+
+    认不出返回 None 而不是 0.0：`[download] 100% of ...` 之外 yt-dlp 还会打
+    `[info]` / `[h2s]` / `[ExtractInfo]` 之类的行，把那些报成 0% 会让前端的进度条
+    反复跳回起点 —— 看着像卡住，实际正在下。
+    """
+    match = _PROGRESS_LINE.search(line)
+    if match is None:
+        return None
+    return min(1.0, float(match.group(1)) / 100.0)
 
 
 def _tail(text: str, *, lines: int = 5) -> str:
