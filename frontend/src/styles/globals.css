@@ -61,15 +61,16 @@
   /* §3 的"3px 黑边"是一条规则，不是一个数字：Tailwind v4 没有 `--border-width-*`
    * 这个主题命名空间（`border-2` / `border-4` 是写死的档位），所以自己补一条工具类，
    * 值仍然来自 `tokens.css`。不这么写就得在 7 个页面里各抄一遍 `border-[3px]` ——
-   * 那种任意值 stylelint 看不见，改宽度时也没人回来改全。 */
-  .border-memphis {
+   * 那种任意值 stylelint 看不见，改宽度时也没人回来改全。
+   *
+   * 名字必须带 `memphis-` 前缀，**不能**叫 `border-memphis`：`cn()` 走 tailwind-merge，
+   * 而它把任何 `border-<值>` 都归进 border 那一组 ——
+   * 实测 `cn("border-memphis border-ink-black")` 会把 `border-memphis` 当同类冲突**吃掉**，
+   * 于是"3px 黑边"在每一个同时写了 `border-<色>` 的地方安静地消失（边框宽度回落到 0，
+   * 而类名字符串里它曾经在那儿，肉眼对着 JSX 看不出）。看护在 `src/lib/utils.spec.ts`。 */
+  .memphis-border {
     border-style: solid;
     border-width: var(--border-width-memphis);
-  }
-
-  .border-badge {
-    border-style: solid;
-    border-width: var(--border-width-badge);
   }
 }
 

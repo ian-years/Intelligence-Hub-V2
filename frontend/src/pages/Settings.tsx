@@ -113,7 +113,7 @@ function PlatformForm({ platform }: { platform: string }): JSX.Element {
       </div>
 
       {plan.hidden.length > 0 && (
-        <p className="mt-3 border-memphis border-ink-black bg-grey-mist p-3 text-body-sm">
+        <p className="mt-3 memphis-border border-ink-black bg-grey-mist p-3 text-body-sm">
           有 {plan.hidden.length} 项后端不实现，已不显示（原因写在每一项的说明里， 账在{" "}
           <code>docs/adr/0012</code>）。它们仍会原样送回保存请求 —— 少带一项
           就是让后端用默认值覆盖你机器上原有的值。
@@ -169,12 +169,12 @@ function PlatformForm({ platform }: { platform: string }): JSX.Element {
       </div>
 
       {save.isError && (
-        <p className="mt-3 border-memphis border-ink-black bg-coral-red p-3 text-body-md">
+        <p className="mt-3 memphis-border border-ink-black bg-coral-red p-3 text-body-md">
           后端拒了，表单保持你填的样子：{detailOf(save.error)}
         </p>
       )}
       {save.isSuccess && (
-        <p className="mt-3 border-memphis border-ink-black bg-mint-green p-3 text-body-md">
+        <p className="mt-3 memphis-border border-ink-black bg-mint-green p-3 text-body-md">
           已写盘并热加载。
           {(save.data.changed_fields ?? []).length > 0
             ? `变更字段：${(save.data.changed_fields ?? []).join("、")}。`
@@ -257,7 +257,7 @@ function Notice({ children, tone }: { children: ReactNode; tone?: "danger" }): J
   return (
     <p
       className={cn(
-        "border-memphis border-ink-black p-3 text-body-md",
+        "memphis-border border-ink-black p-3 text-body-md",
         tone === "danger" ? "bg-coral-red" : "bg-paper-cream",
       )}
     >

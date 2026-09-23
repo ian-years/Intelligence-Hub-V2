@@ -130,7 +130,7 @@ function Report({ report, at }: { report: PreflightReport; at: number }): JSX.El
               <code className="text-mono-sm">{platform}</code>
               <span
                 className={cn(
-                  "border-memphis border-ink-black px-3 py-1 text-body-sm",
+                  "memphis-border border-ink-black px-3 py-1 text-body-sm",
                   STATUS_TONE[status] ?? "bg-grey-mist",
                 )}
               >
@@ -167,7 +167,7 @@ function Report({ report, at }: { report: PreflightReport; at: number }): JSX.El
           <ul className="mt-3 flex list-none flex-col gap-4 p-0">
             {report.failures.map((failure, index) => (
               <li
-                className="border-memphis border-ink-black p-3"
+                className="memphis-border border-ink-black p-3"
                 key={`${failure.platform ?? "global"}-${String(index)}`}
               >
                 <div className="flex flex-wrap gap-3 text-body-sm">
@@ -205,7 +205,7 @@ function Chips({
       ) : (
         names.map((name) => (
           <span
-            className={cn("border-memphis border-ink-black px-2 text-body-sm", tone)}
+            className={cn("memphis-border border-ink-black px-2 text-body-sm", tone)}
             key={name}
           >
             {name}
@@ -229,7 +229,7 @@ function Line({
       <dt>{label}</dt>
       <dd
         className={cn(
-          "m-0 border-memphis border-ink-black px-3 py-1 text-body-sm",
+          "m-0 memphis-border border-ink-black px-3 py-1 text-body-sm",
           STATUS_TONE[shown] ?? "bg-paper-cream",
         )}
       >

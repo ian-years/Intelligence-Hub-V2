@@ -43,7 +43,7 @@ export function TokenSheet(): JSX.Element {
             <li key={name} className="flex flex-col gap-1">
               <span
                 aria-label={name}
-                className="h-12 w-24 border-memphis border-ink-black"
+                className="h-12 w-24 memphis-border border-ink-black"
                 style={{ background: `var(--color-${name})` }}
               />
               <code className="text-mono-sm">
@@ -57,13 +57,13 @@ export function TokenSheet(): JSX.Element {
       <HardShadowCard>
         <h2>§3 形状：直角 + 3px 黑边 + 硬阴影</h2>
         <div className="mt-3 flex flex-wrap items-center gap-6">
-          <span className="border-memphis border-ink-black bg-lemon-yellow px-5 py-3 shadow-hard">
+          <span className="memphis-border border-ink-black bg-lemon-yellow px-5 py-3 shadow-hard">
             6px 硬阴影
           </span>
-          <span className="border-memphis border-ink-black bg-mint-green px-5 py-3 shadow-hard-lg">
+          <span className="memphis-border border-ink-black bg-mint-green px-5 py-3 shadow-hard-lg">
             10px
           </span>
-          <span className="border-memphis border-ink-black bg-hot-pink px-5 py-3 shadow-hard-sm">
+          <span className="memphis-border border-ink-black bg-hot-pink px-5 py-3 shadow-hard-sm">
             3px
           </span>
         </div>
@@ -86,7 +86,7 @@ export function TokenSheet(): JSX.Element {
             <PatternBackground
               key={pattern}
               pattern={pattern}
-              className="h-20 border-memphis border-ink-black"
+              className="h-20 memphis-border border-ink-black"
             />
           ))}
         </div>

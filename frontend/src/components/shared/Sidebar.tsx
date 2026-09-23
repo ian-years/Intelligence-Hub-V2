@@ -17,7 +17,7 @@ export function Sidebar(): JSX.Element {
     <nav
       aria-label="主导航"
       className={cn(
-        "flex h-full shrink-0 flex-col gap-6 border-memphis border-r-ink-black bg-paper-cream p-4",
+        "flex h-full shrink-0 flex-col gap-6 memphis-border border-r-ink-black bg-paper-cream p-4",
         collapsed ? "w-20" : "w-60",
       )}
     >
@@ -45,7 +45,7 @@ export function Sidebar(): JSX.Element {
               end={item.to === "/"}
               className={({ isActive }: { isActive: boolean }) =>
                 cn(
-                  "block border-memphis border-ink-black px-3 py-2 no-underline",
+                  "block memphis-border border-ink-black px-3 py-2 no-underline",
                   isActive
                     ? "bg-electric-blue text-paper-cream shadow-hard-sm"
                     : "bg-paper-cream text-ink-black",
