@@ -41,16 +41,17 @@
 ```python
 from enum import StrEnum
 
+
 class TaskKind(StrEnum):
-    PLATFORM_COLLECT = "platform_collect"      # 单平台采集
-    ALL_PLATFORMS = "all_platforms"            # 一键全平台
-    SINGLE_LINK = "single_link"                # 收一条作品
-    ADD_CREATOR = "add_creator"                # 收录博主
-    BACKFILL = "backfill"                      # 爆款回溯
-    POSTPROCESS = "postprocess"                # ASR 转写（跨平台统一）
-    SYNC = "sync"                              # 飞书同步
-    PREFLIGHT = "preflight"                    # 健康检查
-    MIGRATE = "migrate"                        # V1→V2 数据迁移
+    PLATFORM_COLLECT = "platform_collect"  # 单平台采集
+    ALL_PLATFORMS = "all_platforms"  # 一键全平台
+    SINGLE_LINK = "single_link"  # 收一条作品
+    ADD_CREATOR = "add_creator"  # 收录博主
+    BACKFILL = "backfill"  # 爆款回溯
+    POSTPROCESS = "postprocess"  # ASR 转写（跨平台统一）
+    SYNC = "sync"  # 飞书同步
+    PREFLIGHT = "preflight"  # 健康检查
+    MIGRATE = "migrate"  # V1→V2 数据迁移
 ```
 
 ### 2.2 `TaskDefinition`
@@ -58,6 +59,7 @@ class TaskKind(StrEnum):
 ```python
 from pydantic import BaseModel
 from typing import Callable, Awaitable
+
 
 class TaskDefinition(BaseModel):
     name: str
@@ -90,14 +92,28 @@ class TaskDefinition(BaseModel):
     runner: Callable[["TaskContext", BaseModel], Awaitable["TaskResult"]]
     """实际执行函数。第二个参数是 params_schema 的实例。"""
 
-    model_config = {"arbitrary_types_allowed": True}   # runner 是 Callable
+    model_config = {"arbitrary_types_allowed": True}  # runner 是 Callable
 ```
+
+> **实施期现状（2026-09-23）· `requires` 这一项目前不生效。**
+> 12 个 `TaskDefinition` 都按上面的取值把 `requires` 写好了，但
+> `TaskScheduler._gate_platforms()` 只查两件事：`implemented` 与平台 `enabled`；
+> §4.2 速记里那句 `await self._check_requires(...)` 没有实现。
+>
+> 后果要说准：这**不是**「臆造成功」（AGENTS §1.3）—— 缺依赖时任务照样如实失败，
+> 原因进清单与事件流。代价是**失败发生的位置和形状**：桥没起时 `douyin_collect`
+> 会占住信号量、开一轮浏览器、然后交回几十条逐作品失败，而契约说的是一次 422。
+>
+> 落点（下一轮第一项）：探测逻辑 `tasks/preflight.py` 已经有了，`_check_requires`
+> 应当是"读一次 preflight 的结论"，而不是第二套探测真源 —— 自己再 `shutil.which()`
+> 一遍就是 V1 §7.7 那个双源的老路。
 
 ### 2.3 `TaskContext`
 
 ```python
 from dataclasses import dataclass
 from pathlib import Path
+
 
 @dataclass
 class TaskContext:
@@ -123,7 +139,14 @@ class TaskContext:
     if ctx.cancel_token.is_cancelled: raise TaskCancelled()"""
 
     workdir: Path
-    """任务专属临时目录（data/tmp/<task_id>/），结束时自动清理。"""
+    """任务专属临时目录（`data/tmp/<task_id>/`）。
+
+    终态之后由 `TaskRunner._discard_workdir()` 删掉：整件事丢进 `asyncio.to_thread`
+    （`exists()`/`rmtree` 都是阻塞调用，留在协程里会卡事件循环），删的是**精确路径**、
+    不通配（AGENTS §1 补充条）。**尽力而为**：删除失败只记一条 warning，不把已经跑到
+    终态的任务改写成失败；取消路径上这个 await 可能被打断而留下目录。
+    V2.0 这里只有空目录，V2.1 的 ASR 中间产物才会让它有体积 —— 那时要配一个兜底清扫。
+    """
 
     logger: "structlog.BoundLogger"
     """已绑定 task_id / task_name 字段的 logger。"""
@@ -189,17 +212,18 @@ class Manifest(BaseModel):
     kind: TaskKind
     status: Literal["success", "partial", "failed", "timeout", "cancelled"]
     started_at: datetime
-    ended_at: datetime                        # 终态必填
+    ended_at: datetime  # 终态必填
     summary: dict[str, int | str]
     platforms: list[str]
     failures: list[FailureRecord]
     artifacts: list["ArtifactRef"]
-    config_snapshot: dict[str, Any]           # 任务启动时的配置快照
-    error: str | None = None                  # 任务级错误原文（实施期补，见下）
+    config_snapshot: dict[str, Any]  # 任务启动时的配置快照
+    error: str | None = None  # 任务级错误原文（实施期补，见下）
+
 
 class ArtifactRef(BaseModel):
     kind: Literal["media", "transcript", "metadata", "cover", "manifest"]
-    path: Path                                # 相对 data/
+    path: Path  # 相对 data/
     platform: str | None = None
     video_id: str | None = None
     size_bytes: int | None = None
@@ -231,11 +255,13 @@ async def manifest_writer(task_run: TaskRun, storage: Storage) -> AsyncIterator[
         builder.fail(e)
         raise
     else:
-        builder.succeed()          # ← 这一行有 bug，见下面的实施期修订
+        builder.succeed()  # ← 这一行有 bug，见下面的实施期修订
     finally:
-        manifest = builder.finalize()         # 强制写终态，ended_at 必填
+        manifest = builder.finalize()  # 强制写终态，ended_at 必填
         await storage.manifests.write(manifest)
-        await storage.task_runs.update(task_run.id, status=manifest.status, ended_at=manifest.ended_at)
+        await storage.task_runs.update(
+            task_run.id, status=manifest.status, ended_at=manifest.ended_at
+        )
 ```
 
 > **实施期修订（2026-09-22，Task 4）**，三处，都是"照草图抄会留下 bug"的那种：

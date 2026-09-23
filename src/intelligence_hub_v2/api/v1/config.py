@@ -130,10 +130,11 @@ async def update_platform_config(
         ) from exc
     await run_in_threadpool(manager.reload_platform, platform)
 
-    # 热重载之后把新配置推到注册表 / 依赖袋 / 调度器三份快照（`apply_platform_config`）。
+    # 热重载之后把新配置推到注册表 / 依赖袋 / 调度器三份快照 **和 `platforms` 镜像**。
     # 只 invalidate 适配器实例不够：那三处各握一份 configs，改开关必须同时落到它们，
     # 否则"关掉平台"只改了 manager，采集门控还看着旧值 —— 关了的平台照样能被采。
-    state.apply_platform_config(platform, manager.get_platform(platform))
+    # 走 `refresh_platform_state`（不是 `apply_platform_config`）：镜像那一笔要 await。
+    await state.refresh_platform_state(platform, manager.get_platform(platform))
 
     await state.events.publish(
         Event(

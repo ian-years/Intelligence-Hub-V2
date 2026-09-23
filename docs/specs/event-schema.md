@@ -34,6 +34,7 @@
 ```python
 from enum import StrEnum
 
+
 class EventType(StrEnum):
     # 任务生命周期
     TASK_STARTED = "task.started"
@@ -70,6 +71,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Any, Literal
 
+
 class Event(BaseModel):
     """所有事件的基类。payload 按 type 用 Pydantic 判别联合。"""
 
@@ -93,6 +95,7 @@ class TaskStartedPayload(BaseModel):
     params: dict[str, Any]
     config_snapshot: dict[str, Any]
 
+
 class TaskProgressPayload(BaseModel):
     progress: float = Field(ge=0.0, le=1.0)
     message: str | None = None
@@ -102,11 +105,13 @@ class TaskProgressPayload(BaseModel):
     current_item: str | None = None
     """当前处理的对象（视频标题/博主名）"""
 
+
 class TaskLogPayload(BaseModel):
     level: Literal["debug", "info", "warning", "error"]
     message: str
     logger: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
 
 class TaskFinishedPayload(BaseModel):
     status: Literal["success", "partial"]
@@ -114,12 +119,14 @@ class TaskFinishedPayload(BaseModel):
     manifest_path: str
     duration_seconds: float
 
+
 class TaskFailedPayload(BaseModel):
     status: Literal["failed", "timeout"]
-    error: str                  # 原文，不许吞错
+    error: str  # 原文，不许吞错
     error_kind: str | None = None
     manifest_path: str | None = None
     duration_seconds: float
+
 
 class TaskCancelledPayload(BaseModel):
     reason: str | None = None
@@ -170,9 +177,11 @@ class CreatorAddedPayload(BaseModel):
     platform_id: str
     name: str
 
+
 class CreatorUpdatedPayload(BaseModel):
     creator_id: int
     changed_fields: list[str]
+
 
 class VideoAddedPayload(BaseModel):
     video_id: int
@@ -181,12 +190,15 @@ class VideoAddedPayload(BaseModel):
     title: str
     creator_id: int | None
 
+
 class VideoHiddenPayload(BaseModel):
     video_id: int
     reason: str
 
+
 class VideoUnhiddenPayload(BaseModel):
     video_id: int
+
 
 class TranscriptReadyPayload(BaseModel):
     video_id: int
@@ -201,6 +213,7 @@ class TranscriptReadyPayload(BaseModel):
 
 ```python
 from typing import AsyncIterator, Protocol
+
 
 class EventBus(Protocol):
     async def publish(self, event: Event) -> None:
@@ -235,6 +248,21 @@ class EventBus(Protocol):
         """从 SQLite 回放历史事件（前端刷新页面后用）。"""
 ```
 
+> **实施期修订（2026-09-23，Task 9）· SSE 装配的顺序是「先 `subscribe`、再 `replay`」。**
+>
+> 原先这一节写的是"先 replay 追平、再 subscribe 接活的"。反过来会**漏掉一条事件**：
+> replay 进行的那几十毫秒里任务刚好跑完，那条 `task.finished` 既不在已回放的窗口内、
+> 也没被（尚未建立的）订阅收到 —— 前端就永远停在"还在跑"。订阅先行之后，replay 期间
+> 到达的活事件会先进缓冲，再由后面的实时循环补上。顺带堵了一个洞：原写法在 replay
+> 阶段就被 `aclose()` 时，`finally` 引用的是尚未绑定的订阅句柄。
+>
+> **代价是重叠**：同一条事件可能同时出现在回放段与实时段。V2 服务端不发 `id:` 字段
+> （§5.1），SSE 层不去重，由消费方按 `(task_id, timestamp, type)` 自行收敛。
+> 判据是「漏一条比重一条严重得多」—— 重一条只是日志多一行，漏一条是状态永久错。
+>
+> `replay()` 的签名**没有** `types`：过滤器由装配层在内存里对回放结果补一遍，
+> 使回放段与实时段共用同一套过滤条件（见 §5.1）。
+
 ---
 
 ## 5. SSE 端点
@@ -242,8 +270,12 @@ class EventBus(Protocol):
 ### 5.1 `GET /api/events`
 
 全局事件流。Query 参数：
-- `types`：逗号分隔的 EventType 列表，空 = 全部
+- `types`：逗号分隔的 EventType 列表，空 = 全部。**回放段与实时段共用这一套过滤**
 - `since`：ISO 8601 时间戳，回放该时间之后的事件
+- `task_id`：只看这一次任务。**只有带上它才会回放历史**（`replay()` 按 `task_id` 取，
+  没有 task_id 就没有可回放的键），不带 `task_id` 时 `since` 不起作用 —— 这点必须写明，
+  否则前端会以为传了 `since` 就有追历史的能力
+- 认不出的 `types` 取值被忽略而不是整个流 400（前端与后端版本不一致是常态）
 
 响应：`text/event-stream`
 
@@ -254,17 +286,27 @@ data: {"type":"task.started","task_id":"abc","timestamp":"2026-09-22T12:00:00Z",
 event: task.progress
 data: {"type":"task.progress","task_id":"abc","timestamp":"2026-09-22T12:00:01Z","payload":{"progress":0.1,"message":"枚举博主视频"}}
 
-:keepalive
+:ping - 2026-09-22 12:00:16+00:00
 
 event: task.finished
 data: {"type":"task.finished","task_id":"abc","timestamp":"2026-09-22T12:05:00Z","payload":{...}}
 ```
 
-每 30 秒发一次 `:keepalive` 注释行，防代理超时。
+**保活行**：`sse-starlette` 的 `EventSourceResponse` 默认每 **15 秒**发一行 SSE **注释**
+（`:ping - <UTC 时间戳>`），防代理超时。原文写的是「每 30 秒一次 `:keepalive`」——
+形状对（都是注释行），**文字与周期都不对**，以上面这行为准。
+注释行不会触发 `EventSource.onmessage`，所以前端收不到额外事件，也不用处理它。
+没有传 `ping=` 覆写，也就是说这是库的默认值：换库或升级 `sse-starlette` 时这一条会漂，
+看护点在 `tests/integration/test_api_events.py` 只钉了事件流本身，没钉保活行。
 
 ### 5.2 `GET /api/tasks/runs/{id}/events`
 
 单任务事件流。等价于 `/api/events?task_id={id}`，但路径更直观。
+
+> 两条路由共用同一个装配函数（`api/v1/events.py:stream_events`），参数语义与
+> 回放/保活行为完全一致 —— 不是"一个优化版一个简易版"。
+> （实施期修订 2026-09-23：`/api/events` 原先**不吃** `task_id`，那句"等价于"是假的，
+> 而 §7 的前端示例就是照这句写的。）
 
 ---
 

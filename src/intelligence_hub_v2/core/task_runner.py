@@ -17,6 +17,7 @@ re-raise 让 `manifest_writer` 的 `finally` 落终态清单（V1 §2 契约二�
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -41,6 +42,8 @@ from intelligence_hub_v2.models.task import TaskResult, TaskRunRecord
 from intelligence_hub_v2.tasks.definition import CancelToken, TaskContext, TaskDefinition
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import structlog
 
     from intelligence_hub_v2.core.config import AppConfig
@@ -96,6 +99,19 @@ class TaskRunner:
             config_snapshot=snapshot,
         )
         ctx = self._build_context(definition, task_id, cancel_token, snapshot)
+        try:
+            await self._run_to_terminal(definition, ctx, params, snapshot, task_id)
+        finally:
+            await self._discard_workdir(ctx.workdir)
+
+    async def _run_to_terminal(
+        self,
+        definition: TaskDefinition,
+        ctx: TaskContext,
+        params: BaseModel,
+        snapshot: dict[str, object],
+        task_id: str,
+    ) -> None:
         timeout = resolve_timeout(definition, self._app.scheduler.task_timeout_seconds)
         builder: ManifestBuilder | None = None
         try:
@@ -117,6 +133,25 @@ class TaskRunner:
             await self._publish_terminal(builder, definition=definition, task_id=task_id)
             raise
         await self._publish_terminal(builder, definition=definition, task_id=task_id)
+
+    async def _discard_workdir(self, workdir: Path) -> None:
+        """删掉 `data/tmp/<task_id>/` —— `files.py:338` 与 `task-runner.md §2.3` 承诺的那一步。
+
+        精确路径，不通配（AGENTS §1 补充条）。整件事丢进线程：`exists()` / `rmtree` 都是
+        阻塞调用，留在协程里会卡住事件循环（ruff ASYNC240 就是为这个开着）。
+        删除失败只记 warning：**不能**把一个已经跑到终态的任务改写成失败。
+        取消路径上这个 await 可能被打断而留下目录 —— 留一个空目录比让清单写歪便宜得多。
+        """
+
+        def _drop() -> None:
+            shutil.rmtree(workdir)
+
+        try:
+            await asyncio.to_thread(_drop)
+        except FileNotFoundError:
+            pass  # 已经不在了（重跑过、或人手工清过），不是失败
+        except OSError as exc:
+            self._log.warning("task.workdir_cleanup_failed", path=str(workdir), error=str(exc))
 
     async def _invoke(
         self,

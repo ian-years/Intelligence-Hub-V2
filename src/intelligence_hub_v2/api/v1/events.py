@@ -1,7 +1,8 @@
 """`/api/events` 全局 SSE + 给 `/api/tasks/runs/{id}/events` 复用的事件流装配。
 
-顺序很重要：**先 replay 追平、再 subscribe 接活的**（`event-schema.md §4`）。反过来会漏掉
-"任务已经跑完但前端刚连上"的那批历史 —— 刷新页面看到的日志就会凭空少一段。
+顺序很重要：**先 subscribe、再 replay**（决策与理由见 `event-schema.md §4` 的实施期修订）。
+反过来会漏掉那条"任务刚好在你追历史时跑完了"的 `task.finished` —— 漏一条比重一条严重得多，
+代价是理论上可能与 replay 重叠一条，V2 事件不带 id、SSE 层不去重，可接受。
 
 V2 服务端**不发 `id:` 字段**（事件 id 是 SQLite 自增，前端用不上），重连靠前端带
 `?since=<last_timestamp>` 回来走 replay，而不是 `Last-Event-ID`。
@@ -62,8 +63,12 @@ async def stream_events(
     subscription = state.events.subscribe(types=types, task_id=task_id)
     try:
         if task_id is not None:
+            # 回放段自己过一遍过滤器：`EventBus.replay()` 的签名里没有 types
+            # （`event-schema.md §4`），而"勾了只看 finished 却收到整段 progress"
+            # 是用户能直接看出来的错。
             for stored in await state.events.replay(task_id, since=since):
-                yield _format(stored)
+                if types is None or stored.type in types:
+                    yield _format(stored)
         async for event in subscription:
             yield _format(event)
     finally:
@@ -77,6 +82,7 @@ async def global_events(
     state: AppState = Depends(get_state),
     types: str | None = Query(default=None, description="逗号分隔的 EventType"),
     since: datetime | None = Query(default=None),
+    task_id: str | None = Query(default=None, description="只看这一次任务（带上才回放历史）"),
 ) -> EventSourceResponse:
-    generator = stream_events(state, task_id=None, types=_parse_types(types), since=since)
+    generator = stream_events(state, task_id=task_id, types=_parse_types(types), since=since)
     return EventSourceResponse(generator)

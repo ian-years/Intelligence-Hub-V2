@@ -63,16 +63,33 @@ class AppState:
     """
 
     def apply_platform_config(self, name: str, config: Any) -> None:  # noqa: ANN401 - PlatformConfig
-        """把某平台的热重载后配置推到三个握有快照的运行期组件里。
+        """把某平台的热重载后配置推到三个握有快照的运行期组件里（**内存那三处**）。
 
         `ConfigManager` 是唯一权威源，但 `PlatformRegistry` / `DepsFactory` / `TaskScheduler`
         各自缓存了一份 configs 用于门控与装配 —— 只更新 manager 的话，改完开关"看着生效了
         （/api/tasks 走 manager）但照样能采（scheduler 走自己那份快照）"。一个 reload 必须
-        同时落到这几处，这个方法是那个"同时"的唯一入口。
+        同时落到这几处，这个方法是那三份的唯一入口。
+
+        **不包含 `platforms` 数据库镜像**：那一笔要 await，而本方法被热重载订阅者调用，
+        订阅者跑在线程池里（`reload_platform` 走 `run_in_threadpool`）没有事件循环可用。
+        写平台配置的路径因此必须调 `refresh_platform_state`，不是这个。
         """
         self.registry.update_config(name, config)
         self.deps_factory.update_config(name, config)
         self.scheduler.update_config(name, config)
+
+    async def refresh_platform_state(self, name: str, config: Any) -> None:  # noqa: ANN401
+        """`apply_platform_config` 的完整版：三份内存快照 + `platforms` 运行态镜像。
+
+        镜像不跟着更新的话，`platforms.enabled` 从 PUT 那一刻起就是过期的：
+        `list_all(enabled_only=True)` 会返回一个已经关掉的平台，而前端一按这一列渲染开关
+        就会出现"看着开着、其实采不动"。`upsert` 刻意不动健康三列（与配置无关，
+        由 preflight / 采集写），所以这里顺带写 `config` 也不会让健康灯闪一下"未检查"。
+        """
+        self.apply_platform_config(name, config)
+        await self.storage.platforms.upsert(
+            name, enabled=config.enabled, config=config.model_dump(mode="json")
+        )
 
 
 def get_state(request: Request) -> AppState:

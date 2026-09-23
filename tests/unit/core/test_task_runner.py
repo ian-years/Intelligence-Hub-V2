@@ -59,6 +59,40 @@ def _result_runner(result: TaskResult) -> Callable:
     return runner
 
 
+async def test_execute_removes_the_task_workdir_when_it_ends(storage, files) -> None:
+    """`files.py:338` 与 `task-runner.md §2.3` 都写着「任务结束时整个删掉」，
+    但今天没有任何代码路径删它。V2.0 只留一个空目录，看不出问题；
+    V2.1 的 ASR 中间产物会把它变成没有上限的磁盘增长。"""
+    seen_during_run: list[bool] = []
+
+    async def handler(ctx, params):
+        scratch = ctx.workdir / "asr-stage.wav"
+        scratch.write_bytes(b"stage")
+        seen_during_run.append(scratch.is_file())  # 跑的过程中必须在
+        return TaskResult(status="success")
+
+    await _execute(
+        _runner(storage, files, FakeBus(), FakeRegistry({}, {})), make_definition(handler)
+    )
+
+    assert seen_during_run == [True]
+    assert not files.tmp_dir("t-1").exists()  # 终态之后整个没了
+
+
+async def test_workdir_is_removed_even_when_the_handler_raises(storage, files) -> None:
+    """异常路径同样要清 —— 恰恰是崩掉的那次最容易留下一地中间产物。"""
+
+    async def handler(ctx, params):
+        (ctx.workdir / "half-done.wav").write_bytes(b"x")
+        raise RuntimeError("boom")
+
+    runner = _runner(storage, files, FakeBus(), FakeRegistry({}, {}))
+    with pytest.raises(RuntimeError, match="boom"):
+        await _execute(runner, make_definition(handler))
+
+    assert not files.tmp_dir("t-1").exists()
+
+
 async def test_success_writes_terminal_run_and_events(storage, files) -> None:
     bus = FakeBus()
     runner = _runner(storage, files, bus, FakeRegistry({}, {}))
