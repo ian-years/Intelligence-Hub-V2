@@ -25,7 +25,30 @@ jobs:
   # ---------------------------------------------------------------------------
   # Lint
   # ---------------------------------------------------------------------------
-  lint:
+  lint-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install Python deps
+        run: uv sync --all-extras --all-groups
+      # 以前这个 job 叫 `lint`、内容是 `npm --prefix frontend ci` + `pre-commit`，
+      # 而 `test-backend` 写的是 `needs: lint` —— 前端还没开工（Task 10-13），
+      # 于是 lint 必红 → 后端四道门禁（含唯一一处 90% 覆盖率门禁）在 CI 里一条都跑不到。
+      # 拆成两件事：这里只钉 Python，前端与 pre-commit 各自成 job，互不挡路。
+      - name: ruff check
+        run: uv run ruff check src tests tools
+      - name: ruff format --check
+        run: uv run ruff format --check src tests tools
+      - name: mypy（含 tools/，缺 py.typed 时它一直在跳过那 400 行）
+        run: uv run mypy src tools
+
+  precommit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +64,7 @@ jobs:
       - name: Install Python deps
         run: uv sync --all-extras --all-groups
       - name: Install frontend deps
+        if: hashFiles('frontend/package.json') != ''
         run: npm --prefix frontend ci
       - name: pre-commit (all files)
         run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -50,7 +74,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-backend:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: lint-python
     strategy:
       matrix:
         python-version: ['3.12']
@@ -64,8 +88,14 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: Install
         run: uv sync --all-extras --all-groups
-      - name: Alembic upgrade head
-        run: uv run alembic upgrade head
+      # `data-model.md §5` 说 CI 跑完整可逆往返；以前这里只有 upgrade head 一步，
+      # 于是"downgrade 写坏了"要等到有人手工降版本才发现。
+      - name: Alembic upgrade → downgrade base → upgrade（判据 11）
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run alembic check
       - name: pytest
         run: uv run pytest -m "not real_network and not e2e" --junitxml=pytest-report.xml
       - name: Coverage gate (global ≥80%, platforms/tasks ≥90%)
@@ -88,7 +118,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-frontend:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: lint-python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -179,7 +209,7 @@ jobs:
   # ---------------------------------------------------------------------------
   openapi-snapshot:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: lint-python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -191,7 +221,8 @@ jobs:
       - name: Install
         run: uv sync --all-extras --all-groups
       - name: Dump OpenAPI
-        run: uv run python -c "import json; from intelligence_hub_v2.main import app; print(json.dumps(app.openapi(), indent=2, sort_keys=True))" > /tmp/openapi.json
+        run: |
+          uv run python -c "import json,pathlib; from intelligence_hub_v2.main import create_app; pathlib.Path('/tmp/openapi.json').write_text(json.dumps(create_app().openapi(), indent=2, sort_keys=True, ensure_ascii=False)+chr(10), encoding='utf-8', newline=chr(10))"
       - name: Diff with snapshot
         run: |
           if [ -f docs/specs/openapi-snapshot.json ]; then
@@ -200,5 +231,6 @@ jobs:
               exit 1
             }
           else
-            echo "::warning::docs/specs/openapi-snapshot.json 不存在，跳过比对"
+            echo "::error::docs/specs/openapi-snapshot.json 不存在 —— 这个契约看护没在跑就是没在跑"
+            exit 1
           fi

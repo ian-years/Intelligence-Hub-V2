@@ -12,6 +12,7 @@ PYTHON       := uv run python
 PYTEST       := uv run pytest
 RUFF         := uv run ruff
 MYPY         := uv run mypy
+COVERAGE       := uv run coverage
 ALEMBIC      := uv run alembic
 NPM          := npm --prefix frontend
 PLAYWRIGHT   := uv run playwright
@@ -83,22 +84,29 @@ coverage:  ## 生成 HTML coverage 报告
 	$(PYTEST) --cov=src/intelligence_hub_v2 --cov-report=html --cov-report=term-missing
 	@echo "→ htmlcov/index.html"
 
-ci-local:  ## 本地跑 CI 全套（断网时用）
-	@echo "=== lint ===" && $(MAKE) lint
+# 与 ci.yml 的**后端那一半**对齐：以前这个 target 不跑覆盖率门禁、也不跑 alembic，
+# 于是"make ci-local 全绿"可以和 CI 红同时成立（而验收判据 1 写的就是它）。
+ci-local:  ## 本地跑 CI 的后端全套（前端存在时再带上前端）
+	@echo "=== lint-python ===" && $(MAKE) lint-python
+	@echo "=== alembic 可逆（判据 11）===" && $(MAKE) db-roundtrip
 	@echo "=== test-backend ===" && $(MAKE) test-backend
-	@echo "=== test-frontend ===" && $(MAKE) test-frontend
-	@echo "=== build ===" && $(MAKE) build
+	@echo "=== coverage 门禁（全局 ≥80 / platforms+tasks ≥90）==="
+	$(PYTEST) -m "not real_network and not e2e" -q
+	$(COVERAGE) report --fail-under=80
+	$(COVERAGE) report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*' --fail-under=90
+	@if [ -f frontend/package.json ]; then 	  echo "=== lint-frontend + test-frontend + build ==="; 	  $(MAKE) lint-frontend && $(MAKE) test-frontend && $(MAKE) build; 	else 	  echo "（frontend/package.json 不在 —— Task 10-13 未开工，前端三项跳过）"; 	fi
 	@echo "=== ✅ ci-local 全过 ==="
 
 # ---------------------------------------------------------------------------
 # Lint 与格式化
 # ---------------------------------------------------------------------------
-.PHONY: lint lint-python lint-frontend format format-python format-frontend typecheck
+.PHONY: lint lint-python lint-frontend format format-python format-frontend typecheck db-roundtrip snapshot-api
 lint: lint-python lint-frontend  ## 全 lint
 
-lint-python:  ## ruff check + mypy
+lint-python:  ## ruff check + ruff format --check + mypy
 	$(RUFF) check src tests tools
-	$(MYPY) src
+	$(RUFF) format --check src tests tools
+	$(MYPY) src tools
 
 lint-frontend:  ## eslint + stylelint + tsc
 	$(NPM) run lint
@@ -140,27 +148,54 @@ db-revision:  ## 生成新迁移：make db-revision m="add foo table"
 	$(ALEMBIC) revision --autogenerate -m "$(m)"
 
 # ---------------------------------------------------------------------------
+# 迁移可逆性 与 OpenAPI 快照
+# ---------------------------------------------------------------------------
+# 路径要问 Python 自己要：Git Bash 的 /tmp 是 MSYS 视图，本机原生 Python 打不开它
+# （症状是一句看不懂的 `unable to open database file`）。
+db-roundtrip:  ## alembic upgrade → downgrade base → upgrade → check（验收判据 11，跑在临时库上）
+	@db=$$($(PYTHON) -c "import tempfile,os;print(os.path.join(tempfile.gettempdir(),'ih-roundtrip-$$.sqlite3').replace(os.sep,'/'))"); \n	  export INTELLIGENCE_HUB_STORAGE__SQLITE_URL="sqlite:///$$db"; \n	  $(ALEMBIC) upgrade head && $(ALEMBIC) downgrade base && $(ALEMBIC) upgrade head && $(ALEMBIC) check; \n	  rc=$$?; rm -f "$$db" "$$db"-wal "$$db"-shm; \n	  if [ $$rc -eq 0 ]; then echo "✓ 可逆，且 schema 与 ORM 一致"; fi; exit $$rc
+
+# 必须由 Python 自己写文件，不能吃 shell 重定向：本机 Git Bash 下 `python -c ... > x.json`
+# 会按控制台代码页落盘（实测写出 GBK 字节，回头 json.load 直接 UnicodeDecodeError）。
+# CI 那一步用同一个写法，两边字节才可能一致 —— 快照比对的全部意义就在这。
+# newline=chr(10) 不是洁癖：Windows 上 write_text 会把
+ 写成
+
+，于是本地生成的
+# 快照带 CRLF（pre-commit 的 mixed-line-ending 会来擦），而 CI 在 Linux 上生成的是 LF。
+snapshot-api:  ## 重新生成 docs/specs/openapi-snapshot.json（改了路由就要跟着提交）
+	@$(PYTHON) -c "import json, pathlib; from intelligence_hub_v2.main import create_app; \
+	doc = json.dumps(create_app().openapi(), indent=2, sort_keys=True, ensure_ascii=False); \
+	pathlib.Path('docs/specs/openapi-snapshot.json').write_text(doc + chr(10), encoding='utf-8', newline=chr(10))"
+	@echo "→ docs/specs/openapi-snapshot.json（CI 拿它做契约 diff，漂了就红）"
+
+# ---------------------------------------------------------------------------
 # 数据迁移（V1 → V2）
 # ---------------------------------------------------------------------------
 .PHONY: migrate-v1 migrate-v1-dry migrate-v1-rollback
-migrate-v1:  ## 从 V1 迁移数据（默认 hardlink 媒体）
-	$(PYTHON) tools/migrate_from_v1.py --v1-root "$(V1_ROOT)" --media-strategy hardlink
+# ADR-0010 要求的 `--media-strategy` 与 `--rollback` **还没实现**（脚本只有
+# --v1-root/--config-dir/--dry-run/--no-resume）。以前这里传一个不存在的 flag，
+# 结果是 `error: unrecognized arguments` + exit 2 —— 命令看着在、其实从没跑通过。
+# 媒体现在固定 hardlink→copy；补齐这两个开关（或改 ADR）之前不要把 flag 加回来。
+migrate-v1:  ## 从 V1 迁移数据（媒体 hardlink，跨卷退 copy）
+	$(PYTHON) tools/migrate_from_v1.py --v1-root "$(V1_ROOT)"
 
 migrate-v1-dry:  ## dry-run（不写盘）
 	$(PYTHON) tools/migrate_from_v1.py --v1-root "$(V1_ROOT)" --dry-run
 
-migrate-v1-rollback:  ## 回滚（删 migrated_from_v1=true 的行）
-	$(PYTHON) tools/migrate_from_v1.py --rollback
+# migrate-v1-rollback: 目标先不挂 —— `--rollback` 未实现（ADR-0010 行为契约 6 的欠账）。
+# 需要一个能安全撤销的入口再挂回来；在那之前"回滚"只能手工按 metadata_json 里的
+# migrated_from_v1 标记删，而那件事没有看护，不该做成一键。
 
 # ---------------------------------------------------------------------------
 # CDP 桥
 # ---------------------------------------------------------------------------
 .PHONY: bridge bridge-cookies
-bridge:  ## 起 CDP 桥（默认打开抖音）
-	$(PYTHON) cdp_bridge_server.py --open https://www.douyin.com/
+bridge:  ## 起 CDP 桥（V2 还没移植，见 docs/lessons.md 待办）
+	@echo "✗ cdp_bridge_server.py 还没从 V1 移植进 V2（AGENTS §3 列了它，那是纸面的）。" && false
 
-bridge-cookies:  ## 从桥导出 cookie 到 data/cookies/
-	$(PYTHON) tools/refresh_bridge_cookies.py
+bridge-cookies:  ## 从桥导出 cookie（同上，未移植）
+	@echo "✗ tools/refresh_bridge_cookies.py 还没从 V1 移植进 V2。" && false
 
 # ---------------------------------------------------------------------------
 # 工具

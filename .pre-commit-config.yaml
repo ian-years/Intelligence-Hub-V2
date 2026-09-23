@@ -27,6 +27,10 @@ repos:
         args: ['--fix=lf']
       - id: name-tests-test
         args: ['--pytest-test-first']
+        # 这个模式要求测试目录里每个 .py 都叫 test_*.py —— 于是 `tests/contracts/_doubles.py`
+        # （FakeBridge / FakeYtDlpRunner 那套替身）与 conftest 一直让它红。共享替身模块
+        # 带下划线前缀是 pytest 圈的常规写法，不是命名错误。
+        exclude: '(^|/)(_|conftest\.py)'
 
   # ---------------------------------------------------------------------
   # 敏感信息检测（V1 §1.1 那条「downloads/ 永不入库」的兜底）
@@ -48,13 +52,22 @@ repos:
   # Python: ruff（lint + format）
   # ---------------------------------------------------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.4
+    rev: v0.16.8  # 必须与 pyproject 里解析出来的 ruff 同版本：0.7.x 解析不了
+             # 本项目的 select（TC001 那组在旧版里不是合法 selector），
+             # 于是这两个 hook 一直在 exit 2，而 CI 从来没人跑到那一步。
     hooks:
       - id: ruff
         name: ruff check
         args: [--fix, --exit-non-zero-on-fix]
+        # ruff ≥0.16 会**吃下任意文本文件**并把里面的 ```python 围栏当代码格式化
+        # （实测 0.16.8 对 docs/plans/*.md 报 "1 file reformatted"）。这两个 hook 默认
+        # 只按 `types: [text]` 粗筛，于是"跑一次 pre-commit"会悄悄重排 14 份 ADR/spec
+        # 的代码样例 —— 而 `ruff format src tests tools` 那道本地门禁碰不到它们。
+        # 用 files: 把两者钉死在 Python 文件上，本地与 CI 的处理范围必须一致。
+        files: \.pyi?$
       - id: ruff-format
         name: ruff format
+        files: \.pyi?$
 
   # ---------------------------------------------------------------------
   # Python: mypy（strict）
