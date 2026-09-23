@@ -23,8 +23,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -108,3 +106,14 @@ asr-models/
 *.tar.bz2
 *.zip
 sherpa-onnx-*/
+
+# === 构建产物目录：必须**锚在根**，不能用裸名字 ===
+# 上面那批（`build/` / `dist/` / `share/` …）是 Python 打包模板抄来的，
+# 其中裸 `lib/` 曾把 `frontend/src/lib/` **整个吞掉**：四个源文件（`tokens.ts` /
+# `patterns.ts` / `utils.ts` / `nav.ts`）与 `tokens.spec.ts` 从来没进过 git，
+# 而本机 `npm run build` / vitest 全绿 —— 因为文件在工作树里。
+# 症状是"本地一切正常，别人 clone 下来构建直接断在 `@/lib/tokens` 上"，
+# 且 `git status` 连"这里少了东西"都不告诉你。裸 `dist/` 同理但恰好是我们想要的
+# （`frontend/dist` 也该忽略），所以只给 lib/ 加锚点，并在前端留一份自己的 .gitignore。
+/lib/
+/lib64/
