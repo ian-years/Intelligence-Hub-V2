@@ -22,8 +22,8 @@ function withFetch(response: Response): { calls: string[] } {
 describe("api client", () => {
   it("拼 /api 前缀，并丢掉空参数", async () => {
     const spy = withFetch(jsonResponse(200, []));
-    await api.get("/videos", { platform: "douyin", search: "", page: undefined, hidden: false });
-    expect(spy.calls[0]).toBe("/api/videos?platform=douyin&hidden=false");
+    await api.get("/videos", { platform: "douyin", search: "", page: undefined, hidden: "all" });
+    expect(spy.calls[0]).toBe("/api/videos?platform=douyin&hidden=all");
   });
 
   it("字符串 detail 原样交出去", async () => {

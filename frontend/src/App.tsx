@@ -5,14 +5,17 @@ import { Layout } from "@/components/shared/Layout";
 import { PageShell } from "@/components/shared/PageShell";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { TokenSheet } from "@/dev/TokenSheet";
+import { Dashboard } from "@/pages/Dashboard";
+import { Feed } from "@/pages/Feed";
 import { Preflight } from "@/pages/Preflight";
 import { Settings } from "@/pages/Settings";
 import type { PatternName } from "@/lib/patterns";
 
-/** Task 12 / 13 未开工的路由渲染这一块，而不是空白页。
+/** Task 13 未开工的路由渲染这一块，而不是空白页。
  *
  * 空白页会被读成"这个平台没有数据"；写清楚"这一页要等哪个任务"才是真话。
- * Task 12-13 落地时**逐个删掉**这里的条目：留着就是死代码。 */
+ * Task 13 落地时**逐个删掉**这里的条目：留着就是死代码。
+ * `nav.ts` 的 `built` 旗标与这张路由表由 `src/app.spec.tsx` 逐条核（两边漂了就红）。 */
 function PageNotBuilt({
   pattern,
   label,
@@ -39,11 +42,8 @@ export default function App(): JSX.Element {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route index element={<PageNotBuilt pattern="dots" label="总览" task="Task 12" />} />
-        <Route
-          path="feed"
-          element={<PageNotBuilt pattern="stripes" label="作品流" task="Task 12" />}
-        />
+        <Route index element={<Dashboard />} />
+        <Route path="feed" element={<Feed />} />
         <Route
           path="video/:id"
           element={<PageNotBuilt pattern="waves" label="作品详情" task="Task 13" />}

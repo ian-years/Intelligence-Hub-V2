@@ -2,22 +2,26 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api, type Schemas } from "../client";
 import { keys } from "../keys";
+import type { operations } from "../schema";
 
 export type Video = Schemas["Video"];
 export type PagedVideos = Schemas["PagedResult_Video_"];
 export type SingleLinkParams = Schemas["SingleLinkParams"];
 
+/** 查询表**从快照派生**，不手写。手写过一次：`hidden?: boolean`，注释还写着
+ * "`true` 只看已隐藏"，而后端收的是 `visible | hidden | all`（`Literal` 查询参数）。
+ * 症状是作品流一改筛选就 422 —— 而 `client.spec.ts` 与 `hooks.spec.tsx` 当时把
+ * `hidden=false` 当成期望 URL 钉住了：断言的是前端自己的错，所以全绿。
+ * 现在这份名单由 `schema.spec.ts` 与快照逐字核。 */
+export type VideoFilter = NonNullable<
+  operations["list_videos_api_videos_get"]["parameters"]["query"]
+>;
+
+/** 界面上"可见性"这个选择器能给的全部取值。 */
+export const VIDEO_HIDDEN_MODES = ["visible", "hidden", "all"] as const;
+export type VideoHiddenMode = (typeof VIDEO_HIDDEN_MODES)[number];
+
 // 用 `type` 而不是 `interface`：只有 type alias 才有隐式索引签名（`Query` 要的是那个）。
-export type VideoFilter = {
-  platform?: string;
-  creator_id?: number;
-  since?: string;
-  search?: string;
-  /** 后端语义：`hidden=true` 只看已隐藏，`false`/省略看未隐藏。 */
-  hidden?: boolean;
-  page?: number;
-  size?: number;
-};
 
 /** `filter` 整个进 queryKey：漏一个键就是"改了筛选但界面不重取"，
  * 那种 bug 看起来像缓存坏了。 */

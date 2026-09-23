@@ -47,3 +47,26 @@ export function formatPercent(ratio: number | null | undefined): string {
   if (ratio === null || ratio === undefined) return "—";
   return `${(ratio * 100).toFixed(0)}%`;
 }
+
+/** 秒 → `m:ss`，一小时以上 → `h:mm:ss`。
+ *
+ * `duration_seconds` 在契约里是 **float**（适配器给的是探测出来的秒数），
+ * 所以先四舍五入到整秒再拆位。`null`（没探到）与 `0`（真的是 0 秒）必须分开：
+ * 挤成同一个符号就等于把"采集器没拿到这条"伪装成"这条本来就是空的"。 */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  if (!Number.isFinite(seconds) || seconds < 0) return String(seconds);
+  const total = Math.round(seconds);
+  const pad = (part: number): string => String(part).padStart(2, "0");
+  if (total < 3600) return `${String(Math.floor(total / 60))}:${pad(total % 60)}`;
+  return [String(Math.floor(total / 3600)), pad(Math.floor(total / 60) % 60), pad(total % 60)].join(
+    ":",
+  );
+}
+
+/** 计数（播放 / 点赞）→ 千分位。同 `formatDuration`：0 与 null 不是一回事。 */
+export function formatCount(count: number | null | undefined): string {
+  if (count === null || count === undefined) return "—";
+  if (!Number.isFinite(count) || count < 0) return String(count);
+  return new Intl.NumberFormat("zh-CN").format(count);
+}

@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { RUN_STATUS_META } from "@/lib/run-status";
+
+import { VIDEO_HIDDEN_MODES } from "./hooks/useVideos";
+
 /**
  * `src/api/schema.d.ts` 是 `docs/specs/openapi-snapshot.json` 的投影
  * （`npm run gen:api`），而快照本身由 CI 与真实 `create_app().openapi()` 比对。
@@ -17,6 +21,7 @@ const read = (rel: string): string => readFileSync(new URL(rel, repoRoot), "utf8
 
 const snapshot = JSON.parse(read("docs/specs/openapi-snapshot.json")) as {
   paths: Record<string, Record<string, unknown>>;
+  components: { schemas: Record<string, { properties?: Record<string, { enum?: unknown[] }> }> };
 };
 const generated = read("frontend/src/api/schema.d.ts");
 
@@ -49,6 +54,73 @@ describe("src/api/schema.d.ts ↔ openapi 快照", () => {
         expect(["get", "put", "post", "patch", "delete"]).toContain(method);
       }
     }
+  });
+});
+
+/** 带 enum 的查询参数 → 前端为此维护的那份名单。
+ * 键的形状是 `路径 方法 参数名`。 */
+const ENUM_LISTS: Record<string, readonly string[]> = {
+  "/api/videos get hidden": VIDEO_HIDDEN_MODES,
+};
+
+interface SnapshotParam {
+  name: string;
+  in: string;
+  schema?: { enum?: unknown[] };
+}
+
+/** 扫快照，收所有"查询参数且带 enum"的三元组。 */
+function enumQueryParams(): Map<string, readonly string[]> {
+  const found = new Map<string, readonly string[]>();
+  for (const [path, item] of Object.entries(snapshot.paths) as [
+    string,
+    Record<string, { parameters?: SnapshotParam[] }>,
+  ][]) {
+    for (const [method, op] of Object.entries(item)) {
+      for (const param of op?.parameters ?? []) {
+        if (param.in === "query" && Array.isArray(param.schema?.enum)) {
+          found.set(`${path} ${method} ${param.name}`, (param.schema?.enum ?? []) as string[]);
+        }
+      }
+    }
+  }
+  return found;
+}
+
+describe("查询参数里的 enum 与前端名单", () => {
+  const fromSnapshot = enumQueryParams();
+
+  it("快照里确实有带 enum 的查询参数（否则下面两条是空转）", () => {
+    expect(fromSnapshot.size).toBeGreaterThan(0);
+  });
+
+  it("每一个 enum 参数，前端都有一份**逐字相等**的名单", () => {
+    for (const [key, values] of fromSnapshot) {
+      const mine = ENUM_LISTS[key];
+      expect(mine, `前端没有为 ${key} 维护名单，界面会发出契约外的值（422）`).toBeDefined();
+      expect([...(mine ?? [])].sort(), key).toEqual([...values].sort());
+    }
+  });
+
+  it("前端名单里没有快照之外的（后端删掉的 enum 不许留在界面上）", () => {
+    const stale = Object.keys(ENUM_LISTS).filter((key) => !fromSnapshot.has(key));
+    expect(stale).toEqual([]);
+  });
+});
+
+/** 任务运行状态是时间线唯一的结论来源。后端加一个 `status` 取值而 `RUN_STATUS_META`
+ *  没跟上时，组件那边只保证"原样打出来不崩"（见 `task-timeline.spec.tsx`），
+ *  但没颜色、没中文标签的状态摆在那里就是让人猜 —— 所以这一环在契约上钉住。 */
+describe("TaskRunRecord.status 的枚举与界面状态表", () => {
+  const statuses = (snapshot.components.schemas["TaskRunRecord"]?.properties?.["status"]?.enum ??
+    []) as string[];
+
+  it("快照里确实声明了这个枚举（否则下面那条是空转）", () => {
+    expect(statuses.length).toBeGreaterThan(0);
+  });
+
+  it("RUN_STATUS_META 的键与枚举**双向**相等：少一个=新状态没颜色，多一个=留着没人写的状态", () => {
+    expect(Object.keys(RUN_STATUS_META).sort()).toEqual([...statuses].sort());
   });
 });
 

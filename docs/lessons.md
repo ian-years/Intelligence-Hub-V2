@@ -1574,6 +1574,116 @@ pytest 的模块收集器看的是**模块命名空间里以 `Test` 开头的类
 
 ---
 
+#### 经验 38 · `cn()` 会把落在 Tailwind 命名空间里的自定义工具类吃掉（Task 12 总览）
+
+**现象**：给总览页写用例时 `getAllByText("已启用")` 报"找到多个元素"，顺手把 DOM 打出来看，
+发现状态牌是 `<span class="border-ink-black px-3 py-1 text-body-sm bg-grey-mist">` ——
+**`border-memphis` 不见了**，而 JSX 源码里它明明写在同一串里。
+推回去量了一遍：
+
+```
+cn("border-memphis border-ink-black")  →  "border-ink-black"
+cn("memphis-border border-ink-black")  →  "memphis-border border-ink-black"
+```
+
+也就是说 §3 那条"3px 黑边"在**每一个同时写了 `border-<色>` 的地方都没生效**：
+边框宽度回落到默认值，只剩颜色。已上线的 Preflight 状态牌、Sidebar 导航块、
+Settings 表单组全中。没有任何一关报红 —— 类名字符串是产出的 class，对着代码看不出少东西。
+
+**根因**：`cn = clsx + tailwind-merge`。merge 那一半按**类组**去重，
+而 tailwind-merge 把任何 `border-<任意值>` 都归进 border 那一组。
+我们自己写在 `@layer utilities` 里的 `.border-memphis`（一条 border-style + border-width）
+于是被当成和 `border-ink-black` 同类，后写的赢，前一条被删。
+
+**为什么会写成这样**：起名时顺着"它是一条 border 工具类"的直觉走，
+而 Tailwind 的命名空间不是可以随便借用的前缀 —— 借了就进入它的冲突表。
+`.memphis-card` / `-btn` / `-badge` 那些没事，正是因为它们带自家前缀，不在任何组里。
+
+**解法**：改名 `memphis-border`（和同族一致）。`.border-badge` 一并删：
+零使用 + 同一个坑，留着只是等下一个人踩。
+
+**判据**：**自定义工具类不许落在 Tailwind 有归属的前缀下**
+（`border-`、`text-`、`shadow-`、`bg-`、`ring-`、`divide-`…）。
+要么用 `memphis-` 这种自家前缀，要么走 Tailwind 的 `@utility` 显式注册让 merge 也认得。
+推论：**只要 `cn()` 参与拼 class，"这一串最后剩什么"就得有用例**，
+因为它不是拼接函数而是**带规则的删减函数**。
+
+**看护**：`src/lib/utils.spec.ts` 三条 ——
+① 两条工具类同时给都要留下；② 反向证据那条钉住 `border-memphis` 确实会被吃掉
+（改名原因不许被忘掉，否则下一个人又顺着直觉起个 Tailwind 前缀名）；
+③ 纪律：遍历 `globals.css` 的 `@layer utilities` / `@layer components`（剥掉注释后扫，
+否则这条文档自己提到的旧名字会被当成类名），每一个自定义类名都必须带 `memphis-` 前缀，
+并且前置断言"至少扫得到 5 个"，免得判据空转。
+
+---
+
+#### 经验 39 · 手写的查询参数类型与契约的 enum 漂了，两处用例还把它钉成绿的（Task 12 作品流）
+
+**现象**：给作品流做"可见性"筛选时，照 `VideoFilter.hidden?: boolean` 写实现，
+注释还是上一轮自己写的"`true` 只看已隐藏"。回头对着 OpenAPI 快照核了一遍，
+后端那个参数是 `Literal["visible","hidden","all"]` ——
+`useVideos({hidden:false})` 发出去的是 `?hidden=false`，**FastAPI 直接 422**。
+
+更难受的是：`client.spec.ts` 与 `hooks.spec.tsx` 里各有一条断言写着
+`/api/videos?platform=douyin&hidden=false`，**全绿**。
+它们钉的是"前端自己发出的字符串"，从没跟契约比过 ——
+于是错的形状有一个正在工作的守卫，看起来像被验证过的行为。
+
+**根因**：`VideoFilter` 是**手写**的 TS 类型，而生成物里
+`operations["list_videos_api_videos_get"]["parameters"]["query"]` 早就带着正确形状
+（`hidden?: "visible" | "hidden" | "all"`）。手抄一次，就有一次抄错的机会；
+而测试又只跟自己对齐时，错误会被双向确认。
+（同族第一次：Task 11 的 `tracking` vs `is_tracking` —— 那次是靠**写用例时去读快照**发现的，
+这次是先写了实现，靠"要做这个筛选了"才回头发现。）
+
+**解法**：① `VideoFilter` 改为从快照派生，不再手写；
+② 界面要用的取值导出成 `VIDEO_HIDDEN_MODES`，并加一条用例把它与快照里那个 enum
+**双向**比相等 —— 名单少一项红，快照删了一项而名单还留着也红；
+③ 改完那两处期望 URL，并补一条"换 `hidden` 档位会重取"的用例
+（钉的是"两个档位发的是两个不同 URL"，不是某个具体字符串）。
+
+**判据**：凡被后端当 enum 校验的查询参数，前端必须有一条"名单 = 快照 enum"的双向看护；
+断言请求 URL 时，钉的是**契约允许的值**而不是"我发出去的值"。
+推论：能从生成物派生的类型不要手写第二份 —— 手写的类型不是契约，是契约的抄本。
+
+**看护**：`src/api/schema.spec.ts` 的"查询参数里的 enum 与前端名单"三条
+（含"快照里确实有带 enum 的查询参数"这条防空转前置），
+`src/api/hooks.spec.tsx` 与 `src/api/client.spec.ts` 各一条改成了合法档位。
+
+---
+
+#### 经验 40 · 注释说"由 preflight / 采集任务写"，而 `set_health` 在生产里零调用方（Task 12 总览）
+
+**现象**：总览页按计划要做"四平台健康卡片"。翻数据来源时发现
+`GET /api/platforms/{p}/config` 回的 `health` 取自 `platforms` 表的
+`health_status` / `health_checked_at`，而 `storage/repositories/platforms.py:93` 的注释写着
+"健康状态…由 preflight / 采集任务写"。grep 调用方：
+
+```
+set_health(  →  只有 tests/ 里 8 处 + src 里的定义本身
+```
+
+生产代码没有任何人写这三列。真跑起来健康灯会**永远**显示"从没检查过" ——
+一个字段、一个 CHECK 约束、一个读路径、一段承诺，凑成一个看起来已经工作的功能。
+
+**根因**：仓储层按"将来有人写"的形状先建了，handler 落地时只把 healthcheck 的结果
+放进 preflight 的 `summary`（那几个拼出来的字符串），没回写镜像。
+契约先于生产者存在，而注释描述的是意图不是现状。
+
+**解法**（这一轮做了的部分）：总览页**不画健康灯**。它画的是配置里的事实 ——
+`enabled` 与 `implemented`（这两个 `/api/platforms` 真的给），
+并把"这一页不替你探测，要看连不连得上就去预检页"写在页面上。
+真要修得让 preflight 探测完回写镜像，而那就意味着"预检"不再是纯只读操作
+（它会写库、状态会跨重启留下）—— 这是一个要过 ADR 的决定，不是顺手改。
+
+**判据**：读到"X 由 Y 写 / Y 负责更新"这类句子时，**grep 一遍调用方**。
+测试里有调用方 ≠ 生产里有。本仓库同族第三次：
+`§7.19` 的 `prepare_runtime_environment`（从未实现）、`cdp_bridge.py:85` 承诺的回环校验（当时不存在）。
+**看护**：这一轮**没有**看护，这正是把它写下来的原因。
+待办落在 `ROADMAP.md`「还欠的」：preflight 回写 + 一条"探测之后镜像列非 NULL"的集成用例 + 撤掉那句注释或改成实话。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

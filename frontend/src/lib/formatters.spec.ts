@@ -4,7 +4,15 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { formatMiB, formatPercent, formatTime, parseNames, parsePairs } from "./formatters";
+import {
+  formatCount,
+  formatDuration,
+  formatMiB,
+  formatPercent,
+  formatTime,
+  parseNames,
+  parsePairs,
+} from "./formatters";
 
 /**
  * `parsePairs` / `parseNames` 拆的是**后端拼出来的字符串**
@@ -67,5 +75,65 @@ describe("时间 / 字节 / 百分比", () => {
     expect(formatPercent(0.5)).toBe("50%");
     expect(formatPercent(null)).toBe("—");
     expect(formatPercent(1.4)).toBe("140%");
+  });
+});
+
+/**
+ * `duration_seconds` 在契约里是 **float**（适配器给的秒数带小数），
+ * 而 `view_count` 是 `int | null`。两个都要能把"真的没有"（null）和
+ * "真的是 0"（0 秒的视频、0 播放）分开显示 —— 挤成同一个 `—` 就等于
+ * 把"采集器没拿到这条"伪装成"这条本来就是空的"。
+ */
+describe("formatDuration（秒 → m:ss / h:mm:ss）", () => {
+  it("形状：一分钟以内仍是 m:ss，一小时以上加时", () => {
+    expect(formatDuration(0)).toBe("0:00");
+    expect(formatDuration(59)).toBe("0:59");
+    expect(formatDuration(60)).toBe("1:00");
+    expect(formatDuration(3599)).toBe("59:59");
+    expect(formatDuration(3600)).toBe("1:00:00");
+    expect(formatDuration(7325)).toBe("2:02:05");
+  });
+
+  it("秒位永远是两位，且拆回去等于原值（不靠逐个样例）", () => {
+    for (const seconds of [0, 1, 9, 61, 600, 3599, 3600, 86399, 360000]) {
+      const shown = formatDuration(seconds);
+      // 每一位都必须是数字、末两段必须是两位：`1:5` 这种在表格里能蒙过去
+      expect(/^\d+(:\d{2}){1,2}$/.test(shown), `${shown} 形状不对`).toBe(true);
+      const rebuilt = shown.split(":").reduce((acc, part) => acc * 60 + Number(part), 0);
+      expect(rebuilt, `${shown} 不是 ${String(seconds)} 秒`).toBe(seconds);
+    }
+  });
+
+  it("小数秒四舍五入到整秒（float 契约），0 与 null 分得开", () => {
+    expect(formatDuration(90.4)).toBe("1:30");
+    expect(formatDuration(90.6)).toBe("1:31");
+    expect(formatDuration(0)).toBe("0:00");
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(undefined)).toBe("—");
+  });
+
+  it("负数与 NaN 原样交出去，不夹成 0:00", () => {
+    expect(formatDuration(-5)).toBe("-5");
+    expect(formatDuration(Number.NaN)).toBe("NaN");
+  });
+});
+
+describe("formatCount（播放 / 点赞数）", () => {
+  it("千分位分组，但拆掉分隔符就是原数字", () => {
+    for (const n of [0, 7, 999, 1000, 12345, 1234567]) {
+      expect(formatCount(n).replace(/,/g, "")).toBe(String(n));
+    }
+    expect(formatCount(12345)).toBe("12,345");
+  });
+
+  it("0 是「真的有 0 条」，null 才是「没拿到」", () => {
+    expect(formatCount(0)).toBe("0");
+    expect(formatCount(null)).toBe("—");
+    expect(formatCount(undefined)).toBe("—");
+  });
+
+  it("负数与 NaN 原样交出去", () => {
+    expect(formatCount(-3)).toBe("-3");
+    expect(formatCount(Number.NaN)).toBe("NaN");
   });
 });

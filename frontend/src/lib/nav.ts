@@ -13,8 +13,8 @@ export interface NavItem {
  * 声明 —— 中央再存一份"路由 → 图案"就是第二处真相，而且必然漏掉 `/video/:id` 这种
  * 不在侧栏里的路由。 */
 export const NAV_ITEMS: readonly NavItem[] = [
-  { to: "/", label: "总览", built: false },
-  { to: "/feed", label: "作品流", built: false },
+  { to: "/", label: "总览", built: true },
+  { to: "/feed", label: "作品流", built: true },
   { to: "/creators", label: "博主", built: false },
   { to: "/tasks", label: "任务", built: false },
   { to: "/preflight", label: "预检", built: true },

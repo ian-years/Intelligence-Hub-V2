@@ -80,11 +80,22 @@ describe("查询钩子发出去的 URL 就是契约里那一条", () => {
 
     reply({ items: [], page: 2, size: 20, total: 0 });
     const v = renderHook(
-      () => useVideos({ platform: "bilibili", hidden: false, page: 2, size: 20, search: "" }),
+      () => useVideos({ platform: "bilibili", hidden: "hidden", page: 2, size: 20, search: "" }),
       { wrapper },
     );
     await waitFor(() => expect(v.result.current.isSuccess).toBe(true));
-    expect(seen.at(-1)).toBe("GET /api/videos?platform=bilibili&hidden=false&page=2&size=20");
+    expect(seen.at(-1)).toBe("GET /api/videos?platform=bilibili&hidden=hidden&page=2&size=20");
+  });
+
+  it("作品流的筛选进 queryKey：换 hidden 档位会重取，不会被缓存吃掉", async () => {
+    reply({ items: [], page: 1, size: 20, total: 0 });
+    const visible = renderHook(() => useVideos({ hidden: "visible" }), { wrapper });
+    await waitFor(() => expect(visible.result.current.isSuccess).toBe(true));
+    const hiddenOnly = renderHook(() => useVideos({ hidden: "hidden" }), { wrapper });
+    await waitFor(() => expect(hiddenOnly.result.current.isSuccess).toBe(true));
+    // 后端对这两个档位给的是**不同**的行集（墓碑只在 hidden 档出现），
+    // 发成同一个 URL 的话"已隐藏"那一档看起来永远是空的。
+    expect(seen).toEqual(["GET /api/videos?hidden=visible", "GET /api/videos?hidden=hidden"]);
   });
 
   it("schema 端点在平台名空着时不发请求", async () => {

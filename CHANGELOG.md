@@ -124,6 +124,33 @@
   - 整组隐藏的折叠组不渲染（§4 的实现期约定），部分隐藏的组照常出现并只留能用的；
   - `ui:order` 生效；`Path | None` 那种只有 `anyOf` 没有 `type` 的落到文本框而不是不渲染；
   - 空文本框送 `null` 不送 `""`，数字框送数字不送字符串（`docs/lessons.md` 经验 37）
+- **Task 12 收尾 · Dashboard + Feed**（四页到此全落，前端 94 → **164 passed**）：
+  - `components/shared/QueryState.tsx` —— "读数据的界面"那四态（挂起 / 读不到 / 还没有结论 /
+    有数据）的唯一出口，四态**互斥**这条纪律从 Preflight 一处变成五页共用；
+    `VideoRow` / `TaskTimeline` 同为总览与作品流共用，"运行状态 → 文案 + 色"搬到
+    `lib/run-status.ts`（那张表是契约的投影，不该为了取它把 React 拉进 node 环境的用例）
+  - **作品流**：虚拟滚动只画视口内 + overscan（60 条数据不画 60 个 DOM 节点，这条有用例）；
+    筛选**点"查询"才发请求**（每敲一个字一个新 queryKey 就是对全库做一次 LIKE）；
+    换筛选条件在同一次提交里退回第 1 页（不用 effect 补）；`placeholderData` 带着上一页数据进入
+    新一轮请求时明说"显示的是上一页的结果"；隐藏＝打墓碑，在"只看已隐藏"那一档可以取消
+  - **总览**：四个区块各自过 `QueryState`，一个端点坏了不牵连别的区块；平台卡片画的是
+    **配置里的事实**（`enabled` / `implemented` 三种状态分开给），
+    健康灯刻意**不画** —— `platforms.health_status` 在生产里没有任何写者（见下面的欠账）
+  - `src/test/fixtures.ts` 是**工厂**不是三份写死的数组（条数由用例自己数回去）；
+    `src/test/setup.ts` 补 `ResizeObserver` 桩：jsdom 没有它时 TanStack Virtual
+    在量到容器尺寸前一条都不画，症状是"列表永远空白"，看起来像组件坏了
+- **修掉两处"看得见、传得进来、什么都不做"**（都是这一轮做作品流/总览时撞出来的）：
+  - `VideoFilter.hidden` 手写成 `boolean`，后端那个查询参数是 `visible|hidden|all` →
+    作品流一改筛选就 422。而 `client.spec.ts` 与 `hooks.spec.tsx` **两处用例把
+    `hidden=false` 当期望 URL 钉住了**（钉的是"前端自己发出的字符串"，从没跟契约比过）。
+    现在类型从快照 `operations[...]` 派生，界面那份取值清单 `VIDEO_HIDDEN_MODES`
+    与快照 enum **双向**核 → 经验 39
+  - `cn()` 把 `border-memphis` 当同类冲突**吃掉**（`cn("border-memphis border-ink-black")`
+    实测只剩 `"border-ink-black"`）：tailwind-merge 把任何 `border-<任意值>` 归进同一组，
+    于是 §3 的"3px 黑边"在 Preflight 状态牌、Sidebar 导航块、Settings 表单组上**从未生效**。
+    改名 `memphis-border`（与 `memphis-card/-btn/-badge/…` 同族，不进 Tailwind 命名空间），
+    零使用且同坑的 `.border-badge` 一并删；纪律用例遍历 `globals.css` 的 layer，
+    另留一条"反向证据"钉住改名原因 → 经验 38
 - **契约基类补到 `contract-tests.md §4` 承诺的形状**：通用用例 7 条 → 11 条
   （能力声明快照、能力与配置三个镜像字段一致、列表流式产出的形状与 `limit` 是上限、
   媒体产物说得出走了哪条路 + 兜底必留原文），钩子 2 个 → 6 个且全部 `@abstractmethod`；
