@@ -15,18 +15,28 @@ from intelligence_hub_v2.platforms.base import PlatformConfig
 
 
 class BilibiliAdvanced(BaseModel):
-    """B站高级参数。前端默认折叠（`ui:advanced`）。"""
+    """B站高级参数。前端默认折叠（`ui:advanced`）。
+
+    这一组里**有读取路径的**只有 `request_timeout_seconds`、`dash_split_handling`、
+    `search_fallback_node_playwright`；另外三个（`require_login_for_high_quality` /
+    `retry_max` / `retry_backoff_seconds`）V2.0 没人读，逐个标了 `ui:hidden`
+    （判据与理由见 ADR-0012）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    require_login_for_high_quality: bool = True
-    """是否要求登录档才收高画质。
-
-    V1 §7.15 实测：同一条 `BV1cSec6tEux`，带导出 cookie 回 21 条视频轨/最高
-    1772p@59.94，匿名只有 15 条/886p@29.97；同一条 `BV1ZUYf6JEfo`（av1 1080x1920）
-    登录档视频轨 34.6 MB + 音轨 2.5 MB，匿名档整片合并才 18.6 MB，码率差一倍。
-    所以档位差别不是"能不能下"，是**画质**。
-    """
+    require_login_for_high_quality: bool = Field(
+        default=True,
+        description="是否要求登录档才收高画质。**V2.0 未实现**：画质实际由 cookie 阶梯"
+        "走到哪一档决定（真源 `capabilities.cookie_variants`），不受本字段控制。"
+        "为什么这件事值得配：V1 §7.15 实测同一条 `BV1cSec6tEux`，带导出 cookie 回"
+        " 21 条视频轨/最高 1772p@59.94，匿名只有 15 条/886p@29.97；`BV1ZUYf6JEfo`"
+        "（av1 1080x1920）登录档视频轨 34.6 MB + 音轨 2.5 MB，匿名档整片合并才"
+        " 18.6 MB —— 档位差别不是「能不能下」，是**画质**。"
+        "真正实现后的语义应是：拿不到登录档时**如实失败**，"
+        "而不是静默退到匿名档交一批糊的。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
     dash_split_handling: Literal["auto", "merge", "keep_split"] = "auto"
     """未合并 DASH 分片怎么处理（V1 §7.21）。
@@ -40,8 +50,19 @@ class BilibiliAdvanced(BaseModel):
     `Output file does not contain any stream`。
     """
 
-    retry_max: int = Field(default=3, ge=0)
-    retry_backoff_seconds: float = Field(default=2.0, ge=0.0)
+    retry_max: int = Field(
+        default=3,
+        ge=0,
+        description="单条视频的重试次数。**V2.0 未实现**：媒体下载失败即按原样失败，"
+        "本字段没有效果（与抖音同一批欠账，见 ADR-0012）。",
+        json_schema_extra={"ui:hidden": True},
+    )
+    retry_backoff_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="重试退避基数（指数退避）。**V2.0 未实现**，与 retry_max 同一批。",
+        json_schema_extra={"ui:hidden": True},
+    )
     request_timeout_seconds: int = Field(default=30, ge=1)
 
     search_fallback_node_playwright: bool = False
@@ -81,12 +102,29 @@ class BilibiliConfig(PlatformConfig):
 
     display_name: str = "B站"
 
-    media_strategy: Literal["yt_dlp"] = "yt_dlp"
-    list_strategy: Literal["yt_dlp_flat", "external_manifest"] = "yt_dlp_flat"
-    """`external_manifest` 是 V1 `bilibili-download` 技能那条路：
-    吃一份外部浏览器清单（JSON），命中清单的博主跳过内置枚举。"""
+    media_strategy: Literal["yt_dlp"] = Field(
+        default="yt_dlp",
+        description="媒体下载策略。只有一个合法取值，因此它是文档不是配置：真源是 "
+        "`BilibiliAdapter.capabilities.media_strategy`（ADR-0011）。"
+        "改这个值不产生任何效果。",
+        json_schema_extra={"ui:hidden": True},
+    )
+    list_strategy: Literal["yt_dlp_flat", "external_manifest"] = Field(
+        default="yt_dlp_flat",
+        description="列表枚举策略。`external_manifest` 是 V1 `bilibili-download` 技能那条路"
+        "（吃一份外部浏览器清单 JSON）。**V2.0 未按本字段分支**："
+        "`_enumerate` 实际是按「`external_browser_manifest_path` 有没有给、"
+        "给了但没命中就回落」选的，所以这里写 `yt_dlp_flat` 也照样会用外部清单。"
+        "真源见 `capabilities.list_strategy`（ADR-0011/0012）。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
-    use_cdp_bridge: bool = False
+    use_cdp_bridge: bool = Field(
+        default=False,
+        description="是否走 CDP 桥。**由 capabilities.needs_browser 决定，不受本字段控制**"
+        "（装配点 `core/task_registry.py`）。B站 不需要桥，勾上也不会去连。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
     ytdlp_cookies_from_browser: str | None = "chrome"
     """`--cookies-from-browser` 的目标浏览器。置空即跳过浏览器档。
@@ -108,7 +146,16 @@ class BilibiliConfig(PlatformConfig):
     采集链路跑的必须是**仓库那份**。
     """
 
-    prefer_subtitles: bool = True
-    """有字幕优先字幕，没有再回落 ASR。省一整轮转写时间。"""
+    prefer_subtitles: bool = Field(
+        default=True,
+        description="有字幕优先字幕，没有再回落 ASR（省一整轮转写时间）。"
+        "**V2.0 未实现这个「回落 ASR」**：本地 ASR 在 V2.1，今天 postprocess 只有字幕轨"
+        "一条路，所以两个取值行为相同。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
-    advanced: BilibiliAdvanced = Field(default_factory=BilibiliAdvanced)
+    advanced: BilibiliAdvanced = Field(
+        default_factory=BilibiliAdvanced,
+        description="高级参数，前端折叠渲染（`ui:advanced`）。",
+        json_schema_extra={"ui:advanced": True},
+    )

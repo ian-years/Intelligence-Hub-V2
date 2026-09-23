@@ -14,20 +14,47 @@ from intelligence_hub_v2.platforms.base import PlatformConfig
 
 
 class DouyinAdvanced(BaseModel):
-    """抖音高级参数。前端默认折叠（`ui:advanced`）。"""
+    """抖音高级参数。前端默认折叠（`ui:advanced`）。
+
+    **V2.0 这一整组都没有读取路径**，四个字段因此逐个标了 `ui:hidden`（ADR-0012）：
+    重试走的是 `DouyinAdapter` 里写死的预算（`DIRECT_BUDGET_SECONDS` /
+    `YTDLP_BUDGET_SECONDS`），时长上限压根没有过滤器。留着字段而不隐藏，就是在
+    Settings 页上放四个能存、能回显、什么都不做的框。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    retry_max: int = Field(default=3, ge=0)
-    """单条视频的重试次数。"""
+    retry_max: int = Field(
+        default=3,
+        ge=0,
+        description="单条视频的重试次数。**V2.0 未实现**：媒体下载失败即按原样失败，"
+        "重试预算由适配器写死，不受本字段控制。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
-    retry_backoff_seconds: float = Field(default=2.0, ge=0.0)
-    """重试退避基数（指数退避）。"""
+    retry_backoff_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="重试退避基数（指数退避）。**V2.0 未实现**，与 retry_max 同一批。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
-    request_timeout_seconds: int = Field(default=30, ge=1)
+    request_timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        description="单次请求超时。**抖音侧未实现**：实际预算是适配器里的 "
+        "`DIRECT_BUDGET_SECONDS`(300) / `YTDLP_BUDGET_SECONDS`(600) —— "
+        "那是整段下载的预算不是单次请求超时，把 30 接上去会把下载掐死，所以不接。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
-    max_video_duration_seconds: int | None = Field(default=None, ge=1)
-    """超过这个时长的视频跳过（省 ASR 时间）。None = 不限。"""
+    max_video_duration_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description="超过这个时长的视频跳过（省 ASR 时间）。None = 不限。"
+        "**V2.0 未实现**：collect 没有时长过滤器，本字段当前不产生任何效果。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
 
 class DouyinConfig(PlatformConfig):
@@ -55,9 +82,25 @@ class DouyinConfig(PlatformConfig):
 
     display_name: str = "抖音"
 
-    media_strategy: Literal["yt_dlp_with_fallback"] = "yt_dlp_with_fallback"
-    list_strategy: Literal["browser_scroll"] = "browser_scroll"
-    use_cdp_bridge: bool = True
+    media_strategy: Literal["yt_dlp_with_fallback"] = Field(
+        default="yt_dlp_with_fallback",
+        description="媒体下载策略。只有一个合法取值，因此它是文档不是配置：真源是 "
+        "`DouyinAdapter.capabilities.media_strategy`（ADR-0011）。V2.1 之前"
+        "改这个值不产生任何效果。",
+        json_schema_extra={"ui:hidden": True},
+    )
+    list_strategy: Literal["browser_scroll"] = Field(
+        default="browser_scroll",
+        description="列表枚举策略。同上：真源是 `capabilities.list_strategy`，"
+        "适配器不按本字段分支，改它没有效果。",
+        json_schema_extra={"ui:hidden": True},
+    )
+    use_cdp_bridge: bool = Field(
+        default=True,
+        description="是否走 CDP 桥。**由 capabilities.needs_browser 决定，不受本字段控制**"
+        "（装配点 `core/task_registry.py`）。抖音恒为 True —— 关掉不会让桥不被使用。",
+        json_schema_extra={"ui:hidden": True},
+    )
 
     ytdlp_cookies_from_browser: str | None = None
     """`--cookies-from-browser` 的目标浏览器。**默认 None = 没有浏览器档**。
@@ -82,4 +125,8 @@ class DouyinConfig(PlatformConfig):
     等于没法判断该修什么。
     """
 
-    advanced: DouyinAdvanced = Field(default_factory=DouyinAdvanced)
+    advanced: DouyinAdvanced = Field(
+        default_factory=DouyinAdvanced,
+        description="高级参数，前端折叠渲染（`ui:advanced`）。",
+        json_schema_extra={"ui:advanced": True},
+    )
