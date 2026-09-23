@@ -25,11 +25,9 @@ V2 不落：标题/时长/指标走 `view` 接口 + `videos` 表，"档案"只�
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from intelligence_hub_v2.infra.cookies import CookieManager
 from intelligence_hub_v2.infra.ytdlp import (
@@ -48,8 +46,6 @@ __all__ = [
     "ENV_COOKIES_FILE",
     "ENV_COOKIES_FROM_BROWSER",
     "CookieLadder",
-    "MediaParts",
-    "classify_artifacts",
     "resolve_cookie_ladder",
     "ytdlp_failure_reason",
 ]
@@ -66,17 +62,6 @@ V1 §7.3 的实测里 Chrome 库在 Windows 上对谁都是读不出来的，
 但 B站 在非 Windows 上这一档是真能用的登录态，所以留着一个能用的默认。
 """
 
-_DASH_PART = re.compile(r"^(?P<stem>.+)\.f(?P<fmt>\d+)\.(?P<ext>[A-Za-z0-9]+)$")
-"""yt-dlp 未合并时的命名：`<输出名>.f<format_id>.<ext>`。
-
-只认这一种形状而不是"看目录里哪个文件像视频"：V1 §7.21 的教训就是
-按扩展名扫会把我们自己的 `audio/part-001.m4a` 当成源媒体。
-"""
-
-_VIDEO_EXTS = frozenset({"mp4", "mkv", "webm", "mov", "flv"})
-_AUDIO_EXTS = frozenset({"m4a", "mp3", "aac", "opus", "webm", "mka", "flac"})
-"""`webm` 两边都在：它既可能是纯视频轨也可能是纯音频轨，
-所以判类型看**它有没有配对的视频轨**，不看扩展名（见 `classify_artifacts`）。"""
 
 MEDIA_FILE_TEMPLATE = "media.%(ext)s"
 """与 `data-model.md §1` 的 Locked 布局一致：合并成功 → `media.mp4`，
@@ -92,9 +77,7 @@ YTDLP_EXTRA_ARGS: tuple[str, ...] = (
 )
 
 
-# --------------------------------------------------------------------------- #
 # cookie 阶梯
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -193,94 +176,3 @@ def ytdlp_failure_reason(result: YtDlpResult) -> str:
     tail = [line for line in result.stderr.strip().splitlines() if line.strip()]
     last = tail[-1] if tail else f"exit {result.returncode}"
     return f"{result.attempts_note()}｜{last}"
-
-
-# --------------------------------------------------------------------------- #
-# DASH 分片识别（V1 §7.21）
-# --------------------------------------------------------------------------- #
-
-PartsKind = Literal["empty", "single", "pair"]
-
-
-@dataclass(frozen=True)
-class MediaParts:
-    """yt-dlp 报出来的那批路径的分类结果。
-
-    `extras` 是**被忽略**的路径（第三条轨、封面、缩略图）。它们必须被点名而不是被丢弃：
-    "为什么这个目录里有三个文件而库里只记了一个"是会被问到的问题。
-    """
-
-    kind: PartsKind
-    main: Path | None = None
-    video: Path | None = None
-    audio: Path | None = None
-    extras: tuple[Path, ...] = ()
-
-    @property
-    def description(self) -> str:
-        if self.kind == "pair" and self.video is not None and self.audio is not None:
-            return f"未合并 DASH 分片（{self.video.name} + {self.audio.name}）"
-        if self.kind == "single" and self.main is not None:
-            return f"单文件（{self.main.name}）"
-        return "什么都没拿到"
-
-
-def _size(path: Path) -> int:
-    try:
-        return path.stat().st_size
-    except OSError:
-        return -1
-
-
-def _dash_part(path: Path) -> tuple[str, str] | None:
-    """`media.f30064.mp4` → `("f30064", "mp4")`；不是分片命名则 None。"""
-    match = _DASH_PART.match(path.name)
-    if match is None:
-        return None
-    return f"f{match.group('fmt')}", match.group("ext").lower()
-
-
-def classify_artifacts(paths: Sequence[Path]) -> MediaParts:
-    """把 yt-dlp **自己报出来的**路径分类成"合并好了"或"是一对了分片"。
-
-    判据顺序是有意的：
-
-    1. 先认 `media.mp4`（合并产物）。它没有 `.f<id>` 段，所以只要存在就是合并成功 ——
-       哪怕同目录里还躺着分片（分片是合并过程的中间产物，yt-dlp 成功合并后
-       默认会删，但删失败时两批都会报出来）。**这时候报单文件是对的**，
-       因为转写要吃的就是那条已经合好的轨。
-    2. 再退到分片：按 `ext` 把带 `.f<id>` 的文件分成视频轨与音频轨，
-       各取**最大**的那条（多 P/多码率时 yt-dlp 会报好几条视频轨，
-       但它只下选中那一对，剩下的通常根本不会出现在报告里）。
-       凑不成一对就按单文件处理（只有视频轨时 `has_audio` 会被 ffprobe 判出来）。
-    3. 什么都不剩 → `empty`。
-
-    **绝不扫目录**（V1 §7.21 的原始教训），也绝不猜"哪个看起来像主文件"。
-    """
-    readable = [path for path in paths if _size(path) >= 0]
-    if not readable:
-        return MediaParts(kind="empty")
-
-    merged = [path for path in readable if _dash_part(path) is None]
-    if merged:
-        main = max(merged, key=_size)
-        return MediaParts(kind="single", main=main, extras=tuple(p for p in readable if p != main))
-
-    video_tracks = [p for p in readable if (_first := _dash_part(p)) and _first[1] in _VIDEO_EXTS]
-    audio_tracks = [p for p in readable if (_second := _dash_part(p)) and _second[1] in _AUDIO_EXTS]
-    # webm 会同时出现在两个集合里：一对 webm 分片时"谁是谁"由**数量**决定 ——
-    # 两条不同名不同大小里大的那条是视频轨（视频轨字节数压倒性更大，V1 实测 34.6MB vs 2.5MB）。
-    if video_tracks and audio_tracks:
-        video = max(video_tracks, key=_size)
-        audio = max((p for p in audio_tracks if p != video), key=_size, default=None)
-        if audio is not None:
-            used = {video, audio}
-            return MediaParts(
-                kind="pair",
-                video=video,
-                audio=audio,
-                extras=tuple(p for p in readable if p not in used),
-            )
-
-    main = max(readable, key=_size)
-    return MediaParts(kind="single", main=main, extras=tuple(p for p in readable if p != main))

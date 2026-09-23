@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -67,6 +68,27 @@ class BridgeHealth:
         return self.reachable and self.browser_ok
 
 
+_LOOPBACK_NAMES = frozenset({"localhost"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """这个主机名是不是**字面上**就指向本机？
+
+    判定刻意保守：只做字面解析，**不查 DNS**。`myhost.example.com` 今天解析到
+    127.0.0.1 不代表下一条请求还代表（重绑定攻击就是靠这个），而拿一个会变的
+    名字当安全边界正是 V1 §7.12 那一族"行为取决于没人读得懂的东西"的形状。
+    所以：`localhost` 按名字放行（RFC 6761 保证它指本机），其余必须是回环 IP；
+    认不出来的一律 False（宁可拒掉一个合法的高级用法）。
+    """
+    bare = host.strip("[]").rstrip(".").lower()
+    if bare in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(bare).is_loopback
+    except ValueError:
+        return False
+
+
 class BridgeClient:
     """桥的异步客户端。一个 `httpx.AsyncClient` 复用给全平台（连接池 + 一致超时）。"""
 
@@ -81,8 +103,17 @@ class BridgeClient:
         if parsed is None or parsed.scheme not in ("http", "https") or not parsed.host:
             msg = f"桥地址必须是带主机的 http/https URL，收到 {base_url!r}"
             raise ValueError(msg)
-        # 只绑回环是 V1 的硬约束（§1.2）：这个服务会在人已登录的浏览器里执行任意 JS。
-        # 这里不**强制**（本机换端口/Unix socket 是合法配置），但预检会把非回环报成 degraded。
+        # §1.2 硬约束**在客户端这一侧的落地**：这个服务会在人已登录的浏览器里执行任意 JS，
+        # 所以只允许连回环。这里没有 allow_non_loopback 之类的开关 —— 真要在别的机器上跑桥，
+        # 正确做法是把它端口转发到本机再连（那还是回环），而不是给配置文件开一个
+        # "把登录态发出去"的取值。以前这段只有一句注释指向一个不存在的预检，见经验 24。
+        if not _is_loopback_host(parsed.host):
+            msg = (
+                f"CDP 桥只允许回环地址（AGENTS §1.2），收到 {base_url!r}"
+                f"（主机 {parsed.host!r} 不是 127.0.0.0/8、::1 或 localhost）。"
+                f"桥在别的机器上就先做端口转发到本机；不要改这行配置去直连远端。"
+            )
+            raise ValueError(msg)
         self._base = base_url.rstrip("/")
         self._http = http
         self._owns_client = http is None

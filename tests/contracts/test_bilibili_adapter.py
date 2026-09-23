@@ -25,6 +25,7 @@ import pytest
 from tests.contracts._doubles import FakeYtDlpRunner
 
 from intelligence_hub_v2.errors import ListError, MediaDownloadError, PlatformError
+from intelligence_hub_v2.infra import ytdlp as infra_ytdlp
 from intelligence_hub_v2.infra.cookies import COOKIE_FILE_HEADER, CookieManager
 from intelligence_hub_v2.infra.ytdlp import YtDlpResult, should_escalate_cookie_rung
 from intelligence_hub_v2.logging import get_logger
@@ -569,14 +570,14 @@ class TestDashSplit:
         """合并成功后目录里可能还留着分片；那时候**报单文件是对的**。"""
         merged = touch(tmp_path / "media.mp4", size=10_000)
         part = touch(tmp_path / "media.f30064.mp4", size=500)
-        parts = bili_media.classify_artifacts([part, merged])
+        parts = infra_ytdlp.classify_artifacts([part, merged])
         assert parts.kind == "single" and parts.main == merged
         assert parts.extras == (part,)
 
     def test_unmerged_pair_is_detected_by_filename_not_by_glob(self, tmp_path: Path) -> None:
         video = touch(tmp_path / "media.f30064.mp4", size=34_600_000)
         audio = touch(tmp_path / "media.f30280.m4a", size=2_500_000)
-        parts = bili_media.classify_artifacts([video, audio])
+        parts = infra_ytdlp.classify_artifacts([video, audio])
         assert parts.kind == "pair" and parts.video == video and parts.audio == audio
         assert "未合并 DASH" in parts.description
 
@@ -584,22 +585,22 @@ class TestDashSplit:
         """webm 既可能是视频轨也可能是音频轨 —— 扩展名分不出，只能看字节数。"""
         big = touch(tmp_path / "media.f100025.webm", size=8000)
         small = touch(tmp_path / "media.f30280.webm", size=800)
-        parts = bili_media.classify_artifacts([big, small])
+        parts = infra_ytdlp.classify_artifacts([big, small])
         assert parts.kind == "pair" and parts.video == big and parts.audio == small
 
     def test_a_lone_part_is_reported_as_single_not_pair(self, tmp_path: Path) -> None:
         only_video = touch(tmp_path / "media.f30064.mp4", size=9000)
-        parts = bili_media.classify_artifacts([only_video])
+        parts = infra_ytdlp.classify_artifacts([only_video])
         assert parts.kind == "single" and parts.main == only_video
 
     def test_unreadable_paths_are_dropped(self) -> None:
-        assert bili_media.classify_artifacts([Path("nope/media.mp4")]).kind == "empty"
+        assert infra_ytdlp.classify_artifacts([Path("nope/media.mp4")]).kind == "empty"
 
     def test_only_yt_dlp_reported_paths_are_considered(self, tmp_path: Path) -> None:
         """V1 §7.21 的原话：**不许扫目录**。这里用一个"藏在 audio/ 子目录里"的文件验。"""
         real = touch(tmp_path / "media.mp4", size=1000)
         hidden = touch(tmp_path / "audio" / "part-001.m4a", size=999_999)
-        parts = bili_media.classify_artifacts([real])
+        parts = infra_ytdlp.classify_artifacts([real])
         assert parts.kind == "single" and parts.main == real
         assert hidden not in parts.extras
 

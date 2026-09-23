@@ -37,7 +37,7 @@ from intelligence_hub_v2.errors import MediaDownloadError, PlatformError
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
 from intelligence_hub_v2.infra.ffmpeg import has_audio_stream
 from intelligence_hub_v2.infra.pacing import RatePacer
-from intelligence_hub_v2.infra.ytdlp import YtDlpResult, YtDlpRunner
+from intelligence_hub_v2.infra.ytdlp import YtDlpResult, YtDlpRunner, classify_artifacts
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
 from intelligence_hub_v2.models.media import MediaArtifact, SingleFileArtifact
 from intelligence_hub_v2.models.task import ProgressCallback
@@ -433,47 +433,68 @@ class DouyinAdapter:
             return None, str(exc)
 
         if result.ok and result.artifacts:
-            artifact = await self._artifact_from_ytdlp(result, video)
-            return artifact, ""
+            return await self._artifact_from_ytdlp(result, video)
         return None, _ytdlp_failure_reason(result)
 
-    async def _artifact_from_ytdlp(self, result: YtDlpResult, video: VideoMeta) -> MediaArtifact:
-        """从 yt-dlp 报告的路径里挑主文件。
+    async def _artifact_from_ytdlp(
+        self, result: YtDlpResult, video: VideoMeta
+    ) -> tuple[MediaArtifact | None, str]:
+        """yt-dlp 报回来的那批路径 → 产物，或者"这一趟不算成"。
 
-        只认它自己报出来的路径，**不扫目录**：V1 §7.21 的教训是 `rglob("*.mp4")`
-        会把我们自己产出的中间产物当成源媒体，一条作品转两遍。
+        只认它自己报出来的路径、**不扫目录**（V1 §7.21），并且用的是与 B站 同一份
+        `infra.ytdlp.classify_artifacts` —— 分片命名是 **yt-dlp 的知识**，不是 B站的平台
+        知识，两处各写一份就会漂（本方法以前就是"按体积取主文件"）。
+
+        抖音声明 `supports_dash_split=False`，没有字段能诚实表达"这是一对未合并的轨"，
+        所以遇到 pair 必须把这一趟判为**失败**、交给页面播放直链那条走得通的路。
+        按体积挑一条的旧做法，产物是一条**无声视频轨**却被记成 `media_source="yt_dlp"`
+        的成品，而本机没有 ffprobe 时 `has_audio_stream()` 问不出来就返回 True ——
+        等于让它声称自己有音轨。
         """
-        sized: list[tuple[int, Path]] = []
-        for path in result.artifacts:
-            try:
-                sized.append((await asyncio.to_thread(_stat_size, path), path))
-            except OSError:
-                continue
-        if not sized:
+        parts = classify_artifacts(result.artifacts)
+        if parts.kind == "empty":
             msg = (
                 f"yt-dlp 说下好了，但报出来的路径一个都读不到："
                 f"{[str(p) for p in result.artifacts]}（{self._describe(video)}）"
             )
             raise MediaDownloadError(PLATFORM, "media", msg)
-        sized.sort()
-        size_bytes, main = sized[-1]
-        if len(sized) > 1:
-            # 抖音声明 supports_dash_split=False：多出来的一般是没合并成功的分片或封面。
-            # 按体积取主文件，其余**只记日志不入库**。
+
+        main = parts.main  # 排掉 empty 之后，None 就只可能是 "pair"
+        if main is None:
+            reason = (
+                f"yt-dlp 只留下未合并的 DASH 分片（{parts.description}），"
+                f"而抖音这一侧不做合并（supports_dash_split=False）→ 改走页面播放直链"
+            )
+            self._log.warning(
+                "douyin.ytdlp.unmerged_dash_parts",
+                platform_video_id=video.platform_video_id,
+                parts=[str(p) for p in (parts.video, parts.audio) if p is not None],
+                extras=[str(p) for p in parts.extras],
+                rung=str(result.variant),
+            )
+            return None, reason
+
+        try:
+            size_bytes = await asyncio.to_thread(_stat_size, main)
+        except OSError as exc:  # 分类与 stat 之间被清了（杀软/回收）：如实失败
+            return None, f"yt-dlp 报出来的主文件读不到大小 {main}: {exc}"
+        if parts.extras:
+            # 合并成功却还留着中间分片/封面：报单文件是对的，但要点名而不是静默丢。
             self._log.warning(
                 "douyin.ytdlp.extra_artifacts_ignored",
                 platform_video_id=video.platform_video_id,
                 chosen=str(main),
-                others=[str(path) for _, path in sized[:-1]],
+                others=[str(p) for p in parts.extras],
                 rung=str(result.variant),
             )
-        return await self._single_file_artifact(
+        artifact = await self._single_file_artifact(
             main,
             size_bytes,
             media_source="yt_dlp",
             yt_dlp_error=None,
             cookie_rung=str(result.variant) if result.variant else None,
         )
+        return artifact, ""
 
     async def _via_page_play_url(
         self,

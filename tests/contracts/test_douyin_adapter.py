@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,7 @@ from intelligence_hub_v2.models.media import SingleFileArtifact
 from intelligence_hub_v2.models.video import VideoMeta
 from intelligence_hub_v2.platforms.base import AdapterDeps, Capabilities, PlatformAdapter
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
+from intelligence_hub_v2.platforms.douyin import adapter as adapter_module
 from intelligence_hub_v2.platforms.douyin import media as media_module
 from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter
 from intelligence_hub_v2.platforms.douyin.config import DouyinConfig
@@ -46,7 +48,6 @@ from intelligence_hub_v2.platforms.douyin.listing import (
     PROFILE_PAGE_FUNCTION,
     PageBudget,
     VideoCard,
-    card_to_video_meta,
     decode_page_result,
     render_page_js,
 )
@@ -57,6 +58,9 @@ from intelligence_hub_v2.storage.files import FileStorage
 
 SEC_UID = "MS4wLjABAAAAabc123def456"
 AWEME_ID = "7412345678901234567"
+
+_QUOTED_PLACEHOLDER = re.compile(r"""(["'`])__\w+__""")
+"""引号紧跟占位符 = 渲染后变成 `""MS4w…""`，页面 SyntaxError。"""
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "douyin"
 
 
@@ -441,23 +445,47 @@ class TestListCreatorVideos:
         )
         assert len(videos) == 3
 
-    async def test_a_real_publish_date_would_still_be_filtered(self, tmp_path: Path) -> None:
-        """`since` 判得了的时候**要**判掉 —— 否则上一条用例是"永不生效"的空话。"""
+    async def test_a_real_publish_date_is_filtered_by_the_adapter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`since` 判得动的时候**要真的判掉**。
+
+        旧写法从头到尾没进过 `list_creator_videos`：它自己 `model_copy` 一个带日期的
+        meta，再断言两个手搓 datetime 谁大谁小 —— 把适配器里那行
+        `if since is not None and … < since: continue` 删掉，它照样绿
+        （`tests/contracts` 的覆盖率也显示那一行从未被执行）。
+
+        这里只替"卡片→meta"这一层映射：抖音列表页本来就不给发布日期，
+        `card_to_video_meta` 因此把 `published_at` 写死 None（§7 记过的弱过滤，
+        不是 bug），所以要人造一个日期才走得到比较那一行。**过滤器本身是真代码。**
+        """
         old = datetime(2020, 1, 1, tzinfo=UTC)
         fresh = datetime(2030, 1, 1, tzinfo=UTC)
-        bridge = FakeBridge(
-            script=[page_payload("profile_page.json"), page_payload("scroll_page.json")]
-        )
-        adapter = make_adapter(tmp_path, bridge=bridge)
-        produced: list[str] = []
-        async for meta in adapter.list_creator_videos(profile_ref(), limit=3):
-            produced.append(meta.platform_video_id)
-        assert len(produced) == 3, "先确认这批卡片确实判不了（published_at 全是 None）"
+        real = adapter_module.card_to_video_meta
 
-        dated = card_to_video_meta(VideoCard(aweme_id=AWEME_ID), ref=profile_ref()).model_copy(
-            update={"published_at": old}
-        )
-        assert dated.published_at == old < fresh, "时间戳给得出时，比较这一半要真的成立"
+        def dated(card: VideoCard, *, ref: CreatorRef) -> VideoMeta:
+            stamp = old if card.aweme_id == AWEME_ID else fresh
+            return real(card, ref=ref).model_copy(update={"published_at": stamp})
+
+        monkeypatch.setattr(adapter_module, "card_to_video_meta", dated)
+
+        async def collect(since: datetime | None) -> set[str]:
+            bridge = FakeBridge(
+                script=[page_payload("profile_page.json"), page_payload("scroll_page.json")]
+            )
+            adapter = make_adapter(tmp_path / str(since), bridge=bridge)
+            out: set[str] = set()
+            async for meta in adapter.list_creator_videos(profile_ref(), limit=3, since=since):
+                out.add(meta.platform_video_id)
+            return out
+
+        unfiltered = await collect(None)
+        assert AWEME_ID in unfiltered, "先确认那条卡片真的会被枚举出来"
+
+        kept = await collect(fresh)
+
+        assert AWEME_ID not in kept
+        assert unfiltered - kept == {AWEME_ID}, "只该掉那一条过期的，别的都不许受影响"
 
     async def test_limit_caps_output_and_partial_iteration_closes_cleanly(
         self, tmp_path: Path
@@ -498,6 +526,30 @@ class TestListCreatorVideos:
         assert f'const expected = "{SEC_UID}";' in js
         assert "const rounds = 3;" in js
         assert '""MS4w' not in js
+
+    def test_no_shipped_template_wraps_a_placeholder_in_quotes(self) -> None:
+        """上一条只渲染**手搓的一行模板**，所以它钉的是渲染器，不是出厂模板。
+
+        实测把 `PROFILE_PAGE_FUNCTION` 里的 `const expected = __EXPECTED_SEC_UID__;`
+        加上引号，整套离线用例仍然全绿（`"__" not in rendered` 那种断言照样成立），
+        而真机上每一次抖音采集都会 SyntaxError —— Python 侧只看到一个 evaluate 失败，
+        排查方向被带去"网站风控"。这条改钉**出厂的三个模板本身**。
+        """
+        shipped = {
+            "PROFILE_PAGE_FUNCTION": PROFILE_PAGE_FUNCTION,
+            "COLLECT_AFTER_SCROLL_FUNCTION": COLLECT_AFTER_SCROLL_FUNCTION,
+            "VIDEO_DETAIL_FUNCTION": media_module.VIDEO_DETAIL_FUNCTION,
+        }
+        assert all(shipped.values()), "模板常量不该被清空"
+        for name, template in shipped.items():
+            quoted = _QUOTED_PLACEHOLDER.findall(template)
+            assert not quoted, f"{name} 里这些占位符被引号包住了：{quoted}"
+
+    def test_the_rendered_shipped_template_holds_exactly_one_quote_pair(self) -> None:
+        """正向那半：渲染出来的确实是一个字符串字面量，不是 `""MS4w…""`。"""
+        js = render_page_js(PROFILE_PAGE_FUNCTION, sec_uid=SEC_UID, budget=PageBudget())
+        assert f'const expected = "{SEC_UID}";' in js
+        assert f'""{SEC_UID}' not in js
 
     def test_a_leftover_placeholder_is_refused_at_render_time(self) -> None:
         """漏替换的占位符会以 `ReferenceError` 出现在桥那一头，
@@ -745,6 +797,32 @@ def media_harness(
 
 class TestDownloadMedia:
     SIGNED = "v3-web.douyinvod.com"
+
+    async def test_an_unmerged_dash_pair_falls_back_instead_of_claiming_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """§7.21 会从"声明不支持分片"的那一侧重新进来。
+
+        抖音路上 yt-dlp **通常**直接失败（§7.2），兜底才是常态。但它偶尔真下动了却没合并，
+        报回来的是 `media.f137.mp4`（纯视频轨，大）+ `media.f140.m4a`（音频轨，小）。
+        旧实现"按体积取主文件、其余只记日志不入库" → 那条**无声视频轨**被记成
+        `media_source="yt_dlp"` 的成品；而本机没有 ffprobe 时 `has_audio_stream()`
+        返回 True（问不出来就当有），于是这条媒体**声称自己有音轨**。
+        下游 `extract_audio(-vn)` 得到的正是 §7.21 描述的那句"长得像 ffmpeg 没装"的错。
+
+        抖音声明 `supports_dash_split=False`，没有诚实表达"这是一对"的字段，
+        所以正确行为是把这一趟判为失败、交给页面播放直链那条真正走得通的路。
+        """
+        video_part = write_media(tmp_path, "media.f137.mp4", size=40_000)
+        audio_part = write_media(tmp_path, "media.f140.m4a", size=2_000)
+        runner = FakeYtDlpRunner(result=ytdlp_ok(artifacts=[video_part, audio_part]))
+        harness = media_harness(tmp_path, monkeypatch=monkeypatch, runner=runner)
+
+        artifact = await harness.adapter.download_media(make_video(), tmp_path / "media")
+
+        assert artifact.media_source == "page_play_url"  # 走了兜底，没把无声轨当成品
+        assert artifact.yt_dlp_error is not None
+        assert "未合并" in artifact.yt_dlp_error
 
     async def test_yt_dlp_success_marks_the_source_and_keeps_error_none(
         self, tmp_path: Path, monkeypatch

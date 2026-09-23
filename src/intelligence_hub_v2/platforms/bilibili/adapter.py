@@ -5,7 +5,7 @@ V1 §7 的看护落点：
 | 陷阱 | 落点 |
 | --- | --- |
 | §7.15 三档；枚举与下载都要带导出 cookie | `_ladder()` / `_enumerate_with_ytdlp()` |
-| §7.21 未合并 DASH 分片要成对交出 | `media.classify_artifacts()` / `_pair_artifact()` |
+| §7.21 未合并 DASH 分片要成对交出 | `infra.ytdlp.classify_artifacts()` / `_pair_artifact()` |
 | §7.14 枚举不依赖外部脚本，找不到也不能静默 skip | `listing.load_external_manifest()` 抛 |
 | §7.13 技能脚本两份会漂，只认仓库内那份产出 | 同上，报错文案点名生产者 |
 | §7.16 搜索兜底要 Node 版 playwright，默认关 | `_enumerate()` 里开启后**如实红**，不静默跳过 |
@@ -32,7 +32,12 @@ import httpx
 from intelligence_hub_v2.errors import ListError, MediaDownloadError, PlatformError
 from intelligence_hub_v2.infra.ffmpeg import has_audio_stream
 from intelligence_hub_v2.infra.pacing import RatePacer
-from intelligence_hub_v2.infra.ytdlp import YtDlpRunner, progress_from_ytdlp_line
+from intelligence_hub_v2.infra.ytdlp import (
+    MediaParts,
+    YtDlpRunner,
+    classify_artifacts,
+    progress_from_ytdlp_line,
+)
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
 from intelligence_hub_v2.models.media import (
     MediaArtifact,
@@ -441,7 +446,7 @@ class BilibiliAdapter:
             )
             raise MediaDownloadError(PLATFORM, "media", msg)
 
-        parts = media.classify_artifacts(result.artifacts)
+        parts = classify_artifacts(result.artifacts)
         if parts.kind == "empty":
             msg = (
                 f"yt-dlp 退出码 0 但没有产出可读的文件"
@@ -478,7 +483,7 @@ class BilibiliAdapter:
         )
 
     async def _pair_artifact(
-        self, video: VideoMeta, parts: media.MediaParts, *, ladder: CookieLadder, rung: str
+        self, video: VideoMeta, parts: MediaParts, *, ladder: CookieLadder, rung: str
     ) -> MediaArtifact:
         why = (
             "yt-dlp 没能把视频轨与音频轨合并（多半是 PATH 里没有 ffmpeg），"

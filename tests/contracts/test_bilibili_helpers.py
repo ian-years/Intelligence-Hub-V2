@@ -15,7 +15,11 @@ from typing import Any
 import pytest
 
 from intelligence_hub_v2.errors import PlatformError
-from intelligence_hub_v2.infra.ytdlp import YtDlpResult
+from intelligence_hub_v2.infra.ytdlp import (
+    MediaParts,
+    YtDlpResult,
+    classify_artifacts,
+)
 from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.media import (
     MediaArtifact,
@@ -263,7 +267,7 @@ def test_cookie_ladder_rung_kinds_are_typed() -> None:
 
 
 def test_media_parts_description_for_empty() -> None:
-    assert media.MediaParts(kind="empty").description == "什么都没拿到"
+    assert MediaParts(kind="empty").description == "什么都没拿到"
 
 
 # --------------------------------------------------------------------------- #
@@ -374,7 +378,7 @@ def test_a_pair_artifact_points_the_transcriber_at_the_audio_track(tmp_path: Pat
     audio = tmp_path / "media.f30280.m4a"
     video.write_bytes(b"x" * 300)
     audio.write_bytes(b"x" * 100)
-    parts = media.classify_artifacts([video, audio])
+    parts = classify_artifacts([video, audio])
     artifact: MediaArtifact = VideoAudioPairArtifact(
         video_path=parts.video,
         audio_path=parts.audio,

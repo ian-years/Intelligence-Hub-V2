@@ -212,6 +212,43 @@ def test_only_http_urls_are_accepted_as_a_base(bad: str) -> None:
         BridgeClient(bad)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:3457",
+        "http://localhost:3457",
+        "http://[::1]:3457",
+        "http://127.0.0.53:3457",
+    ],
+)
+def test_loopback_bridge_urls_are_accepted(url: str) -> None:
+    BridgeClient(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://10.0.0.5:3457",  # 内网地址
+        "http://bridge.example.com:3457",  # 公网主机名
+        "http://127.0.0.1.evil.com:3457",  # 前缀匹配会放过的那种
+        "http://0.0.0.0:3457",  # 全网卡
+        "http://[::ffff:8.8.8.8]:3457",  # IPv4 映射在 IPv6 里
+    ],
+)
+def test_non_loopback_bridge_urls_are_rejected_at_construction(url: str) -> None:
+    """AGENTS §1.2：这个服务会在**人已登录的浏览器**里执行任意 JS。
+
+    `BridgeClient` 原先只查 scheme + 有没有主机，而 `cdp_bridge.py:85` 的注释写着
+    「预检会把非回环报成 degraded」—— 全 `src/` 没有那个预检，`tasks/preflight.py`
+    一次都没提桥。于是改一行 `config/app.yaml` 的 `cdp_bridge.url` 就能把
+    `evaluate`(我们注入的 JS)、`navigate`(博主主页)、`cookies`(取会话凭证) 三条请求
+    送到远端，而**它的回复还会被当成页面内容写进库**：整条作品列表、播放直链、字幕
+    都可以被伪造。所以这里在构造期就拒，且给的是 ValueError 而不是"降级"。
+    """
+    with pytest.raises(ValueError, match="回环"):
+        BridgeClient(url)
+
+
 async def test_a_shared_http_client_is_not_closed_by_the_bridge_client() -> None:
     """一个 httpx.AsyncClient 全平台共用（连接池）。关掉它会连带弄坏别的调用方。"""
     shared = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: _json({"ok": True})))
