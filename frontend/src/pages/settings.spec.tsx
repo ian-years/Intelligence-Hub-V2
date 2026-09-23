@@ -1,0 +1,186 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { Settings } from "./Settings";
+
+const schema = {
+  title: "DouyinConfig",
+  "ui:order": ["enabled"],
+  properties: {
+    enabled: { type: "boolean", title: "Enabled", default: true },
+    display_name: { type: "string", title: "Display Name", default: "抖音" },
+    use_cdp_bridge: {
+      type: "boolean",
+      title: "Use Cdp Bridge",
+      default: true,
+      description: "由 capabilities.needs_browser 决定，不受本字段控制",
+      "ui:hidden": true,
+    },
+    media_strategy: {
+      type: "string",
+      title: "Media Strategy",
+      default: "yt_dlp_with_fallback",
+      "ui:hidden": true,
+    },
+    videos_per_creator: { type: "integer", title: "Videos Per Creator", default: 30, minimum: 1 },
+    advanced: { $ref: "#/$defs/Adv", title: "Advanced", "ui:advanced": true },
+  },
+  $defs: {
+    Adv: {
+      title: "Adv",
+      properties: {
+        retry_max: { type: "integer", title: "Retry Max", default: 3, "ui:hidden": true },
+        request_timeout_seconds: { type: "integer", title: "Request Timeout", default: 30 },
+      },
+    },
+  },
+};
+
+const current = {
+  platform: "douyin",
+  config: {
+    enabled: true,
+    display_name: "抖音",
+    use_cdp_bridge: true,
+    media_strategy: "yt_dlp_with_fallback",
+    videos_per_creator: 30,
+    advanced: { retry_max: 3, request_timeout_seconds: 30 },
+  },
+  health: { status: "ok", checked_at: "2026-09-23T10:00:00+00:00" },
+};
+
+const platforms = {
+  platforms: [{ name: "douyin", display_name: "抖音", enabled: true, implemented: true }],
+};
+
+function serve(handler: (url: string, method: string) => [number, unknown]): void {
+  vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+    const method = String(init?.method ?? "GET");
+    const [status, body] = handler(String(input), method);
+    const url = String(input);
+    if (url.includes("/config") && method === "PUT") {
+      // 只记录请求体；响应仍然由 handler 决定 —— 否则"保存失败"那条测的是别的东西。
+      lastPut = { url, body: String(init?.body) };
+    }
+    const responseBody =
+      method !== "PUT"
+        ? body
+        : status === 200
+          ? {
+              platform: "douyin",
+              config: current.config,
+              changed_fields: [],
+              requires_restart: false,
+            }
+          : body;
+    return new Response(JSON.stringify(responseBody), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+}
+
+let lastPut: { url: string; body: string } | null = null;
+
+function renderPage(): void {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: 0 } } });
+  render(
+    <QueryClientProvider client={client}>
+      <Settings />
+    </QueryClientProvider>,
+  );
+}
+
+const ok = (url: string): [number, unknown] => {
+  if (url.includes("/schema")) return [200, schema];
+  if (url.includes("/config")) return [200, current];
+  return [200, platforms];
+};
+
+/** 保存失败的那条：GET 一切正常，只有 PUT 回 422 —— 否则测的是"读不到"。 */
+const putFails = (url: string, method: string): [number, unknown] =>
+  method === "PUT"
+    ? [422, { detail: "videos_per_creator: greater than 1, less than 200" }]
+    : ok(url);
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn());
+  lastPut = null;
+});
+
+describe("Settings 页", () => {
+  it("渲染可见字段，隐藏的字段不出现，但要说有几项被隐藏", async () => {
+    serve(ok);
+    renderPage();
+    await screen.findByDisplayValue("抖音");
+    expect(screen.queryByText("Use Cdp Bridge")).toBeNull();
+    expect(screen.queryByText("Media Strategy")).toBeNull();
+    expect(screen.getByText(/3 项后端不实现/)).toBeTruthy();
+  });
+
+  it("折叠组默认收起，点开才看得到里面的字段", async () => {
+    serve(ok);
+    renderPage();
+    await screen.findByDisplayValue("抖音");
+    expect(screen.queryByText("Request Timeout")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /高级/ }));
+    expect(screen.getByText("Request Timeout")).toBeTruthy();
+  });
+
+  it("清空数字框是空的，不会弹回默认值（改了再打字才不会变成 3045）", async () => {
+    serve(ok);
+    renderPage();
+    const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
+    await userEvent.clear(input);
+    // 空 number 输入用 toHaveValue 会拿到 null（jest-dom 的语义），直接读 .value 最不含糊。
+    expect(input.value).toBe("");
+    await userEvent.type(input, "45");
+    expect(input.value).toBe("45");
+  });
+
+  /** 这条是这一页最要紧的断言：`PUT` 收的是整份配置，隐藏字段少带一个就是覆盖用户机器上的值。 */
+  it("保存时 PUT 交回整份配置，隐藏字段原样带回", async () => {
+    serve(ok);
+    renderPage();
+    await screen.findByDisplayValue("抖音");
+    // 拿住元素再改：受控输入清空后按"显示值为 30"去查本来就查不到（那正是上一条修好的行为）。
+    const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
+    await userEvent.clear(input);
+    await userEvent.type(input, "45");
+    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    await waitFor(() => expect(lastPut).not.toBeNull());
+    expect(lastPut?.url).toBe("/api/platforms/douyin/config");
+    const sent = JSON.parse(String(lastPut?.body)) as typeof current.config;
+    expect(sent.videos_per_creator).toBe(45);
+    expect(sent.use_cdp_bridge).toBe(true);
+    expect(sent.media_strategy).toBe("yt_dlp_with_fallback");
+    expect(sent.advanced).toEqual({ retry_max: 3, request_timeout_seconds: 30 });
+    expect(typeof sent.videos_per_creator).toBe("number");
+  });
+
+  it("后端拒绝时显示原因，不清空表单", async () => {
+    serve(putFails);
+    renderPage();
+    const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
+    // 没有改动时保存按钮是禁用的（"没有改动"那句是真的），所以先改一笔。
+    await userEvent.clear(input);
+    await userEvent.type(input, "999");
+    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    expect(await screen.findByText(/greater than 1, less than 200/)).toBeTruthy();
+    expect(input.value).toBe("999");
+  });
+
+  it("读不到配置时说清楚，不给一张空表单", async () => {
+    serve((url) => {
+      if (url.includes("/config")) return [500, { detail: "配置层还没起来" }];
+      if (url.includes("/schema")) return [200, schema];
+      return [200, platforms];
+    });
+    renderPage();
+    expect(await screen.findByText(/读不到/)).toBeTruthy();
+    expect(screen.getByText(/配置层还没起来/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /保存/ })).toBeNull();
+  });
+});

@@ -6,6 +6,7 @@ import { PageShell } from "@/components/shared/PageShell";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { TokenSheet } from "@/dev/TokenSheet";
 import { Preflight } from "@/pages/Preflight";
+import { Settings } from "@/pages/Settings";
 import type { PatternName } from "@/lib/patterns";
 
 /** Task 12 / 13 未开工的路由渲染这一块，而不是空白页。
@@ -55,10 +56,7 @@ export default function App(): JSX.Element {
           path="tasks"
           element={<PageNotBuilt pattern="confetti" label="任务" task="Task 13" />}
         />
-        <Route
-          path="settings"
-          element={<PageNotBuilt pattern="checker" label="设置" task="Task 12" />}
-        />
+        <Route path="settings" element={<Settings />} />
         <Route path="preflight" element={<Preflight />} />
         <Route path="tokens" element={<TokenSheet />} />
         <Route

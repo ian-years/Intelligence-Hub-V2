@@ -7,6 +7,7 @@ export const keys = {
   preflight: ["preflight"] as const,
   platforms: ["platforms"] as const,
   platformSchema: (platform: string) => ["platforms", platform, "schema"] as const,
+  platformConfig: (platform: string) => ["platforms", platform, "config"] as const,
   creators: (platform?: string) => ["creators", platform ?? null] as const,
   creator: (id: number) => ["creators", "detail", id] as const,
   videos: (filter: Record<string, unknown> = {}) => ["videos", filter] as const,

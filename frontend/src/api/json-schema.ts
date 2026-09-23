@@ -13,12 +13,18 @@ export interface PropertySchema {
   "ui:hidden"?: boolean;
   "ui:advanced"?: boolean;
   allOf?: { $ref?: string }[];
+  anyOf?: PropertySchema[];
+  oneOf?: PropertySchema[];
+  minimum?: number;
+  maximum?: number;
   $ref?: string;
   properties?: Record<string, PropertySchema>;
 }
 
 export interface ObjectSchema {
   title?: string;
+  /** 顶层字段顺序（`DouyinConfig` 的 `json_schema_extra` 写的是 `["enabled"]`）。 */
+  "ui:order"?: string[];
   properties?: Record<string, PropertySchema>;
   $defs?: Record<string, PropertySchema>;
   required?: string[];

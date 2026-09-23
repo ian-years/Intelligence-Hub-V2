@@ -15,6 +15,22 @@ export function usePlatforms() {
   });
 }
 
+/** 表单的初值来源。注意返回的是**整份配置**：`PUT` 也要交整份，
+ * 所以隐藏字段（`ui:hidden`，不渲染）必须由这一份原样带回去。 */
+export interface PlatformConfigResponse {
+  platform: string;
+  config: Record<string, unknown>;
+  health: { status: string; checked_at: string | null } | null;
+}
+
+export function usePlatformConfig(platform: string) {
+  return useQuery({
+    queryKey: keys.platformConfig(platform),
+    queryFn: () => api.get<PlatformConfigResponse>(`/platforms/${platform}/config`),
+    enabled: platform !== "",
+  });
+}
+
 export function usePlatformSchema(platform: string) {
   return useQuery({
     queryKey: keys.platformSchema(platform),
@@ -31,8 +47,11 @@ export function useUpdatePlatformConfig(platform: string) {
     mutationFn: (config: Record<string, unknown>) =>
       api.put<ConfigUpdateResponse>(`/platforms/${platform}/config`, config),
     onSuccess: async () => {
+      // 三处都要失效：镜像表(`platforms`)、这份配置本身（后端可能改了别的键）、
+      // 以及任务表（关掉的平台要让对应任务从 `/api/tasks` 消失）。
       await Promise.all([
         client.invalidateQueries({ queryKey: keys.platforms }),
+        client.invalidateQueries({ queryKey: keys.platformConfig(platform) }),
         client.invalidateQueries({ queryKey: keys.tasks }),
       ]);
     },
