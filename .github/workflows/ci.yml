@@ -101,7 +101,7 @@ jobs:
       - name: Coverage gate (global ≥80%, platforms/tasks ≥90%)
         run: |
           uv run coverage report --fail-under=80
-          uv run coverage report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*' --fail-under=90
+          uv run coverage report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*,tools/*' --fail-under=90
       - uses: actions/upload-artifact@v4
         if: always()
         with:
