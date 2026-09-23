@@ -17,8 +17,13 @@ uv run python -X utf8 tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelli
 2. **媒体 hardlink，跨卷退回 copy**（`docs/lessons.md` 经验里 V1→V2 那条）。同一 data/ 卷上
    hardlink 不占额外空间；跨盘 `os.link` 抛 `EXDEV` → `shutil.copy2`。找不到源文件不算失败，
    记 `media_missing` 并把视频行照写（V2 里"有作品行没媒体"是合法中间态）。
-3. **不许臆造成功**（V1 §1.3）。每一条映射失败都进 `report.errors` 带原文；
-   dry-run 绝不写库、绝不落媒体。
+3. **不许臆造成功**（V1 §1.3）。每一条映射失败都进 `report.errors` 带原文，且**单行失败不炸整跑**；
+   dry-run 连目标目录都不创建。
+
+还有一条只在踩过之后才会写下来的：**V1 与 V2 说的不是同一种平台语言**。V1 的
+`local_store.normalize_platform()` 存显示名（`抖音` / `B站` / `小红书` / `YouTube`），V2 的
+`platforms.name` 存 slug（`douyin` / `bilibili` / …），而 `creators.platform` 是指向后者的外键。
+原样搬 = 第一条真数据就 FK 失败。见 `V1_PLATFORM_TO_SLUG`。
 """
 
 from __future__ import annotations
@@ -30,7 +35,9 @@ import os
 import shutil
 import sqlite3
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,16 +46,42 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from pydantic import ValidationError
+
 from intelligence_hub_v2.core.config import ConfigManager
+from intelligence_hub_v2.errors import StorageError
 from intelligence_hub_v2.models.creator import CreatorDraft
 from intelligence_hub_v2.models.transcript import TranscriptDraft
-from intelligence_hub_v2.models.video import VideoDraft
+from intelligence_hub_v2.models.video import Video, VideoDraft
 from intelligence_hub_v2.storage.db import SqliteStorage
 from intelligence_hub_v2.storage.files import FileStorage
 
 V1_DB_RELPATH = Path("downloads") / "local.sqlite3"
-V1_HIDDEN_RELPATH = Path("launcher-state") / "hidden-videos.json"
+# V1 的 `launcher_server.load_state_list()` 走 `root / "downloads" / "launcher-state" / name`
+# （launcher_server.py:2346）。少一层 `downloads/` 就是读不到 → 静默空集 → 用户删过的作品整批复活。
+V1_HIDDEN_RELPATH = Path("downloads") / "launcher-state" / "hidden-videos.json"
 STATE_FILENAME = ".migration_state.json"
+
+_LOCAL_RECORD_PREFIX = "local:"
+_LOCAL_RECORD_PARTS = 3
+
+#: V1 平台值 → V2 slug。左列逐字来自 V1 `local_store.py:60-73 normalize_platform()` 的出口；
+#: 右列也作为左列收进来，是为了容忍手改过的 V1 库（幂等重跑时也会命中自己写过的值）。
+V1_PLATFORM_TO_SLUG: Mapping[str, str] = {
+    "抖音": "douyin",
+    "B站": "bilibili",
+    "小红书": "xiaohongshu",
+    "YouTube": "youtube",
+    "douyin": "douyin",
+    "bilibili": "bilibili",
+    "xiaohongshu": "xiaohongshu",
+    "youtube": "youtube",
+}
+
+
+def to_v2_platform(raw: str) -> str | None:
+    """V1 的平台值翻成 V2 slug；认不出来返回 None，由调用方如实记一条 —— 不替它猜一个平台。"""
+    return V1_PLATFORM_TO_SLUG.get(raw.strip())
 
 
 @dataclass
@@ -90,7 +123,7 @@ def _clean_transcript_of(video: dict[str, Any]) -> str:
     return (video.get("clean_transcript") or video.get("raw_transcript") or "").strip()
 
 
-def _metadata_with_provenance(vrow: dict[str, Any]) -> str:
+def _metadata_with_provenance(vrow: dict[str, Any], *, extra: dict[str, Any] | None = None) -> str:
     """把 V1 的 raw_data_json 原样留着，再打一个"来自 V1 迁移"的标记。
 
     不动 `videos.media_source`（那是有 CHECK 枚举的列），provenance 走自由格式的 metadata_json。
@@ -103,7 +136,67 @@ def _metadata_with_provenance(vrow: dict[str, Any]) -> str:
     except ValueError:
         payload = {"v1_raw_data_unparsed": raw[:500]}
     payload["migrated_from_v1"] = True
+    payload.update(extra or {})
     return json.dumps(payload, ensure_ascii=False)
+
+
+#: V1 把四个计数塞在一个 `metrics_json` 文本列里；V2 是四个整型列。
+_V1_COUNT_FIELDS = ("view_count", "like_count", "comment_count", "share_count")
+
+
+def _metrics_of(vrow: dict[str, Any]) -> tuple[dict[str, int], str | None]:
+    """`metrics_json` → 四个计数列。返回 (取值, 解析不出来的原文)。
+
+    认不出的形状不猜 0：原文交给调用方记进 metadata 与 errors，数据本身不丢。
+    """
+    raw = str(vrow.get("metrics_json") or "").strip()
+    if not raw or raw == "{}":
+        return {}, None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return {}, raw[:500]
+    if not isinstance(payload, dict):
+        return {}, raw[:500]
+    counts = {
+        name: payload[name] for name in _V1_COUNT_FIELDS if isinstance(payload.get(name), int)
+    }
+    return counts, None
+
+
+def _parse_published_at(raw: str) -> tuple[datetime | None, bool]:
+    """V1 的时间列是 `datetime.now().strftime("%Y-%m-%d %H:%M:%S")` —— 无时区的本机时间。
+
+    按**本机时区**解读成 aware datetime，并把"这是推断出来的"随数据一起记下来：
+    留 NULL 会让迁移来的整批行在 Feed 排序里沉底且看不出异常，
+    而直接当成 UTC 则是凭空指定一个偏移（实测本机 +08:00，差 8 小时）。
+    返回 (值, 是否按本机时区推断)；解析不出来返回 (None, False)，由调用方记账。
+    """
+    text = raw.strip()
+    if not text:
+        return None, False
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None, False
+    if parsed.tzinfo is not None:
+        return parsed, False
+    return parsed.astimezone(), True
+
+
+async def _ensure_platform_row(storage: SqliteStorage, slug: str, seeded: set[str]) -> None:
+    """补 `platforms` 镜像行 —— `creators.platform` / `videos.platform` 是指向它的外键。
+
+    这张镜像平时由 FastAPI 的 lifespan 灌（`main._sync_platform_mirror`），而脚本不走 lifespan；
+    不补就是第一条真数据 FK 失败。已有行原样不动（用户可能已在配置里打开了该平台）。
+
+    `enabled=False`：开关的权威源是 `platforms.yaml`，**迁移不许顺手打开任何平台**。
+    """
+    if slug in seeded:
+        return
+    if await storage.platforms.get(slug) is None:
+        await storage.platforms.upsert(slug, enabled=False)
+    seeded.add(slug)
 
 
 async def _creator_pk(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -118,25 +211,43 @@ async def _videos(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [_row_to_dict(r, cols) for r in rows]
 
 
-def read_hidden_keys(v1_root: Path) -> set[str]:
-    """V1 的墓碑文件 = 一组"身份值"（platform_video_id / url / id 都可能）。拿不到就空集。"""
+def read_hidden_keys(v1_root: Path) -> tuple[set[str], list[str]]:
+    """V1 的删除名单，返回 (身份值集合, 错误行)。
+
+    取键口径逐字照 V1 `launcher_server.py:1548-1558 hidden_video_keys()`：只认
+    `platform_video_id` 与 `record_id`（外加 `local:<平台>:<vid>` 的尾段）。
+    条目里那个 `id` 是 `secrets.token_hex(6)` 随机串，**不是**作品身份 —— V1 自己注释过：
+    把它收进来，任何一条 record_id 撞上它都会静默隐藏一条活得好好的作品。
+
+    文件不存在 → 空集且不算错误（V1 对缺失同样返回空列表，语义就是"没人删过作品"）。
+    文件存在但读不出来 → **必须响**：此时无法知道用户删过什么，静默返回空集等于
+    把"删除复活"伪装成"从来没删过"。
+    """
     path = v1_root / V1_HIDDEN_RELPATH
     if not path.is_file():
-        return set()
+        return set(), []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return set()
-    items = data if isinstance(data, list) else data.get("keys") or data.get("videos") or []
+    except (OSError, ValueError) as exc:
+        return set(), [f"读不出 V1 墓碑名单 {path}：{type(exc).__name__}: {exc}"]
+    items = data if isinstance(data, list) else []
     keys: set[str] = set()
     for item in items:
-        if isinstance(item, str):
-            keys.add(item)
-        elif isinstance(item, dict):
-            for value in item.values():
-                if isinstance(value, str) and value:
-                    keys.add(value)
-    return keys
+        if not isinstance(item, dict):
+            continue
+        vid = str(item.get("platform_video_id") or "").strip()
+        if vid:
+            keys.add(vid)
+        rid = str(item.get("record_id") or "").strip()
+        if not rid:
+            continue
+        keys.add(rid)
+        # V1 本地行的 record_id 是 `local:<平台>:<作品 ID>`（launcher_server.py:1866）。
+        # split 上限 2：平台名理论上可能带冒号，尾段要整块拿。
+        parts = rid.split(":", 2)
+        if rid.startswith(_LOCAL_RECORD_PREFIX) and len(parts) == _LOCAL_RECORD_PARTS:
+            keys.add(parts[2])
+    return keys, []
 
 
 def _media_source_path(v1_root: Path, video_path: str) -> Path | None:
@@ -188,6 +299,115 @@ def _save_state(v2_data: Path, done: set[str]) -> None:
     )
 
 
+def _creator_draft(crow: dict[str, Any], report: MigrationReport) -> CreatorDraft | None:
+    """V1 `creators` 行 → `CreatorDraft`；认不出的平台记一条错误并返回 None（不猜平台）。"""
+    raw_platform = str(crow.get("platform") or "").strip()
+    platform_id = str(crow.get("platform_id") or "").strip()
+    slug = to_v2_platform(raw_platform)
+    if slug is None:
+        report.errors.append(
+            f"creator {crow.get('id')} 未迁入：V1 平台 {raw_platform!r} 在 V2 没有对应 slug"
+        )
+        return None
+    if not platform_id:
+        report.errors.append(f"creator {crow.get('id')} 未迁入：缺 platform/platform_id")
+        return None
+    return CreatorDraft(
+        platform=slug,
+        platform_id=platform_id,
+        name=str(crow.get("name") or platform_id),
+        avatar_url=(str(crow["avatar_url"]).strip() or None) if crow.get("avatar_url") else None,
+        profile_url=str(
+            crow.get("homepage_url") or crow.get("profile_url") or f"{slug}://{platform_id}"
+        ),
+        is_tracking=bool(crow.get("is_tracking", 1)),
+        metadata_json=str(crow.get("metadata_json") or "{}"),
+    )
+
+
+def _video_draft(
+    vrow: dict[str, Any],
+    platform: str,
+    creator_id: int | None,
+    media_rel: str | None,
+    report: MigrationReport,
+) -> VideoDraft:
+    """V1 `videos` 行 → `VideoDraft`。V1 把发布时间与四个计数存在文本列里，这里拆开映射。"""
+    pvid = str(vrow.get("platform_video_id") or "")
+    published_raw = str(vrow.get("published_at") or "").strip()
+    published_at, assumed_local = _parse_published_at(published_raw)
+    metrics, metrics_unparsed = _metrics_of(vrow)
+    if published_raw and published_at is None:
+        report.errors.append(f"video {pvid} 的 published_at 解析不出来，留空：{published_raw!r}")
+    if metrics_unparsed:
+        report.errors.append(f"video {pvid} 的 metrics_json 解析不出来，原文留在 metadata_json")
+    extra: dict[str, Any] = {}
+    if assumed_local:
+        extra["published_at_assumed_tz"] = "local"
+    if metrics_unparsed:
+        extra["v1_metrics_json"] = metrics_unparsed
+    return VideoDraft(
+        platform=platform,
+        platform_video_id=pvid,
+        creator_id=creator_id,
+        title=str(vrow.get("video_title") or vrow.get("title") or pvid),
+        duration_seconds=vrow.get("duration_seconds"),
+        published_at=published_at,
+        media_path=media_rel,
+        # V1 没记这条媒体走的哪条路 → 照实留 None（枚举列不许塞 "migrated_from_v1"，
+        # 那是编一个 DB CHECK 不认的取值）。迁移来源写进 metadata_json。
+        media_source=None,
+        metadata_json=_metadata_with_provenance(vrow, extra=extra),
+        # 逐个显式传，不用 `**metrics`：字典展开会让 mypy 放弃校验这个构造调用的其余参数
+        # （它曾因此放过一个真正的类型错）。
+        view_count=metrics.get("view_count"),
+        like_count=metrics.get("like_count"),
+        comment_count=metrics.get("comment_count"),
+        share_count=metrics.get("share_count"),
+    )
+
+
+def _tombstone_hit(vrow: dict[str, Any], pvid: str, hidden_keys: set[str]) -> bool:
+    """这条 V1 作品在不在删除名单上。只比 `platform_video_id` / V1 行 id / video_url
+    三个值 —— 与 `read_hidden_keys` 的取键口径成一对，两边都不塞"任何字符串"。"""
+    identities = {pvid, str(vrow.get("id") or ""), str(vrow.get("video_url") or "")}
+    return bool(identities & hidden_keys)
+
+
+async def _apply_tombstone(
+    storage: SqliteStorage,
+    video: Video,
+    vrow: dict[str, Any],
+    pvid: str,
+    hidden_keys: set[str],
+    report: MigrationReport,
+) -> None:
+    """命中 V1 墓碑 → 内化成 `is_hidden`，不再另存一份名单（V1 §7.25 的"墓碑散落"）。"""
+    if _tombstone_hit(vrow, pvid, hidden_keys) and not video.is_hidden:
+        await storage.videos.hide(video.id, "迁移自 V1 墓碑（hidden-videos.json）")
+        report.hidden += 1
+
+
+def _video_target(vrow: dict[str, Any], report: MigrationReport) -> tuple[str, str] | None:
+    """(slug, platform_video_id)；平台认不出就记一条并返回 None（与 `_creator_draft` 同一口径）。
+
+    认不出的平台**不写行、也不替它建 platforms 镜像行** —— 落一个 V2 没有的平台名，
+    等于给下次启动的 `prune_unknown` 埋雷（那行会被清，而引用它的行清不掉）。
+    """
+    raw_platform = str(vrow.get("platform") or "").strip()
+    slug = to_v2_platform(raw_platform)
+    if slug is None:
+        report.errors.append(
+            f"video {vrow.get('id')} 未迁入：V1 平台 {raw_platform!r} 在 V2 没有对应 slug"
+        )
+        return None
+    pvid = str(vrow.get("platform_video_id") or "").strip()
+    if not pvid:
+        report.errors.append(f"video {vrow.get('id')} 未迁入：缺 platform_video_id")
+        return None
+    return slug, pvid
+
+
 async def migrate(
     v1_root: Path,
     storage: SqliteStorage,
@@ -197,47 +417,41 @@ async def migrate(
     resume: bool = True,
     report: MigrationReport | None = None,
 ) -> MigrationReport:
-    """把 V1 的一次性搬进 V2。幂等：已存在的 (platform, platform_id / platform_video_id) 跳过。"""
+    """把 V1 的一次性搬进 V2。幂等：已存在的 (platform, platform_id / platform_video_id) 跳过。
+
+    单行失败只记一条 `report.errors`，不炸整跑 —— 一次跑不完比跑错一半便宜得多，
+    而状态文件让下一次接着跑。
+    """
     report = report or MigrationReport(dry_run=dry_run)
     v1_db = v1_root / V1_DB_RELPATH
     conn = open_v1_readonly(v1_db)
     done = _load_state(files.root) if resume else set()
+    hidden_keys, hidden_errors = read_hidden_keys(v1_root)
+    report.errors.extend(hidden_errors)
     platform_key_to_id: dict[tuple[str, str], int] = {}
+    seeded: set[str] = set()
 
     for crow in await _creator_pk(conn):
-        platform = str(crow.get("platform") or "").strip()
-        platform_id = str(crow.get("platform_id") or "").strip()
-        if not platform or not platform_id:
-            report.errors.append(f"creator 缺 platform/platform_id：{crow.get('id')}")
+        draft = _creator_draft(crow, report)
+        if draft is None:
             continue
-        draft = CreatorDraft(
-            platform=platform,
-            platform_id=platform_id,
-            name=str(crow.get("name") or platform_id),
-            avatar_url=(str(crow["avatar_url"]).strip() or None)
-            if crow.get("avatar_url")
-            else None,
-            profile_url=str(
-                crow.get("homepage_url") or crow.get("profile_url") or f"{platform}://{platform_id}"
-            ),
-            is_tracking=bool(crow.get("is_tracking", 1)),
-            metadata_json=str(crow.get("metadata_json") or "{}"),
-        )
         if dry_run:
             report.creators += 1
             continue
-        created = await storage.creators.insert_or_get(draft)
-        platform_key_to_id[(platform, platform_id)] = created[0].id
+        try:
+            await _ensure_platform_row(storage, draft.platform, seeded)
+            created = await storage.creators.insert_or_get(draft)
+        except (StorageError, ValidationError) as exc:
+            report.errors.append(f"creator {crow.get('id')} 未迁入：{type(exc).__name__}: {exc}")
+            continue
+        platform_key_to_id[(draft.platform, draft.platform_id)] = created[0].id
         report.creators += 1
 
-    hidden_keys = read_hidden_keys(v1_root)
-
     for vrow in await _videos(conn):
-        platform = str(vrow.get("platform") or "").strip()
-        pvid = str(vrow.get("platform_video_id") or "").strip()
-        if not platform or not pvid:
-            report.errors.append(f"video 缺 platform/platform_video_id：{vrow.get('id')}")
+        target = _video_target(vrow, report)
+        if target is None:
             continue
+        platform, pvid = target
         vkey = f"{platform}:{pvid}"
         if vkey in done:
             report.skipped_existing += 1
@@ -248,40 +462,26 @@ async def migrate(
         ).strip()
         creator_id = platform_key_to_id.get((platform, creator_pid))
 
-        media_rel, _source = _stage_media(v1_root, files, vrow, report, dry_run)
-
-        title = str(vrow.get("video_title") or vrow.get("title") or pvid)
-        draft = VideoDraft(
-            platform=platform,
-            platform_video_id=pvid,
-            creator_id=creator_id,
-            title=title,
-            duration_seconds=vrow.get("duration_seconds"),
-            media_path=media_rel,
-            # V1 没记这条媒体实际走的哪条路 → 照实留 None（枚举列不许塞 "migrated_from_v1"，
-            # 那是编一个 DB CHECK 不认的取值）。迁移来源写进 metadata_json。
-            media_source=None,
-            metadata_json=_metadata_with_provenance(vrow),
-        )
+        media_rel, _source = _stage_media(v1_root, files, vrow, platform, report, dry_run)
+        video_draft = _video_draft(vrow, platform, creator_id, media_rel, report)
         if dry_run:
-            report.videos += 1
-            status = str(vrow.get("transcript_status") or "")
-            if _clean_transcript_of(vrow) and status in {"已转写", "done", "transcribed"}:
-                report.transcripts += 1
+            _project_dry_run(vrow, pvid, hidden_keys, report)
             continue
 
-        video, created = await storage.videos.insert_or_get(draft)
-        if not created:
+        try:
+            await _ensure_platform_row(storage, platform, seeded)
+            video, is_new = await storage.videos.insert_or_get(video_draft)
+        except (StorageError, ValidationError) as exc:
+            report.errors.append(f"video {vkey} 未迁入：{type(exc).__name__}: {exc}")
+            continue
+        if not is_new:
             report.skipped_existing += 1
         else:
             report.videos += 1
 
-        await _maybe_attach_transcript(storage, files, video.id, vrow, media_rel, report, dry_run)
+        await _maybe_attach_transcript(storage, files, video.id, vrow, platform, media_rel, report)
 
-        identities = {pvid, str(vrow.get("id") or ""), str(vrow.get("video_url") or "")}
-        if identities & hidden_keys and not video.is_hidden:
-            await storage.videos.hide(video.id, "迁移自 V1 墓碑（hidden-videos.json）")
-            report.hidden += 1
+        await _apply_tombstone(storage, video, vrow, pvid, hidden_keys, report)
         done.add(vkey)
 
     conn.close()
@@ -290,15 +490,44 @@ async def migrate(
     return report
 
 
+#: V1 的 `transcript_status` 真实取值里只有这一个表示"稿子是完整的"。
+#: （实测本机 V1 库：已转写 16 条全部带稿子，待转写 5 条全部没有。）
+_V1_TRANSCRIBED = "已转写"
+
+
+def _transcript_worth_moving(vrow: dict[str, Any]) -> bool:
+    return bool(_clean_transcript_of(vrow)) and str(vrow.get("transcript_status") or "") == (
+        _V1_TRANSCRIBED
+    )
+
+
+def _project_dry_run(
+    vrow: dict[str, Any], pvid: str, hidden_keys: set[str], report: MigrationReport
+) -> None:
+    """预演只记账、不写库。三项都要投影：漏报"会隐藏 2 条"，看计划的人就以为
+    这次跑不会碰到任何被删过的作品。"""
+    report.videos += 1
+    if _transcript_worth_moving(vrow):
+        report.transcripts += 1
+    if _tombstone_hit(vrow, pvid, hidden_keys):
+        report.hidden += 1
+
+
 def _stage_media(
-    v1_root: Path, files: FileStorage, vrow: dict[str, Any], report: MigrationReport, dry_run: bool
+    v1_root: Path,
+    files: FileStorage,
+    vrow: dict[str, Any],
+    platform: str,
+    report: MigrationReport,
+    dry_run: bool,
 ) -> tuple[str | None, Path | None]:
+    """把 V1 的媒体文件挂进 V2 的 data/ 树。`platform` 是**已翻译好的 slug**（目录名要与
+    V2 自己采集出来的路径同构，不能再拿 V1 的显示名去拼一层）。"""
     source = _media_source_path(v1_root, str(vrow.get("video_path") or ""))
     if source is None:
         if str(vrow.get("video_path") or "").strip():
             report.media_missing += 1
         return None, None
-    platform = str(vrow.get("platform") or "")
     pvid = str(vrow.get("platform_video_id") or "")
     creator_name = str(vrow.get("creator_name") or "unknown")
     title = str(vrow.get("video_title") or pvid)
@@ -320,21 +549,18 @@ async def _maybe_attach_transcript(
     files: FileStorage,
     video_id: int,
     vrow: dict[str, Any],
+    platform: str,
     media_rel: str | None,
     report: MigrationReport,
-    dry_run: bool,
 ) -> None:
+    """V1 的稿子是内联文本列；V2 是 `transcripts` 表 + 磁盘文件。dry-run 走不到这里。"""
     text = _clean_transcript_of(vrow)
-    status = str(vrow.get("transcript_status") or "")
-    if not text or status not in {"已转写", "done", "transcribed"}:
-        return
-    if dry_run:
-        report.transcripts += 1
+    if not _transcript_worth_moving(vrow):
         return
     if media_rel is None:
-        # 没有媒体目录，稿子无处安（V2 稿子与媒体同住）→ 建一个以 video_id 命名的目录放它。
+        # 没有媒体目录，稿子无处安（V2 稿子与媒体同住）→ 另建一个目录放它。
         media_dir = files.media_dir(
-            str(vrow.get("platform") or ""),
+            platform,
             "unknown",
             str(vrow.get("platform_video_id") or ""),
             str(vrow.get("video_title") or "video"),
@@ -374,8 +600,14 @@ async def _amain(argv: list[str]) -> int:
     manager = ConfigManager(args.config_dir)
     config = manager.load()
     files = FileStorage.from_config(config)
-    files.ensure_dirs()
-    storage = SqliteStorage.from_config(config)
+    if args.dry_run:
+        # 预演**不碰目标树**：`ensure_dirs()` 会建出五个目录，`from_config().initialize()`
+        # 会建库并跑 Alembic —— 那之前"dry-run 未写任何东西"是句假话（打印它也一样假）。
+        # dry_run 路径下 `migrate()` 一次都不碰 storage，所以内存库足够。
+        storage = SqliteStorage.in_memory()
+    else:
+        files.ensure_dirs()
+        storage = SqliteStorage.from_config(config)
     await storage.initialize()
     try:
         report = await migrate(

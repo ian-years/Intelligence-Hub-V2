@@ -266,14 +266,45 @@ CREATE TABLE feishu_sync_state (
 
 ---
 
+> **实施期修订（2026-09-23，Task 3 收口）· §2 的 DDL 抄本与 `storage/schema.py` 差四处，以本条为准。**
+>
+> 代码 ↔ 迁移两侧的一致性有 `check_schema_matches_migrations()` 和
+> `test_the_migrated_db_has_exactly_the_checks_we_wrote` 守着；**spec 与代码之间没有守卫**，
+> 这一条就是去补那一处漂移（AGENTS §6：「动的是 SQLAlchemy schema？→ spec 同步了吗」）。
+>
+> 1. **§2.4 `transcripts` 实有三条 CHECK，§2 一条都没写**：`ck_transcripts_engine_enum`
+>    （engine ∈ `TRANSCRIPT_ENGINES`）、`ck_transcripts_char_count_nonneg`、
+>    `ck_transcripts_sentence_count_nonneg`。engine 那条是 V1→V2 迁移脚本撞出来的：
+>    provenance 只能走自由格式的 `metadata_json`，**不许占用枚举列**（§6 的映射因此而定型）。
+> 2. **§2.5 `task_runs` 是三条 CHECK 不是两条**：多出的 `ck_task_runs_terminal_has_ended_at`
+>    （`status = 'running' OR ended_at IS NOT NULL`）是 **V1 §2 契约二的 DB 半边** ——
+>    它让"声称 success 却没有 ended_at"这一状态在库里根本不可表示。
+>    §2 对此一字未提，是四处差异里最不该漏的一处。
+> 3. **§2.3 / §2.5 / §2.7 写的五个索引带 `DESC`，实际全是 ASC**（见
+>    `alembic/versions/0001_initial_schema.py` 与 dump 出的 DDL：
+>    `CREATE INDEX idx_videos_visible ON videos (is_hidden, published_at)`）。
+>    排序方向由查询侧的 `ORDER BY` 决定，索引方向不承重；写 ASC 是因为 SQLite 对
+>    混合方向索引起不来，别让下一个人以为改回来是免费的。
+> 4. **§2.2 / §2.3 的 `UNIQUE(platform, platform_id)` 写成了表约束，实际是命名唯一索引**：
+>    `uq_creators_platform_platform_id`、`uq_videos_platform_platform_video_id`。
+>    语义等价，但 V3 照 §2 逐字抄会得到 `sqlite_autoindex_*` 那种匿名名，
+>    `downgrade()` 与 `ON CONFLICT` 都指不到它。
+>
+> V3 换 PostgreSQL 时，**以 `storage/schema.py` + `0001_initial_schema.py` 为准**，
+> §2 的 SQL 块只当导读。
+
+---
+
 ## 3. Repository Protocol
 
 ```python
 from typing import Protocol, Unpack
 from typing_extensions import TypedDict
 
+
 class VideoUpdatableFields(TypedDict, total=False):
     """允许 update_fields() 更新的字段集。TypedDict + mypy 限定。"""
+
     title: str
     description: str | None
     published_at: datetime | None
@@ -290,6 +321,7 @@ class VideoUpdatableFields(TypedDict, total=False):
     creator_id: int | None
     # 注意：platform / platform_video_id / is_hidden 不可更新（要走专门方法）
 
+
 class VideoRepository(Protocol):
     async def get(self, id: int) -> Video | None: ...
     async def find_by_platform_id(self, platform: str, platform_video_id: str) -> Video | None: ...
@@ -301,7 +333,9 @@ class VideoRepository(Protocol):
     async def hide(self, id: int, reason: str) -> Video: ...
     async def unhide(self, id: int) -> Video: ...
     async def list_visible(self, *, filters: VideoFilters, page: Page) -> PagedResult[Video]: ...
-    async def attach_transcript(self, video_id: int, transcript: TranscriptDraft) -> TranscriptRecord: ...
+    async def attach_transcript(
+        self, video_id: int, transcript: TranscriptDraft
+    ) -> TranscriptRecord: ...
     async def count(self, *, filters: VideoFilters | None = None) -> int: ...
 ```
 
@@ -373,13 +407,26 @@ class Storage(Protocol):
 
 | V1 字段 | V2 字段 | 备注 |
 |---|---|---|
+| `creators.platform` / `videos.platform` | 同名列，但**取值词汇不同** | **必须翻译**：V1 `local_store.normalize_platform()` 存的是显示名（`抖音` / `B站` / `小红书` / `YouTube`），V2 这一列是 `ForeignKey("platforms.name")` 且存 slug（`douyin` / `bilibili` / …）。原样搬 = 第一条真数据就 FK 失败。表在 `tools/migrate_from_v1.py:V1_PLATFORM_TO_SLUG`，认不出来的平台**记一条错误并跳过该行**，不猜、也不替它建 `platforms` 镜像行 |
+| `videos.published_at` | `videos.published_at` | V1 写的是**无时区的本机时间**文本（`now_text()` = `%Y-%m-%d %H:%M:%S`）。按本机时区解读成 aware datetime，并把这个假设随数据记进 `metadata_json.published_at_assumed_tz` —— 不假装它是没有来源的 UTC。不映射它的话 Feed 排序与 `since` 过滤对迁移来的整批行同时失效，而库里看不出异常 |
+| `videos.metrics_json` | `view_count` / `like_count` / `comment_count` / `share_count` | 一个文本列拆成四列。解析不出来的**原文**留在 `metadata_json.v1_metrics_json` 并记一条错误，不猜 0 |
 | `creators.platform_id` / `creator_platform_id` / `mid` | `creators.platform_id` | 统一命名（V1 §7.11 解决） |
 | `videos.creator_platform_id` | `videos.creator_id`（FK） | 通过 `(platform, platform_id)` 查 V2 `creators.id` |
-| `videos.transcript_status` / `transcript_char_count` | `transcripts` 表 | 拆出独立表 |
+| `videos.transcript_status` / `transcript_char_count` | `transcripts` 表 | 拆出独立表。只有 `已转写` 且稿子非空才搬（实测本机 V1 库：已转写 16 条全部带稿、待转写 5 条全部没有）；`transcripts.engine` 是有 CHECK 枚举的列，来源不明的稿子归 `manual` |
 | `videos.is_hidden`（不存在，走 JSON 墓碑） | `videos.is_hidden` | 内化为列（V1 §7.25 解决） |
 | `creators.json` | `creators` 表 | 废双源（V1 §7.7 解决） |
-| `hidden-videos.json` | `videos.is_hidden` | 废文件 |
+| `hidden-videos.json` | `videos.is_hidden` | 废文件。**实际路径是 `downloads/launcher-state/hidden-videos.json`**（V1 `launcher_server.load_state_list()` 一律带 `downloads/` 前缀），少一层前缀 = 读不到 = 静默空集 = 用户删过的作品整批复活。取键口径照 V1 `hidden_video_keys()`：只认 `platform_video_id` 与 `record_id`（外加 `local:<平台>:<vid>` 的尾段），**条目自带的那个 `id` 是随机串，不是作品身份** |
 | `feishu-base.sqlite3` | `feishu_sync_state` 表 | 废独立镜像库 |
+
+> **迁移脚本的两条自持前提（2026-09-23）。**
+> 1. **`platforms` 镜像行由脚本自己补**（`enabled=False`）。这张表平时由 FastAPI 的
+>    lifespan 灌（`main._sync_platform_mirror`），一次性脚本不走 lifespan，不补就是 FK 失败；
+>    `enabled=False` 是因为开关的权威源是 `platforms.yaml`，**迁移不许顺手打开任何平台**。
+> 2. **单行失败不炸整跑**：每行的写入包在 `except (StorageError, ValidationError)` 里，
+>    原文进 `report.errors`。一次跑不完比跑错一半便宜，而状态文件让下一次接着跑。
+>
+> 另：`--dry-run` 现在真的什么都不写 —— 它不再 `ensure_dirs()`，也不建目标库
+> （以前会建出 `intelligence_hub.sqlite3` + 五个目录，然后打印「未写任何东西」）。
 
 ---
 
