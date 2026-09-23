@@ -184,6 +184,7 @@ Protocol 要求的 8 个方法都 `callable`，**且** `not isinstance(logger, s
 ```python
 _YAML_DATA: ContextVar[dict[str, Any] | None] = ContextVar("_YAML_DATA", default=None)
 
+
 def load_app_config(yaml_path: Path | None = None, **cli_overrides: Any) -> AppConfig:
     token = _YAML_DATA.set(read_yaml_mapping(path))
     try:
@@ -1186,6 +1187,219 @@ lifespan 注册它为 `reload_platform` 的订阅者；`PUT` 路由 reload 后�
 当照抄会拿"几百条绿用例的风险"去换一个"内容不变"的重排时，交付同一个基类、换一条不碰既有测试的路。
 —— 与经验 7（"计划里的代码是意图不是成品"）同源，只是这次意图藏在一句"届时把通用部分上移"里。
 
+
+### 实施阶段（V2.0）· V2.0 审查轮（Task 15 救活 + 契约回写）
+
+> 触发方式：Task 10-13 开工前先审已完成的一半（4 个切片并行评审 + 门禁复跑）。
+> 这一节的四条都来自"绿灯底下查出来的东西"，所以每条都写了**它当时为什么是绿的**。
+
+#### 经验 23 · fixture 的 DDL 忠实不够，**值**也必须来自源系统的真写入路径
+
+**现象**：Task 15 交付时写的是"按 V1 `local_store.py` 真实 schema 造的库验过行为"。
+本轮把 fixture 的取值换成 V1 真会写的那一种（`normalize_platform()` 的出口是显示名 `抖音`，
+不是 slug `douyin`），迁移立刻在**第一条博主**上 `StorageError: FOREIGN KEY constraint failed`。
+
+**根因**：DDL 是逐字抄的（这一点当时的评审也复核过、确实没问题），但**值是照着被测代码的
+假设写的**。而 `creators.platform` 是 `ForeignKey("platforms.name")`、V2 那边存 slug ——
+于是"翻译平台词汇"这件迁移**唯一真正要做的功能**，恰好是那份 fixture 唯一测不到的一件事。
+结构忠实 + 取值同源于被测代码 = 一份自证的空壳。
+
+**解法**：`V1_PLATFORM_TO_SLUG` 一处词汇表；`_creator_draft()` / `_video_target()` 认不出就
+记一条带原值的错误并**跳过该行**（不猜平台、也不替它建 `platforms` 镜像行 —— 那会给下次
+启动的 `prune_unknown` 埋雷）；`platforms` 镜像由脚本自己补，`enabled=False`
+（开关的权威源是 `platforms.yaml`，迁移不许顺手打开任何平台）。
+
+**判据**：为**第三方系统**造 fixture 时，每个字段的取值都要能指出"源系统里哪一行代码会写出
+这个值"。指不出来的，就是照着自己代码的假设编的。测试模块 docstring 里那张
+`抄 V1 xxx.py:NN` 的表就是这个用处，并且因此**禁止**从被测模块 import 那些常量
+（那等于用被测代码的假设验证被测代码）。
+
+**看护**：`tests/integration/test_migrate_from_v1.py::test_v1_display_names_land_as_v2_slugs`
++ `test_migration_seeds_the_platform_rows_it_needs`。本文件的 fixture 模块级 storage
+刻意**不预置** `platforms` 行（`tests/conftest.py` 那个会预置，一预置就替脚本把 FK 前置
+条件做完了）。
+
+#### 经验 24 · 注释与 spec 里承诺的防护，用之前先 grep 一遍
+
+**现象**：这一轮 grep 出四处"文档说有、代码里没有"的防护 ——
+
+| 位置 | 承诺 | 实际 |
+|---|---|---|
+| `infra/cdp_bridge.py:85` | 「预检会把非回环报成 degraded」 | 全 `src/` 没有这个检查；`tasks/preflight.py` 一次都没提桥 |
+| `task-runner.md §2.2` | 「调度器跑前检查 requires，缺了直接拒」 | `_gate_platforms()` 只看 `implemented` + `enabled` |
+| `storage/files.py:338` | 「任务结束时整个删掉」 | 没有任何代码路径删它 |
+| `AGENTS.md §3` / `config-schema.md §6` 等四处 | `INTELLIGENCE_HUB_DATA_DIR` 能挪数据根 | 静默无效（生效的是 `..._DATA__DIR`） |
+
+**根因**：这些句子写的是**打算**，交付之后读起来像**已经做了**。V1 §7.20 那一族的形状
+就是"绿的是看板，不是机器"，只不过这次的看板是文档。
+
+**解法**：本轮补了 workdir 清理与数据根 env 别名；`requires` 与桥回环**没有**补实现，
+而是把"目前不生效 + 为什么 + 落点"写回 spec（`task-runner.md §2.2` 的实施期现状块），
+宁可让文档承认缺一块，也不留一句会让人据此下结论的假话。
+
+**判据**：引用某处防护的注释/spec，必须能指出实现它的那一行；指不出来的改成"应当"或删掉。
+反向同理：**改了行为要回头删掉那句承诺**（本轮 `_maybe_attach_transcript` 就顺手删了
+`dry_run` 分支里已经走不到的记账代码）。
+
+**看护**：桥回环校验、`prune_unknown` 的 `IntegrityError` 翻译各自欠一条用例（见待办）。
+
+#### 经验 25 · 计划表的漏报，和虚报一样贵
+
+**现象**：`--dry-run` 打印「未写任何东西」的同时，实测在目标目录建出
+`intelligence_hub.sqlite3` + `media/ manifests/ cookies/ logs/ tmp/`。另一处它报
+`hidden墓碑=0`，而真 V1 库上确实有 2 条墓碑会命中 —— 因为"隐藏"那一步在 `dry_run`
+分支里被跳过了，只有写库那条路径会给 `report.hidden` 加一。
+
+**根因**：预演的输出是**给人决定要不要按回车看的**。两个方向的错都会要命：虚报让人以为
+会做更多，漏报让人以为这次不会碰任何东西 —— 而"被删过的作品会不会复活"恰好是那个人
+唯一关心的问题。
+
+**解法**：dry-run 不再 `ensure_dirs()`、用内存库（那条路径根本不碰 storage）；
+所有投影项（videos / transcripts / hidden）统一走 `_project_dry_run()`，与真跑共用
+`_transcript_worth_moving()` / `_tombstone_hit()` 两个谓词。
+
+**判据**：dry-run 报告的每一项，要么与真跑由**同一处代码**算出来，要么有独立用例钉住
+"预演值 == 真跑值"。断言"库里行数为 0"证明不了"磁盘没被动过"。
+
+**看护**：`test_dry_run_creates_no_database_and_no_directories`（扫目标树）、
+`test_dry_run_projects_the_tombstones_it_would_apply`。
+
+#### 经验 26 · 缺 `py.typed` 让"四关全绿"只对 `src/` 成立
+
+**现象**：`uv run mypy tools` 一跑就是 6 条 `import-untyped`（包没带 PEP 561 标记），
+于是 `tools/migrate_from_v1.py` 那 400+ 行**从来不在类型门禁里**。补上标记后立刻暴露
+两处真问题：`VideoDraft(**metrics)` 的字典展开会让 mypy 放弃校验该构造调用的**其余**参数，
+以及两个跨循环复用的变量名（`draft`、`created`）在两个循环里类型不同。
+
+**根因**：门禁的目标清单（`mypy src`）与"这次交付了什么"（`tools/` 是交付物）不同步；
+而 `make lint-python` 里 ruff 带 `tools`、mypy 不带 —— 看命令的人以为两边都过了。
+
+**解法**：加 `src/intelligence_hub_v2/py.typed`；`mypy src tools` 两条一起跑；
+计数列改成逐个显式传参。
+
+**判据**：每加一个**可执行交付物**（`tools/`、下一轮要移植的 `cdp_bridge_server.py`），
+同时把它加进 mypy 与 coverage 的目标清单。否则它的"绿"是没测过的绿。
+
+**看护**：门禁本身（`Makefile:lint-python` 与 `ci.yml` 都要含 `mypy src tools`）。
+注意 `tools/` 仍不在 coverage 的 `source` 里 —— 那一条还没做。
+
+**已做完**（第二轮）：桥回环校验、`IntegrityError` 上提到 `_scope()`、抖音 §7.21 回归、
+三条不设防的用例、`platforms.enabled` 镜像同步、`ci.yml` 解锁、`tools/` 进 mypy。
+下面这几条仍然欠着：
+
+1. `_check_requires` 落地（读一次 preflight 的结论，不要再开第二套探测真源）。
+2. `ConfigManager.write_platform_config` 未 `load()` 时会抹掉其他平台段（`config.py:599-608`），
+   以及首次 PUT 抹掉 `platforms.yaml` 的 96 行注释。
+3. 6 个"前端能渲染、后端零代码路径"的配置字段 —— 删或实现都要走 ADR（`PlatformConfig` 是冻结契约）。
+4. `tools/` 进 coverage 的 `source`（`mypy` 已进，覆盖率还没）。
+5. 契约测试基类补 `contract-tests.md §4` 点名的三条通用用例（`capabilities_match_expected` /
+   `list_creator_videos` 必填字段 / 兜底带 `source`+`error`），或按 ADR 改 §4。
+6. SSE 真机断连验证；DNS 重绑定要不要设 Host 白名单（要一个决定 + 一段 ADR）。
+
+---
+
+### 实施阶段（V2.0）· 审查轮 第二组（门禁真跑起来才看见的东西）
+
+> 做法：把上面那份"还欠的"按会不会咬到人排序，逐条 TDD 修。
+> 这一组最值钱的不是修了什么，而是**第一次把门禁本身跑通**之后露出来的四件事。
+
+#### 经验 27 · 门禁的工具版本要与解析出来的工具同版本，否则它是常红而没人看见
+
+**现象**：`pre-commit` 把 ruff 钉在 `v0.7.4`，项目解析到 `0.16.8`。0.7.x 认不得本项目
+`select` 里的 `TC001`，于是 `ruff check` 与 `ruff format` 两个 hook **每次 exit 2**，
+报的还是"TOML parse error at pyproject.toml line 103" —— 一句跟代码无关的错。
+`name-tests-test` 也一直红（它要求测试目录下每个 `.py` 都叫 `test_*.py`，于是
+`tests/contracts/_doubles.py` 这套共享替身被判"命名错误"）；`detect-secrets` 更是一直红 ——
+`--baseline .secrets.baseline` 指向一个从来没存在过的文件。
+
+**根因**：CI 的 `lint` job 内容是 `npm --prefix frontend ci` + `pre-commit`，而前端还没开工
+→ 这个 job **从没跑到过 ruff 那一步**。一个从没跑过的 job 会一直保持它第一天红着的形状。
+
+**解法**：hook rev 顶到 `v0.16.8`、`pyproject` 下限也顶到 `ruff>=0.16.8`（两边不许漂）；
+生成 `.secrets.baseline`（实测 0 条候选）；命名 hook 加 `exclude: '(^|/)(_|conftest\.py)'`；
+`ci.yml` 的 `lint` 拆成 `lint-python`（Python 四道，不碰 node）与 `precommit`，
+`test-backend: needs: lint-python`。
+
+**判据**：**任何门禁都要在本地完整跑过一次并亲眼看到 exit 0**，"配好了"不算配好了。
+
+**看护**：`uv run pre-commit run --all-files` 本轮首次 exit=0；`make ci-local` 已与 CI 的
+后端那一半对齐（补上了它以前不跑的覆盖率门禁与 alembic 往返）。
+
+#### 经验 28 · 只在"整仓一起跑"时成立的断言，是一会说谎的看护
+
+**现象**：把 §7 看护索引改成"比对本次运行收集到的 nodeid"之后，单跑
+`pytest tests/contracts/test_contract_guard_index.py` 立刻红 —— 那一刻 session 里只有
+这个文件的 20 个用例。
+
+**根因**：收集范围随调用方式变，我把它当成了全局事实。这类看护平时绿、单跑红，
+正是"看板上是绿的"那个病形状的镜像。
+
+**解法**：改用 AST 看目标文件：函数在不在、外层类叫不叫 `Test*`、有没有
+`skip/skipif/xfail`、body 里有没有一条**非恒真**断言。这四条都是
+"名字还在但它已经不跑了"的真实形态，且与运行范围无关。
+
+**判据**：看护不许依赖"别人也会一起跑"这个前提；写完**单独跑一次那个文件**。
+
+**看护**：`test_every_mapped_guard_will_actually_run`。实测把 §7.4 的一条指向改成
+只存在于另一个文件的名字，它会响（`… 里没有 xxx（改名或删掉了）`）。
+**它仍然抓不到的**：把断言写成逻辑恒真但"看起来像真断言"的空壳 —— 那要靠变异验证。
+
+#### 经验 29 · ruff ≥0.16 会格式化 Markdown 里的 Python 围栏
+
+**现象**：第一次完整跑 pre-commit，`ruff format` 报"14 files reformatted"，其中 6 份是
+`docs/adr/*.md` 与 `docs/plans/v2.0-implementation.md` —— 文档里的 Python 代码样例被按
+100 列重排、`import` 拆成一行一个、类 docstring 后补空行。本地那条
+`ruff format --check src tests tools` 根本碰不到这些文件，所以这事只在 CI 这一侧发生。
+
+**根因**：ruff 现在接受任意文本文件并把 ```python 围栏当代码；pre-commit 的 ruff hook
+默认按 `types: [text]` 粗筛，于是 `docs/` 被喂了进去。而计划文件是**历史事实**，
+重排它等于改记录。
+
+**解法**：两个 ruff hook 都加 `files: \.pyi?$`，把本地门禁与 pre-commit 的范围钉成同一份。
+
+**判据**：**改写型 hook 的作用范围必须与本地等价命令逐字相同**；不一样就迟早出现
+"本地绿 / CI 重排了我的文档"。
+
+**看护**：`pre-commit run --all-files` 后 `git status docs/` 不再冒出无关改动（本轮实测如此）。
+
+#### 经验 30 · 生成物要程序自己写文件，不能吃 shell 重定向
+
+**现象**：`python -c "print(json.dumps(...))" > openapi-snapshot.json` 在 Git Bash 下落的是
+**GBK** 字节（回头 `json.load` 报 `UnicodeDecodeError: 0xd0`）；换成 Python 内部写文件之后
+又是 **CRLF**（`write_text` 在 Windows 翻译 `\n`），于是 `mixed-line-ending` 每次来擦。
+CI 在 Linux 上生成的是 LF —— 而快照比对的全部意义就是两边字节一致。
+同一类问题还有一次：临时库路径我写了 Git Bash 的 `/tmp`，本机原生 Python 打不开，
+症状是一句看不懂的 `unable to open database file`，`make db-roundtrip` 第一版死在这。
+
+**解法**：统一 `pathlib.Path(...).write_text(doc + chr(10), encoding='utf-8', newline=chr(10))`
+（Makefile 与 `ci.yml` 同一段）；临时路径一律问 Python 要（`tempfile.gettempdir()`）。
+
+**判据**：跨平台产物显式 `encoding=` + `newline=`；路径由被调语言自己解析，不要借 shell 的视图。
+
+**看护**：实测两次生成逐字节一致、与提交的快照一致，文件 `CRLF: 0 / LF: 2122`。
+
+#### 经验 31 · 测试全注入 `state=`，等于没测生产启动路径
+
+**现象**：`create_app()` 不带 `state=` 时，`build_components` 里
+`InProcessEventBus(events=storage.events)` 在 `storage.initialize()` **之前**取仓库句柄，
+抛 `SqliteStorage 还没 initialize()`。而 `cli()` 用 uvicorn factory 模式指的就是
+`create_app` —— 也就是说 `uv run intelligence-hub`（验收判据 2）**根本起不来**。
+`test_app_lifespan.py` 那条"装配"用例是先 `await storage.initialize()` 再
+`build_components(...)`，所以这条路一次都没被覆盖。
+
+**根因**：Repository 只握"取 session 的工厂"，构造它不需要连接池 —— 门放错了位置：
+放在"拿句柄"上，等于要求调用方先异步初始化才能装配，而"工厂在启动前构造 app"正是生产形态。
+真正的门在第一次查询（`_require_sessionmaker`，那条文案还顺带盖住 `close()`）。
+
+**解法**：`_Repositories` 在 `SqliteStorage.__init__` 建好，`initialize()` / `close()` 不再动它；
+两条断言"属性本身就抛"的老用例按新语义改写（意图保留：**不许拿到半初始化的东西静默凑合**，
+只是判据从"访问属性"挪到"发查询"）。
+
+**判据**：**生产入口本身要有一条用例走一次**（`create_app(config_dir=tmp)` + `app.openapi()`）。
+凡是"测试注入 X、生产自己造 X"的形状，两边构造顺序不一致时只有生产会炸。
+
+**看护**：`test_create_app_boots_without_an_injected_state` 与
+`test_accessors_resolve_before_initialize_but_queries_do_not`（都是先红后绿）。
 
 ---
 
