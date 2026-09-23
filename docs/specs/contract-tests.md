@@ -41,19 +41,19 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | §7.1 抖音的身份是 `sec_uid`，不是 URL 里的东西；短链不含身份必须跟一次 302 | `test_share_link_follows_302_to_sec_uid`＋`test_sec_uid_recognised_from_each_shape`（5 形）＋`test_the_path_wins_over_a_conflicting_query_sec_uid`＋`test_url_encoded_in_the_sec_uid_slot_is_refused`＋`test_unrecognisable_input_raises_parse_url_with_the_original_text`（含 V2 新补的域名闸门，坑 20） | L2 | `tests/contracts/test_douyin_adapter.py` |
 | §7.2 抖音对非浏览器客户端做风控，yt-dlp 必失败 → 页面播放直链兜底是常态；`yt_dlp_error` 原文必须保留 | `test_fallback_marks_the_source_and_keeps_the_yt_dlp_original_text`＋`test_signed_play_url_never_reaches_the_artifact`＋`test_both_rounds_failures_are_reported_together`＋`test_missing_yt_dlp_binary_still_falls_back_and_says_so` | L2 | `tests/contracts/test_douyin_adapter.py` |
 | §7.3 Windows 上 yt-dlp 读不了 Chrome 的 cookie 库；唯一稳定路径是 `--cookies <文件>` | `TestCookieLadder`：`test_order_comes_from_capabilities_and_starts_with_the_exported_file`／`test_header_only_cookie_file_is_not_offered_as_a_login_rung`／`test_browser_rung_absent_unless_somewhere_names_a_browser`／`test_the_ladder_actually_reaches_yt_dlp_argv`。顺序的**唯一真源**是 `capabilities`，见 `docs/adr/0011`（经验 17） | L2 | `tests/contracts/test_douyin_adapter.py`（B站 那份在 `tests/contracts/test_bilibili_adapter.py`，Task 7） |
-| §7.5 转写落盘目录按平台不对称 | `test_transcript_path_unified_across_platforms` | L2 | `tests/contracts/test_transcript_path.py` |
-| §7.8 `safe_filename()` 不止换 `/`，还要处理 `..`、结尾点/空格、Windows 设备名 | `test_safe_filename_property_based`（hypothesis） | L0 | `tests/unit/test_safe_filename.py` |
-| §7.9 SenseVoice 不产标点，按静音切句补 `。`，否则 `split_sentences` 全废 | `test_asr_engine_punctuation_injection` | L2 | `tests/unit/asr/test_sherpa.py` |
+| §7.5 转写落盘目录按平台不对称 | `test_transcript_path_is_identical_across_platforms` | L1 | `tests/unit/storage/test_files.py` |
+| §7.8 `safe_filename()` 不止换 `/`，还要处理 `..`、结尾点/空格、Windows 设备名 | hypothesis 一组：`test_result_is_always_a_single_path_segment`、`test_result_is_never_a_path_segment_escape`、`test_result_is_usable_as_a_real_path` | L0 | `tests/unit/test_safe_filename.py` |
+| §7.9 SenseVoice 不产标点，按静音切句补 `。`，否则 `split_sentences` 全废 | **未落地**（ASR 在 V2.1，这一行现在只是计划，没有看护） | — | — |
 | §7.13 技能脚本物理上有两份（仓库 + 用户级），会漂 | 清单形状不认识时报错**点名仓库内那份生产者**：`test_an_unreadable_manifest_raises_naming_the_producer`；`diff -rq` 的 L0 那条留到 Task 14 | L2 | `tests/contracts/test_bilibili_adapter.py` |
 | §7.14 找不到生产者时是 SkipTest 不是 fail | 一律**红**，没有 skip 这条路：`test_exit_zero_with_nothing_parsed_is_still_a_failure`、`test_a_missing_manifest_file_is_reported_with_its_path`、`test_an_unreadable_manifest_raises_naming_the_producer`（缺文件 / 空结果 / 形状不对三种都覆盖） | L2 | `tests/contracts/test_bilibili_adapter.py` |
-| §7.15 B站 cookie 分两条路（枚举 + 媒体下载），都得带导出文件；档位差别是画质 | `test_the_enumeration_carries_the_same_cookie_rungs_as_download`（两条路的 argv 各断一次）＋ `test_three_rungs_in_the_v1_order` ＋ `test_header_only_file_is_not_a_login_rung` ＋ `test_a_clean_success_records_the_rung_not_an_error` | L2 | `tests/contracts/test_bilibili_adapter.py` |
+| §7.15 B站 cookie 分两条路（枚举 + 媒体下载），都得带导出文件；档位差别是画质 | `test_the_enumeration_carries_the_same_cookie_rungs_as_download`（两条路的 argv 各断一次）＋ `test_three_rungs_in_the_v1_order` ＋ `test_header_only_file_is_not_a_login_rung` ＋ `test_a_healthy_ladder_says_nothing` | L2 | `tests/contracts/test_bilibili_adapter.py` |
 | §7.16 B站搜索兜底要 Node 版 playwright + `NODE_PATH`，pip 那个不算数 | `test_search_fallback_is_refused_rather_than_silently_skipped`：勾了它而 V2 尚未实现时**如实红**，不静默跳过 | L2 | `tests/contracts/test_bilibili_adapter.py` |
-| §7.19 "注册表里有 PATH" ≠ "进程拿得到"；工作台已收口（`prepare_runtime_environment()`） | `test_prepare_runtime_environment_merges_registry_path` | L0 | `tests/unit/test_runtime_env.py` |
-| §7.20 桥的浏览器被人关掉后 formerly 会一直报绿；现已收口（`/health` 503 + 真请求自愈） | `test_bridge_health_returns_503_when_browser_dead` + `test_bridge_self_heal_on_first_request` + `test_bridge_503_semantics_not_bridge_down` | L2 | `tests/contracts/test_bridge_client.py` |
-| §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `TestDashSplit`：`test_pair_reaches_the_caller_as_a_video_audio_pair`、`test_only_yt_dlp_reported_paths_are_considered`（不扫目录）、`test_two_webm_tracks_are_told_apart_by_size`、`test_a_pair_artifact_points_the_transcriber_at_the_audio_track`（与 `audio_path_of()` 接通） | L2 | `tests/contracts/test_bilibili_adapter.py` + `test_bilibili_helpers.py` |
-| §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | `test_backfill_task_uses_creator_url_not_full_scan` | L3 | `tests/integration/tasks/test_backfill.py` |
-| §7.24 「持续跟踪」的值必须是真布尔，且默认值只能有一处 | `test_creator_tracking_default_is_true` + `test_set_tracking_rejects_non_bool` + `test_tracking_default_single_source_of_truth` | L1 + L4 | `tests/unit/storage/test_creators.py` + `tests/integration/api/test_creators.py` |
-| §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_writer_finalizes_on_all_exit_paths`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/tasks/test_manifest.py` |
+| §7.19 "注册表里有 PATH" ≠ "进程拿得到" | **未落地**：`prepare_runtime_environment()` 从未实现，今天只有 preflight 把缺的二进制报进 `summary["tools_missing"]` | — | — |
+| §7.20 桥的浏览器被人关掉后 formerly 会一直报绿；现已收口（`/health` 503 + 真请求自愈） | `test_503_means_browser_dead_not_bridge_down` + `test_bridge_available_is_true_on_503` + `test_dead_browser_during_navigate_raises_so_self_heal_can_run` | L1 | `tests/unit/infra/test_cdp_bridge.py` |
+| §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `TestDashSplit`：`test_pair_reaches_the_caller_as_a_video_audio_pair`、`test_only_yt_dlp_reported_paths_are_considered`（不扫目录）、`test_two_webm_tracks_are_told_apart_by_size`、`test_a_pair_artifact_points_the_transcriber_at_the_audio_track`（与 `audio_path_of()` 接通） | L2 | `tests/contracts/test_bilibili_adapter.py` + `tests/contracts/test_bilibili_helpers.py` |
+| §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | **未落地**（V2.1 的 Backfill 任务） | — | — |
+| §7.24 「持续跟踪」的值必须是真布尔 | `test_set_tracking_rejects_non_bool` + `test_tracking_rejects_non_boolean_with_422` | L1 + L3 | `tests/unit/storage/test_creators_repo.py` + `tests/integration/test_api_creators.py`（后半句"默认值只能有一处"**未落地**：要等前端 settings store，见 §3.1） |
+| §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_finalizes_on_every_exit_path`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/test_manifest_finalization.py` |
 
 ### 3.1 已落地的看护（截至 Task 3，2026-09-22）
 
@@ -117,6 +117,7 @@ import abc
 import pytest
 from intelligence_hub_v2.platforms.base import PlatformAdapter, Capabilities
 
+
 class PlatformAdapterContractTests(abc.ABC):
     """每个平台 Adapter 的测试类继承它，自动获得整套契约用例。
     V3 加新平台或重写老平台，这套测试一字不改、自动复用。"""
@@ -140,6 +141,7 @@ class PlatformAdapterContractTests(abc.ABC):
 
     def test_config_schema_is_platform_config_subclass(self):
         from intelligence_hub_v2.platforms.base import PlatformConfig
+
         assert issubclass(self.adapter().config_schema(), PlatformConfig)
 
     async def test_healthcheck_returns_structured_report(self):
@@ -189,20 +191,29 @@ class PlatformAdapterContractTests(abc.ABC):
 ```python
 # tests/contracts/test_douyin_adapter.py
 class TestDouyinAdapter(PlatformAdapterContractTests, IsolatedAsyncioTestCase):
-    def adapter(self): return make_douyin_adapter_with_mocks()
+    def adapter(self):
+        return make_douyin_adapter_with_mocks()
+
     def expected_capabilities(self):
         return Capabilities(
-            needs_browser=True, needs_cookies=True,
+            needs_browser=True,
+            needs_cookies=True,
             cookie_variants=("exported_file", "browser", "none"),
-            supports_subtitles=False, supports_dash_split=False,
-            list_strategy="browser_scroll", media_strategy="yt_dlp_with_fallback",
+            supports_subtitles=False,
+            supports_dash_split=False,
+            list_strategy="browser_scroll",
+            media_strategy="yt_dlp_with_fallback",
         )
-    def valid_creator_url(self): return "https://v.douyin.com/abc123/"
-    async def first_video_fixture(self): return load_douyin_video_fixture()
+
+    def valid_creator_url(self):
+        return "https://v.douyin.com/abc123/"
+
+    async def first_video_fixture(self):
+        return load_douyin_video_fixture()
 
     # ---- 抖音特有契约 ----
-    async def test_short_url_follows_302_to_sec_uid(self): ...        # §7.1
-    async def test_yt_dlp_failure_triggers_page_play_url(self): ...    # §7.2
+    async def test_short_url_follows_302_to_sec_uid(self): ...  # §7.1
+    async def test_yt_dlp_failure_triggers_page_play_url(self): ...  # §7.2
     async def test_page_play_url_does_not_persist_signed_cdn_url(self): ...  # §7.2 补充
 ```
 

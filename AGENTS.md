@@ -116,7 +116,12 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 V1 那 25 条陷阱（`Intelligence-Hub/AGENTS.md` §7）在 V2 的状态分三类：
 
 - **结构性消除**（V2 设计让它不可能再发生）：§7.4 整行覆盖、§7.6 LocalCreatorStore 参数、§7.7 双源、§7.10 路由靠记忆、§7.11 三种命名、§7.12 预检主库错位、§7.17 head 接常驻服务、§7.23 用时抖动门禁、§7.25 墓碑散落
-- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.9 SenseVoice 标点、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.19 注册表 PATH、§7.20 桥死了报绿、§7.21 B站 DASH、§7.22 按位扫描、§7.24 跟踪开关
+- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
+- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.9 SenseVoice 标点（ASR 在 V2.1）、§7.18 桥 profile 登录态跨会话持久（`cdp_bridge_server.py` 还没移植进 V2）、§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，只有 preflight 报 `tools_missing`）、§7.22 按位扫描（V2.1 的 Backfill）
+
+> 这三栏由 `tests/contracts/test_contract_guard_index.py` 逐条核：§7.1–§7.25 每条必须有归属、
+> 表里点名的用例必须真的存在且真的会跑、本节的"结构性消除"那一行必须与测试里的分桶一致。
+> 改任何一栏都要同步改那边，否则是一次红 —— 文档说"有看护"而实际没有，是本仓库踩过两次的坑。
 - **V2 新引入的待观察项**：见 [`docs/lessons.md`](docs/lessons.md) 的「V2 新增」节（实施过程中持续补充）
 
 每条对应测试见 [`docs/specs/contract-tests.md`](docs/specs/contract-tests.md)。
