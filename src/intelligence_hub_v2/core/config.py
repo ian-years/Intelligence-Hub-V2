@@ -24,6 +24,7 @@ spec 把 `yaml_file="config/app.yaml"` 写进 `AppConfig.model_config`，
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -287,9 +288,55 @@ class AppConfig(BaseSettings):
         「配置到底从哪来的」的悬案（V1 §7.12 同类问题）。
         """
         yaml_source = _YamlDictSource(settings_cls)
-        if yaml_source.is_empty():
-            return (init_settings, env_settings)
-        return (init_settings, env_settings, yaml_source)
+        alias_source = _FlatEnvAliasSource(settings_cls)
+        sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
+        if not alias_source.is_empty():
+            sources.append(alias_source)
+        if not yaml_source.is_empty():
+            sources.append(yaml_source)
+        return tuple(sources)
+
+
+ENV_FLAT_ALIASES: dict[str, tuple[str, ...]] = {
+    "INTELLIGENCE_HUB_DATA_DIR": ("data", "dir"),
+}
+"""文档承诺的**扁平**环境变量 → 嵌套路径。
+
+`env_nested_delimiter="__"` 意味着 `data.dir` 本只能写成 `INTELLIGENCE_HUB_DATA__DIR`，
+而 §6 那张表里 `data.dir` 那行写的是单下划线，且 `AGENTS.md §3`、`config-schema.md §6`
+（§7 声明此表对 V3 冻结）、`data-model.md §1`、`config/app.yaml` 四处一致。
+两边都认，嵌套那种优先 —— 它是其余每一行的写法。
+
+这一条不是拼写洁癖：把一次性脚本和测试挡在 live `data/`（有效会话 cookie、真实主库、
+浏览器 profile）之外靠的就是这个开关，而它失效的方向正好**朝生产数据敞开**、且不报错。
+"""
+
+
+def _flat_alias_values() -> dict[str, Any]:
+    """把 `ENV_FLAT_ALIASES` 里设了的项摊成嵌套 dict。空值不算设置（与 env 语义一致）。"""
+    out: dict[str, Any] = {}
+    for env_name, path in ENV_FLAT_ALIASES.items():
+        raw = os.environ.get(env_name)
+        if raw is None or not raw.strip():
+            continue
+        node: dict[str, Any] = out
+        for key in path[:-1]:
+            node = node.setdefault(key, {})
+        node[path[-1]] = raw.strip()
+    return out
+
+
+class _FlatEnvAliasSource(PydanticBaseSettingsSource):
+    """`ENV_FLAT_ALIASES` 的 settings 源。见 `config-schema.md §6` 的「扁平别名」。"""
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:  # noqa: ARG002
+        return None, field_name, False
+
+    def is_empty(self) -> bool:
+        return not _flat_alias_values()
+
+    def __call__(self) -> dict[str, Any]:
+        return _flat_alias_values()
 
 
 class _YamlDictSource(PydanticBaseSettingsSource):

@@ -50,6 +50,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 from typing import Literal
 
+
 class AppSection(BaseModel):
     name: str = "Intelligence Hub V2"
     version: str = "0.1.0"
@@ -61,6 +62,7 @@ class AppSection(BaseModel):
     docs_url: str | None = "/api/docs"
     redoc_url: str | None = None
 
+
 class DataSection(BaseModel):
     dir: Path = Path("data")
     media_subdir: str = "media"
@@ -68,11 +70,13 @@ class DataSection(BaseModel):
     cookies_subdir: str = "cookies"
     logs_subdir: str = "logs"
 
+
 class StorageSection(BaseModel):
     sqlite_file: str = "intelligence_hub.sqlite3"
     wal_mode: bool = True
     busy_timeout_ms: int = Field(default=5000, ge=100)
     event_retention_days: int = Field(default=30, ge=1)
+
 
 class LoggingSection(BaseModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -81,11 +85,13 @@ class LoggingSection(BaseModel):
     rotate_max_bytes: int = Field(default=52428800, ge=1048576)
     rotate_backup_count: int = Field(default=5, ge=1)
 
+
 class SchedulerSection(BaseModel):
     enabled: bool = True
     timezone: str = "Asia/Shanghai"
     max_concurrent_per_platform: int = Field(default=2, ge=1)
     max_concurrent_global: int = Field(default=4, ge=1)
+
 
 class BridgeSection(BaseModel):
     url: HttpUrl = HttpUrl("http://127.0.0.1:3457")
@@ -93,11 +99,13 @@ class BridgeSection(BaseModel):
     health_check_interval_seconds: int = Field(default=60, ge=10)
     restart_cooldown_seconds: int = Field(default=30, ge=5)
 
+
 class AsrSection(BaseModel):
     engine: Literal["sherpa_sense_voice", "mlx_whisper", "faster_whisper"] = "sherpa_sense_voice"
     model_dir: Path | None = None
     num_threads: int = Field(default=4, ge=1)
     device: Literal["cpu", "cuda", "mps"] = "cpu"
+
 
 class HttpSection(BaseModel):
     timeout_seconds: int = Field(default=30, ge=1)
@@ -105,11 +113,13 @@ class HttpSection(BaseModel):
     max_retries: int = Field(default=3, ge=0)
     user_agent: str = "Mozilla/5.0 ..."
 
+
 class PathsSection(BaseModel):
     ffmpeg: Path | None = None
     ffprobe: Path | None = None
     node: Path | None = None
     yt_dlp: Path | None = None
+
 
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -138,6 +148,7 @@ class AppConfig(BaseSettings):
 class RateLimitConfig(BaseModel):
     per_minute: int = Field(default=30, ge=1)
     per_creator_seconds: float = Field(default=1.0, ge=0.0)
+
 
 class PlatformConfig(BaseModel):
     """所有平台配置的基类。每个平台继承它，加平台特有字段。"""
@@ -205,6 +216,7 @@ class DouyinConfig(PlatformConfig):
 
     advanced: DouyinAdvanced = DouyinAdvanced()
 
+
 class DouyinAdvanced(BaseModel):
     retry_max: int = Field(default=3, ge=0)
     retry_backoff_seconds: float = Field(default=2.0, ge=0.0)
@@ -228,7 +240,9 @@ class BilibiliConfig(PlatformConfig):
     use_cdp_bridge: bool = False
 
     cookie_variant_order: tuple[Literal["exported_file", "browser", "anonymous"], ...] = (
-        "exported_file", "browser", "anonymous",
+        "exported_file",
+        "browser",
+        "anonymous",
     )
     """cookie 三档阶梯（V1 §7.15）。"""
 
@@ -237,6 +251,7 @@ class BilibiliConfig(PlatformConfig):
     prefer_subtitles: bool = True
 
     advanced: BilibiliAdvanced = BilibiliAdvanced()
+
 
 class BilibiliAdvanced(BaseModel):
     require_login_for_high_quality: bool = True
@@ -290,15 +305,17 @@ async def update_platform_config(
     config_service.reload_platform(name)
 
     # 4. publish CONFIG_CHANGED 事件
-    await event_bus.publish(Event(
-        type=EventType.CONFIG_CHANGED,
-        payload=ConfigChangedPayload(
-            scope="platform",
-            platform=name,
-            changed_fields=diff_fields(old, validated),
-            requires_restart=False,
-        ).model_dump(),
-    ))
+    await event_bus.publish(
+        Event(
+            type=EventType.CONFIG_CHANGED,
+            payload=ConfigChangedPayload(
+                scope="platform",
+                platform=name,
+                changed_fields=diff_fields(old, validated),
+                requires_restart=False,
+            ).model_dump(),
+        )
+    )
 
     return PlatformConfigResponse(config=validated, health=...)
 ```
@@ -326,6 +343,28 @@ async def update_platform_config(
 | `BILI_YTDLP_COOKIES_FROM_BROWSER` | `platforms.bilibili.ytdlp_cookies_from_browser`（兼容 V1） |
 
 V1 的环境变量名保留兼容，但 V2 内部统一走 `INTELLIGENCE_HUB_*`。
+
+> **实施期修订（2026-09-23）· 上面第一行曾经是完全纸面的。**
+>
+> `AppConfig` 的 `env_nested_delimiter="__"`，所以嵌套路径的**通用写法是双下划线**
+> （表里其余每一行都是这个形状）。`INTELLIGENCE_HUB_DATA_DIR` 用的是单下划线，
+> 按通用写法它**根本不映射到 `data.dir`** —— 而 `AGENTS.md §3`、`data-model.md §1`、
+> `config/app.yaml` 四处都写的是这一种。后果不是难看：这是"把一次性脚本和测试
+> 挡在 live `data/` 之外"的机制，而它静默失效、失效方向是**朝生产数据敞开**。
+>
+> 修法是给它一个显式别名表，而不是去改四处文档：
+> `core/config.py:ENV_FLAT_ALIASES` + `_FlatEnvAliasSource`。规则：
+> - 表里的扁平名**只有列出来的才生效**，不是"单下划线全局也认"（否则会发明第二套命名法）；
+> - 两种写法同时出现时**嵌套那种优先**（它更具体，也是通用写法）；
+> - 空串视为未设置，与 env 的一般语义一致。
+>
+> 要再加一条扁平别名，就改 `ENV_FLAT_ALIASES` 一处；看护在
+> `tests/unit/core/test_config.py`（含"别名不许波及其他 section"那条）。
+>
+> 另：`alembic` 侧还有两条**没进这张表**的承重变量 ——
+> `INTELLIGENCE_HUB_STORAGE__SQLITE_URL`（`alembic/env.py:69`，`0001` 的 docstring 让 CI 用它）
+> 与 `INTELLIGENCE_HUB_ALEMBIC_DIR`（`storage/db.py:112`）。§7 声明这张表对 V3 冻结，
+> 所以要么补进来，要么 V3 会照着缺一维的表重写。
 
 > **实施现状（Task 6，`docs/adr/0011`）**：`_build_platform_config()` 只吃 YAML，
 > 平台配置这一层**还没有接 env source**（上面三行 `DOUYIN_*` / `BILI_*` 的映射目前是纸面的）。

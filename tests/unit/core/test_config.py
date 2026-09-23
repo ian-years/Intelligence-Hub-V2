@@ -374,6 +374,42 @@ def test_data_dir_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert cfg.data.dir == tmp_path / "elsewhere"
 
 
+def test_documented_flat_data_dir_alias_actually_relocates_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`INTELLIGENCE_HUB_DATA_DIR`（单下划线）是**四处文档承诺的那一种写法**：
+    `AGENTS.md §3`、`config-schema.md §6`（§7 声明这张表对 V3 冻结）、`data-model.md §1`、
+    `config/app.yaml:26`。而 `env_nested_delimiter="__"` 让它静默无效 ——
+    `data.dir` 原地不动、不报错。
+
+    它不是拼写洁癖：把一次性脚本和测试挡在 live `data/`（有效会话 cookie、真实主库、
+    浏览器 profile）之外，靠的就是这个开关。失效的方向还正好是**朝生产数据敞开**。
+    """
+    monkeypatch.setenv("INTELLIGENCE_HUB_DATA_DIR", str(tmp_path / "elsewhere"))
+    cfg = AppConfig()
+    assert cfg.data.dir == tmp_path / "elsewhere"
+
+
+def test_nested_spelling_beats_the_flat_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """两种写法同时出现时取嵌套那种：它更具体，也是 §6 表里其余每一行的写法。"""
+    monkeypatch.setenv("INTELLIGENCE_HUB_DATA_DIR", str(tmp_path / "flat"))
+    monkeypatch.setenv("INTELLIGENCE_HUB_DATA__DIR", str(tmp_path / "nested"))
+    cfg = AppConfig()
+    assert cfg.data.dir == tmp_path / "nested"
+
+
+def test_alias_does_not_leak_into_other_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """别名只搬 `data.dir` 这一条，别顺手把整棵树的取值规则改成"单下划线也认"。"""
+    monkeypatch.setenv("INTELLIGENCE_HUB_DATA_DIR", str(tmp_path / "elsewhere"))
+    cfg = AppConfig()
+    assert cfg.app.port == 8789
+    assert cfg.storage.wal_mode is True
+
+
 def test_config_dir_is_created_on_write(tmp_path: Path) -> None:
     """config/ 不存在时写盘要能自己长出来（V1 §4.1 的 mkdir 纪律）。"""
     nested = tmp_path / "cfg"
