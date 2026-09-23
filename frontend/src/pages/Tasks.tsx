@@ -2,14 +2,8 @@ import type { FormEvent, JSX } from "react";
 import { useState } from "react";
 
 import { ApiError } from "@/api/client";
-import {
-  useCancelRun,
-  useRuns,
-  useRunTask,
-  useTasks,
-  useTaskSchema,
-  type TaskInfo,
-} from "@/api/hooks/useTasks";
+import type { ObjectSchema } from "@/api/json-schema";
+import { useCancelRun, useRuns, useRunTask, useTasks, type TaskInfo } from "@/api/hooks/useTasks";
 import { useTaskEvents } from "@/events/useTaskEvents";
 import { EVENT_TYPES } from "@/events/types";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
@@ -136,11 +130,42 @@ export function Tasks(): JSX.Element {
   );
 }
 
-/** 一个任务一张卡。发起能力来自那个任务自己的参数 schema。 */
+/** 参数形状只有三种可信读法 + 一种"读不出来"，最后那种**不给任何发起按钮**。 */
+type Shape = "no-required" | "url-only" | "other" | "unknown";
+
+/**
+ * 从任务自带的 `params_schema` 判断"能不能一键发起"。
+ *
+ * 判据必须是**否证式**的，这里踩过一次：`/api/tasks/{name}/schema` 回的是
+ * `{name, display_name, kind, params_schema}` 那个信封，而 `TaskInfo.params_schema`
+ * 才是里面那层 JSON Schema。当时读的是 `schema.required ?? []`，
+ * 信封上没有 `required` → 空数组 → **六个任务全给了「跑一次」**，
+ * 其中 `single_link` / `add_creator` 是必填 `url` 的，点下去就是一个 422。
+ *
+ * 所以先确认"这像个 JSON Schema"（有 `type` 或有 `properties`）再谈必填；
+ * 不像就归到 `unknown`，界面上一个发起按钮都不给。
+ * （`required` 缺省本身按 JSON Schema 是合法的"无必填"，那种情况有 `type: "object"` 兜着。）
+ */
+function shapeOf(task: TaskInfo): Shape {
+  const schema = task.params_schema as ObjectSchema | undefined;
+  if (
+    schema === undefined ||
+    typeof schema !== "object" ||
+    (schema.type === undefined && schema.properties === undefined)
+  ) {
+    return "unknown";
+  }
+  const required = (schema.required ?? []).filter((key): key is string => typeof key === "string");
+  if (required.length === 0) return "no-required";
+  if (required.length === 1 && required[0] === "url") return "url-only";
+  return "other";
+}
+
+/** 一个任务一张卡。发起能力来自 `/api/tasks` 里那条自带的 `params_schema`，
+ *  不再每张卡发一次 `/tasks/{name}/schema`（六张卡就是六次请求问同一件事）。 */
 function TaskCard({ task }: { task: TaskInfo }): JSX.Element {
-  const schema = useTaskSchema(task.name);
-  const required = schema.data?.required ?? [];
-  const onlyUrl = required.length === 1 && required[0] === "url";
+  const shape = shapeOf(task);
+  const required = (task.params_schema as ObjectSchema | undefined)?.required ?? [];
 
   return (
     <HardShadowCard className="flex flex-col gap-2">
@@ -160,23 +185,21 @@ function TaskCard({ task }: { task: TaskInfo }): JSX.Element {
         {task.timeout_seconds === null ? "没有超时" : `超时 ${String(task.timeout_seconds)} 秒`}
       </p>
 
-      {!schema.isPending && !schema.isError && required.length === 0 && (
-        <RunButton task={task} build={() => ({})} label="跑一次" />
-      )}
-      {!schema.isPending && !schema.isError && onlyUrl && <UrlRunButton task={task} />}
-      {!schema.isPending && !schema.isError && required.length > 0 && !onlyUrl && (
+      {shape === "no-required" && <RunButton task={task} build={() => ({})} label="跑一次" />}
+      {shape === "url-only" && <UrlRunButton task={task} />}
+      {shape === "other" && (
         <p className="text-body-sm">
           这一版界面发不了它：必填参数是 <code>{required.join("、")}</code>。
           {task.name === "add_creator"
             ? " 收录博主请去博主页那个表单（那个端点会带上平台与跟踪默认值）。"
-            : " 参数表单渲染器目前只接进设置页；这里画一个必然 422 的按钮没有意义。"}
+            : " 任务参数表单渲染器目前只接进设置页；这里画一个必然 422 的按钮没有意义。"}
         </p>
       )}
-      {schema.isPending && <p className="text-body-sm">读参数 schema…</p>}
-      {schema.isError && (
-        <p className="break-words text-body-sm text-coral-red">
-          读不到参数 schema：
-          {schema.error instanceof ApiError ? schema.error.detail : schema.error.message}
+      {shape === "unknown" && (
+        <p className="text-body-sm bg-coral-red">
+          读不出这个任务的参数形状（`params_schema` 不像一份 JSON Schema：既没有 `type` 也没有
+          `properties`）。读不出来就不给发起按钮 —— 猜成"没有必填"的后果是一个按下去 必然 422
+          的按钮，而这正是这一栏最容易看起来正常的失败方式。
         </p>
       )}
     </HardShadowCard>

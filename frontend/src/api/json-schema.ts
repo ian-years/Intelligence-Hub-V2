@@ -23,6 +23,10 @@ export interface PropertySchema {
 
 export interface ObjectSchema {
   title?: string;
+  /** Pydantic 的模型 schema 一直给 `"object"`。任务页用它判"这像不像一份 JSON Schema"：
+   *  一个信封形状（`{name, kind, params_schema}`）既没有 `type` 也没有 `properties`，
+   *  认不出来就该拒绝发起，而不是把"读不到必填"当成"没有必填"。 */
+  type?: string;
   /** 顶层字段顺序（`DouyinConfig` 的 `json_schema_extra` 写的是 `["enabled"]`）。 */
   "ui:order"?: string[];
   properties?: Record<string, PropertySchema>;

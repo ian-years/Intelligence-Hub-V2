@@ -1,6 +1,8 @@
 # Intelligence Hub V2 — Makefile
 # 用法：make <target>；`make help` 列所有目标
-# Windows 上需要 make（Git Bash 自带，或 `choco install make`）
+# Windows 上需要 make —— **Git Bash 并不自带**（2026-09-23 在本机 Git for Windows 实测：
+# PATH 里没有 make.exe）。没装就照 ci-local 的 recipe 逐条直接跑并自己打退出码；
+# 别用 `make ... | tail`，那之后 $? 是 tail 的。装的话：`choco install make`。
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -56,7 +58,7 @@ dev-frontend:  ## 仅起前端（Vite HMR）
 run: build  ## 生产模式（构建前端 → 后端 serve 静态文件）
 	uv run python -m intelligence_hub_v2.main
 
-build:  ## 构建前端到 src/intelligence_hub_v2/web/
+build:  ## vite build 到 frontend/dist（main.py 的 _mount_frontend 读的就是这一份）
 	$(NPM) run build
 
 # ---------------------------------------------------------------------------

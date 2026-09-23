@@ -86,15 +86,16 @@ pre-commit install
 # 开发模式（同时起后端 :8789 + 前端 :5173）
 make dev
 
-# 单独跑后端
-uv run uvicorn intelligence_hub_v2.main:app --reload --port 8789
+# 单独跑后端（入口是**工厂**：main.py 里没有模块级 `app`，写 `main:app` 会报
+# "Attribute app not found"）
+uv run uvicorn --factory intelligence_hub_v2.main:create_app --reload --port 8789
 
 # 单独跑前端
 npm --prefix frontend run dev
 
 # 生产构建（vite build → 后端 serve 静态文件，单端口 :8789）
 make build
-uv run python -m intelligence_hub_v2.main
+uv run intelligence-hub        # console script = main:cli；`python -m ...main` 没有 __main__，跑了不做事
 
 # 测试
 make test                    # 全跑（不含 real_network）
@@ -105,7 +106,10 @@ make test-real               # 真机烟雾（手动跑）
 uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hub" --dry-run
 ```
 
-**Windows 上 Python 命令都要 `-X utf8` 或确保控制台 UTF-8**（GBK 会把中文打崩）。`make` 通过 Git Bash 跑。
+**Windows 上 Python 命令都要 `-X utf8` 或确保控制台 UTF-8**（GBK 会把中文打崩）。
+**`make` 不是自带的**：本机 Git for Windows 里没有 `make.exe`（Makefile 头注释那句"Git Bash 自带"
+2026-09-23 实测不成立）。没装 make 时照 `ci-local` 的 recipe 逐条直接跑，
+并且**自己打退出码** —— `make ci-local 2>&1 | tail -60` 报的是 `tail` 的 0。
 
 **改了任何代码都要重启 `make dev`**：uvicorn `--reload` 只盯 `src/`，前端 Vite HMR 只盯 `frontend/src/`，配置文件改了要重启后端（运行时不监听文件变化，只通过 API 写）。
 

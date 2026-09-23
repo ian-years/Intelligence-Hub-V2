@@ -93,6 +93,31 @@
   `App.tsx` 的 7 条 `HashRouter` 路由与 `/tokens` 开发页。侧栏的平台清单读自
   `/api/platforms`（**读不到要显示原因，不许渲染成安静的一片空**）
 
+- **Task 8 · 运行时**：`tasks/definition.py`（`TaskDefinition` / `TaskContext` / `CancelToken`
+  三个契约类型，放在 `tasks/` 因为 `AGENTS.md §2` 的契约表把它钉在那儿）、`core/task_registry.py`
+  （12 个任务全登记、6 个真实现 + `DepsFactory` 按 `capabilities.needs_browser` 决定给不给桥客户端）、
+  `core/task_runner.py`（`TaskRunner` 单次执行 + `TaskScheduler` 开关门/Semaphore/协作式取消）。
+  六个 handler 里采集只写一份 `make_collect_handler(platform)` 注册两次（写两份就是"两处真相漂一次"）。
+  清单先落盘、再广播 `task.finished`：反过来的话前端收到完成事件点进去清单是 404
+- **Task 9 · API**：`main.py`（`create_app` 工厂 + `_lifespan`：初始化存储 → `ensure_dirs` →
+  平台镜像同步 → `reap_orphans` → 配置订阅 → 每日事件清理）+ `api/v1/` 九个路由模块
+  （health / config / creators / videos / transcripts / tasks / events / manifests / router）。
+  公开前缀是 `/api`（与 `docs/specs` 的 Locked 契约一致）。异常映射：
+  `NotFoundError`→404、`ConflictError`→409、`TaskRejected`→422、`PlatformError`→400、
+  `StorageError`→500、校验失败→422
+- **Task 14 · 契约测试基类**：`tests/contracts/test_platform_adapter.py` 的
+  `PlatformAdapterContractTests`（11 条通用契约）+ 抖音/B站 两个实例子类；
+  `test_contract_guard_index.py` 把 V1 §7 那 25 条陷阱逐条核到"有归属且用例真存在且真会跑"
+- **Task 15 · `tools/migrate_from_v1.py`**：只读 V1 SQLite（`mode=ro` URI）→ 写 V2 主库 + `data/` 树。
+  映射表见 `docs/specs/data-model.md §6`；媒体走 hardlink、跨卷退 copy；
+  V1 内联的 `clean_transcript` 拆成 `transcripts` 行 + 磁盘 `speech-clean.txt`；
+  `launcher-state/hidden-videos.json` 的墓碑翻成 `is_hidden`。幂等 + `.migration_state.json` 续跑
+- **这四处的首次真数据验证在 2026-09-23 的全栈冒烟里**（临时目录，未动 live `data/`）：
+  `creators=4 videos=21 transcripts=16 墓碑=2 媒体 link=21 copy=0 missing=0`；
+  页面上点一次「跑一次」真的起了 `preflight`，事件顺序
+  `task.started → manifest.written → task.finished` 与清单落盘都对，summary 说实话
+  （`platforms_ok=0 degraded=2 tools_missing=ffmpeg, ffprobe`）
+
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），
   全仓累计 650 passed、覆盖率 95.07%、`ruff` / `mypy --strict` 全绿

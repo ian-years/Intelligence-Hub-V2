@@ -1726,6 +1726,81 @@ useCreators.ts:33          api.post<Creator>("/creators", body)     ← 手写�
 
 ---
 
+#### 经验 42 · "读不到必填"被当成"没有必填"，于是每个任务都拿到一个必然 422 的按钮（Task 16 冒烟）
+
+**现象**：全栈冒烟时把浏览器停在 `#/tasks`，读页面状态：六个任务**六个都给了「跑一次」**，
+`required` 该拦住的 `single_link` / `add_creator` 也在内。界面上没有任何报错，
+看起来像"这一版把发起做完了"。
+
+**根因**：`/api/tasks/{name}/schema` 回的不是 JSON Schema 本体，而是**信封**：
+
+```json
+{"name": "...", "display_name": "...", "kind": "...", "params_schema": { ...真正的 schema... }}
+```
+
+路由的返回注解是 `dict[str, Any]`，所以 OpenAPI 里这个端点**没有 schema**，
+`src/api/schema.d.ts` 帮不上忙（我那条源码级同源看护也因此跳过它 —— 没有 `$ref` 可比）。
+前端把它当 `ObjectSchema` 用，`schema.required ?? []` 在信封上永远读到 `undefined` → 空数组
+→ 判据"没有必填"→ 给按钮。
+
+**为什么难发现**：这条链上每一环单独看都合理。`required` 缺省在 JSON Schema 里**确实是合法值**
+（意思是无必填，Pydantic 对空模型就是不写这个键），所以 `?? []` 不是随手写的兜底，
+而是规范允许的读法。错的是**它作用在一个不是 schema 的对象上**。
+
+**解法**：判据改成**否证式**（`Tasks.tsx` 的 `shapeOf`）：先确认"这像个 JSON Schema"
+（有 `type` 或 `properties`），不像就归 `unknown` 并且**一个发起按钮都不给**，
+界面上说"读不出这个任务的参数形状"。同时页面改用 `/api/tasks` 里每条自带的
+`params_schema`（那一份在契约里是 `TaskInfo.params_schema`），
+六张卡不再各发一次 `/schema` 请求 —— 实测 `schemaRequests = 0`。
+
+**判据**：**读不出形状 ≠ 没有要求**。凡是"`x ?? 默认`"的写法，都要能回答
+"如果 `x` 之所以不在，是因为上游给错了对象呢？" —— 在这一层，猜错的代价是点一下按钮写进一条失败任务。
+推论：返回注解写成 `dict[str, Any]` 的路由，等于把它的形状从契约里拿掉，
+**前端只能猜，而猜错没有任何一关会红**。这类端点要么给 `response_model`，
+要么就在界面上按"不可信"处理。
+
+**看护**：`src/pages/tasks.spec.tsx` 的
+`参数形状读不出来的任务：一个发起按钮都不给，并且说实话`（夹具里那个 `mystery` 任务
+用的就是今天这个信封形状）+ `一张卡一个任务，且参数形状随列表一起到（不逐张卡再问一次）`。
+变异验证：把 `shapeOf` 的 `unknown` 判据退回旧写法 → 三条用例红，
+报错就是 `expected [...] to have a length of 2 but got 3`。
+
+---
+
+#### 经验 43 · 冒烟之前先确认你在跟哪个进程说话（Task 16，差点把 V1 当成 V2 报）
+
+**现象**：按计划起 V2（`uv run uvicorn intelligence_hub_v2.main:app --port 8789`，
+AGENTS.md §4 里就是这么写的）→ 后台任务**退出码 1**。但紧接着我 curl 同一批地址时，
+`/api/health` 回的是 `200` 而且**看着像答案**：`{"ok": true, "busy": false, "checks": {...}}`。
+
+两处不对，当时都没先看：
+
+1. V2 的 `HealthResponse` 是 `{status, version, time}`，回的却是 `{ok, busy, current_task_id,
+   checks, checklist, douyin_bridge…}` —— 那是 **V1 的形状**（V1 在这台机器上正跑着，
+   占着 `127.0.0.1:8789`，PID 2288）。
+2. V2 的模块里**没有** `app` 这个属性（入口是 `create_app()` 工厂 + `cli()`），
+   所以 AGENTS.md §4 那条命令本身起不来。
+
+也就是说：如果我只看"200 + 有 JSON"，整份冒烟报告会是**用另一个项目的响应写的**。
+
+**解法**：换端口（8790）+ `--factory`，并且把"这次回答是谁"钉在证据里 ——
+比对形状而不是比对状态码。V2 起来后同一地址回的是 `{status:"ok", version:"0.1.0", time:…}`，
+`/api/platforms` 从 404 变 200，才算连对了进程。
+
+**判据**：
+- **同机多项目共存时，端口不是身份**：`127.0.0.1:<port>` 只说明"有人应答"，
+  不说明"是你的代码在应答"。冒烟的第一条断言应该是**响应形状**（或某个只属于本项目的端点，
+  比如 V2 有 `/api/platforms` 而 V1 没有）。
+- **后台任务的 exit code 会骗人**：`make ci-local 2>&1 | tail -60` 那次报的是 `tail` 的 0，
+  而 `make` 根本没跑（这台机器**没有 make** —— Makefile 头注释里"Git Bash 自带 make"不成立）。
+  要看真实退出码，命令末尾自己打 `$?`，或者把管道去掉。
+- 文档里的启动命令**每次冒烟都重跑一遍**：跑不通就是文档的 bug，当场改（这次改了 AGENTS.md §4 与 Makefile 注释）。
+
+**看护**：这一条是流程纪律，没有测试可配 —— 所以写在这里，并且冒烟结论全部带上了
+"响应形状长什么样"的原文（`{status,version,time}` vs `{ok,busy,checks,…}`）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

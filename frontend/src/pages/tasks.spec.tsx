@@ -5,34 +5,46 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { TaskInfo } from "@/api/hooks/useTasks";
 import { Tasks } from "@/pages/Tasks";
 import { makeRun } from "@/test/fixtures";
 
-/** 四个任务，覆盖界面要的三种形状：无需参数 / 只差一个 url / 参数发不了。 */
-const tasks = [
+/** Pydantic 的模型 schema：没有必填时它**不写** `required` 键（JSON Schema 的合法省略）。 */
+const object = (properties: string[], required?: string[]): Record<string, unknown> => ({
+  type: "object",
+  title: "Params",
+  properties: Object.fromEntries(properties.map((key) => [key, { title: key, type: "string" }])),
+  ...(required === undefined ? {} : { required }),
+});
+
+/** 五个任务，覆盖界面要的四种形状：无必填 / 只差一个 url / 别的必填 / 参数形状读不出来。 */
+const tasks: TaskInfo[] = [
   {
     name: "preflight",
     display_name: "环境预检",
     kind: "preflight",
     platforms: [],
     cancellable: false,
-    timeout_seconds: 120,
+    timeout_seconds: 60,
+    params_schema: object([]),
   },
   {
     name: "douyin_collect",
     display_name: "抖音采集",
-    kind: "collect",
+    kind: "platform_collect",
     platforms: ["douyin"],
     cancellable: true,
-    timeout_seconds: null,
+    timeout_seconds: 1800,
+    params_schema: object(["creator_ids", "since", "limit"]),
   },
   {
     name: "single_link",
     display_name: "收一条链接",
-    kind: "collect",
+    kind: "single_link",
     platforms: ["douyin", "bilibili"],
     cancellable: true,
     timeout_seconds: 600,
+    params_schema: object(["url"], ["url"]),
   },
   {
     name: "postprocess",
@@ -41,15 +53,20 @@ const tasks = [
     platforms: [],
     cancellable: false,
     timeout_seconds: null,
+    params_schema: object(["video_ids", "reason"], ["video_ids", "reason"]),
+  },
+  {
+    name: "mystery",
+    display_name: "形状读不出",
+    kind: "collect",
+    platforms: [],
+    cancellable: false,
+    timeout_seconds: null,
+    // 真踩过的形状：`/api/tasks/{name}/schema` 回的那个**信封**被当成 schema 用了。
+    // 它既没有 `type` 也没有 `properties` —— 认不出来就不许给发起按钮。
+    params_schema: { name: "mystery", display_name: "x", kind: "collect", params_schema: {} },
   },
 ];
-
-const schemas: Record<string, { required: string[] }> = {
-  preflight: { required: [] },
-  douyin_collect: { required: [] },
-  single_link: { required: ["url"] },
-  postprocess: { required: ["video_ids", "reason"] },
-};
 
 const runs = [
   makeRun({ id: "run-1", task_name: "preflight", status: "success" }),
@@ -86,7 +103,7 @@ class FakeEventSource {
     this.closed = true;
   }
 
-  /** 一帧具名事件：后端每一帧都带 `event: <type>`，所以 `onmessage` 一帧都收不到。 */
+  /** 一帧具名事件：后端每帧都带 `event: <type>`，所以 `onmessage` 一帧都收不到。 */
   emit(type: string, payload: Record<string, unknown>): void {
     const frame = { data: JSON.stringify({ type, ...payload }) } as MessageEvent;
     for (const handler of this.listeners.get(type) ?? []) handler(frame);
@@ -97,6 +114,7 @@ class FakeEventSource {
   }
 }
 
+/** 页面只该问 `/api/tasks`（每条自带 `params_schema`），不该再逐张卡问一次 schema。 */
 function stub(): void {
   calls.length = 0;
   sent.length = 0;
@@ -113,15 +131,11 @@ function stub(): void {
           headers: { "Content-Type": "application/json" },
         });
       if (method === "POST" && url.endsWith("/cancel")) {
-        return json({ ok: true, task_id: url.split("/").at(-2) ?? "" });
+        return json({ task_id: url.split("/").at(-2) ?? "", cancelled: true });
       }
       if (method === "POST") {
         sent.push({ url, body: String(init?.body ?? "") });
         return json({ task_id: "task-777" }, 202);
-      }
-      if (url.includes("/schema")) {
-        const name = url.split("/api/tasks/").at(-1)?.split("/")[0] ?? "";
-        return json({ type: "object", properties: {}, required: schemas[name]?.required ?? [] });
       }
       if (url.includes("/tasks/runs")) return json(runs);
       if (url.includes("/api/tasks")) return json(tasks);
@@ -153,29 +167,41 @@ afterEach(() => {
 });
 
 describe("可发起的任务", () => {
-  it("一张卡一个任务：卡片数由 `/api/tasks` 给条数决定", async () => {
+  it("一张卡一个任务，且参数形状随列表一起到（不逐张卡再问一次）", async () => {
     renderPage();
     await ready();
-    // 展示名只出现在卡片上（历史那一栏用的是 task_name），所以"恰好一次"
-    // 同时排除了漏画与重复画。
     for (const task of tasks) expect(screen.getAllByText(task.display_name)).toHaveLength(1);
+    expect(calls.some((call) => call.includes("/schema"))).toBe(false);
   });
 
   it("没有必填参数的任务给「跑一次」，提交的是空对象", async () => {
     renderPage();
     await ready();
-    const button = await screen.findByRole("button", { name: "跑一次" });
-    await userEvent.click(button);
+    const buttons = await screen.findAllByRole("button", { name: "跑一次" });
+    expect(buttons).toHaveLength(2); // preflight 与 douyin_collect，不多不少
+    await userEvent.click(buttons[0] as HTMLButtonElement);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]?.url).toBe("/api/tasks/preflight/run");
     expect(sent[0]?.body).toBe("{}");
   });
 
-  /** 202 的那句话只能说"排到了哪个任务"。说成"已完成"就是臆造成功。 */
+  /** 这一条钉的就是今天踩的那个：把信封当 schema 读时 `required` 永远读不到，
+   *  于是所有任务都拿到了发起按钮，其中按下去必然 422。 */
+  it("参数形状读不出来的任务：一个发起按钮都不给，并且说实话", async () => {
+    renderPage();
+    await ready();
+    const card = screen.getByText("形状读不出").closest(".memphis-card");
+    expect(card?.textContent).toMatch(/读不出这个任务的参数形状/);
+    expect(card?.querySelector("button")).toBeNull();
+    expect(card?.querySelector("input")).toBeNull();
+  });
+
+  /** 202 的那句话只能说"排到了哪个任务"。说成"完成了"就是臆造成功。 */
   it("提交成功说的是「已排队 · 任务 <id>」，不出现「完成」", async () => {
     renderPage();
     await ready();
-    await userEvent.click(await screen.findByRole("button", { name: "跑一次" }));
+    const buttons = await screen.findAllByRole("button", { name: "跑一次" });
+    await userEvent.click(buttons[0] as HTMLButtonElement);
     await screen.findByText(/已排队：任务/);
     expect(screen.getByText("task-777")).toBeTruthy();
     expect(screen.queryByText(/提交成功|已完成/)).toBeNull();
@@ -194,12 +220,12 @@ describe("可发起的任务", () => {
     expect(JSON.parse(body ?? "{}")).toEqual({ url: "https://b23.tv/abc" });
   });
 
-  it("参数发不了的任务不许画一个必然 422 的按钮：说清必填是什么", async () => {
+  it("必填不止 url 的任务不许画一个必然 422 的按钮：说清必填是什么", async () => {
     renderPage();
     await ready();
     const note = await screen.findByText(/这一版界面发不了它/);
     expect(note.textContent).toContain("video_ids");
-    // 只有 preflight 与 douyin_collect 两个无参任务该有"跑一次"
+    expect(note.textContent).toContain("reason");
     expect(screen.getAllByRole("button", { name: "跑一次" })).toHaveLength(2);
   });
 });
@@ -224,7 +250,6 @@ describe("运行历史与取消", () => {
         const json = (body: unknown, status = 200): Response =>
           new Response(JSON.stringify(body), { status });
         if (method === "POST") return json({ detail: "这个任务已经结束了" }, 409);
-        if (url.includes("/schema")) return json({ type: "object", required: [] });
         if (url.includes("/tasks/runs")) return json(runs);
         if (url.includes("/api/tasks")) return json(tasks);
         return json([]);
@@ -267,7 +292,6 @@ describe("实时事件流", () => {
         const url = String(input);
         const json = (body: unknown): Response =>
           new Response(JSON.stringify(body), { status: 200 });
-        if (url.includes("/schema")) return json({ type: "object", required: [] });
         if (url.includes("/tasks/runs")) return json(runs);
         if (url.includes("/api/tasks")) return json(tasks);
         return json([]);

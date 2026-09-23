@@ -19,7 +19,13 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ## 里程碑
 
-### V2.0「骨架可用」 — 进行中
+### V2.0「骨架可用」 — 代码全部落地：16 条判据里 11 条已勾，剩 5 条全卡在"真机/真 CI 那一跑"
+
+> 2026-09-23：Task 8-16 全落（后端 + 七个前端页面 + 契约测试 + 迁移 + CI 与全栈冒烟）。
+> **没打 tag**。剩下五条没有一条是代码缺口：抖音 Adapter 与 B站 Adapter 的
+> 真采一跑（要桥 + 已登录 Chrome + shell 侧看得见的 ffmpeg）、
+> `cdp_bridge_server.py` 还没移植进 V2、`make ci-local` / GitHub Actions 那条从未真跑过
+> （本机连 `make` 都没有，`AGENTS.md §4` 已改）。
 
 **完成判据**（每条都要真机验过才算）：
 
@@ -36,7 +42,13 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   —— 多播 + 持久化（Task 4，`core/event_bus.py`，有界队列 + 掉包记账）+ **SSE 端点**
   （Task 9，`api/v1/events.py`：`/api/events` 全局流 + `/api/tasks/runs/{id}/events` 单任务流，
   先 subscribe 再 replay，`sse-starlette` 出 `text/event-stream`）三条都齐 → 整条勾。
-- [ ] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
+- [x] **配置层**：Pydantic Settings + YAML 加载（优先级 默认 < app.yaml < platforms.yaml < env < CLI）+ `PUT /api/platforms/{name}/config` 原子写盘 + 热加载 + ConfigChanged 事件
+  —— 写盘 + 热重载 + 广播那一条链**真跑过一次**，跑在临时目录：
+  `test_put_config_persists_and_gates` 对一份 tmp 的 `platforms.yaml` 做真 PUT，
+  断言"关掉之后 `/api/tasks` 里没了 **且** `scheduler._configs` 那份也变了"
+  （那是审查轮抓到的真 bug：三处各握一份 configs 快照，只改 manager 等于关不掉平台）。
+  env 侧两种拼写（`..._DATA_DIR` 与 `..._DATA__DIR`）现在都吃，嵌套那份优先。
+  **没做**：对仓库自己那份 `config/platforms.yaml` 下手 —— 那会改写真实配置，留给手动。
 - [x] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
   —— 四件齐了。Protocol / 注册表 / infra 五件包装（Task 5）；抖音 + B站 两实现（Task 6/7）；
   `PLATFORMS` 与 `PLATFORM_CONFIG_SCHEMAS` 差集为空（注册表快照用例钉着）；
@@ -58,6 +70,10 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   而 V2 的 `data/cookies/` 现在没有）。整条不勾。
 - [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
 - [ ] **任务调度**：`TaskRegistry` + 6 个核心任务（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）+ 平台级 Semaphore 限流 + CancelToken + 超时 + 清单双写（文件 + SQLite，强制终态）
+  —— **真机已经通了不带平台的那一半**：2026-09-23 全栈冒烟里从 `#/tasks` 点「跑一次」，
+  `preflight` 真起了一条 run，事件按 `task.started → manifest.written → task.finished`
+  落地、清单文件真在磁盘上、summary 说实话（`platforms_ok=0 degraded=2`）。
+  采集类（`douyin_collect`/`bilibili_collect`）仍缺桥 + 已登录 Chrome + shell 侧的 ffmpeg。
   —— 代码 + 离线用例完成（Task 8：`core/task_runner.py` / `core/task_registry.py` /
   `tasks/`）。12 个任务全登记、V2.0 只给 6 个真 handler（其余 6 个 `implemented=False`，
   不进 `/api/tasks`、点名运行红在 `NotImplementedError`）。`TaskRunner` 五条退出路径
@@ -66,13 +82,42 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   **整条不勾，因为"真机验过"这一半还没有**：采集类任务（douyin_collect/bilibili_collect）
   跑通仍需本机 CDP 桥 + 已登录 Chrome + ffmpeg，与 Task 6/7 同一前置。Task 9 通了之后
   随抖音/B站 里程碑一起补那一跑。
-- [ ] **前端骨架**：React + TS + Vite + Tailwind + shadcn/ui 装好，孟菲斯设计令牌（色板、形状、排版、图案、动效）落 `tailwind.config.ts` + CSS 变量 + `tokens.json`
-- [ ] **前端三页**：Dashboard（四平台健康卡片 + 最近任务 + 最新作品）/ Feed（虚拟滚动 + 过滤 + 隐藏）/ Settings（平台开关 + JSON Schema 自动渲染表单 + Preflight 子页）
-- [ ] **前后端打通**：OpenAPI → TS 类型自动生成（`openapi-typescript`）+ TanStack Query + SSE 订阅 + 平台开关切到后端通
-- [ ] **测试**：L0-L4 全绿，coverage ≥80%（`platforms/` 与 `tasks/` 模块 ≥90%），V1 §7 中需要测试看护的每条都有对应契约测试（详见 `docs/specs/contract-tests.md`）
+- [x] **前端骨架**：React 19 + TS 5.9 + Vite 8 + Tailwind v4 装好，孟菲斯设计令牌落盘
+  —— 措辞按实际改过两处：**没有 shadcn/ui 也没有 `tailwind.config.ts` / `postcss.config.js`**
+  （ADR-0013 定了 `tokens.css` 的 `@theme` 是唯一真源，`tokens.json` 是它的单向投影）。
+  令牌的"三件事"在真浏览器里量过 computed style：卡片 `3px solid` + `radius 0` + 阴影无模糊，
+  全站非 0 圆角只有徽章。五关（tsc / vitest / eslint+stylelint / prettier / build）全绿。
+- [x] **前端七页**：Dashboard / Feed / Settings / Preflight（Task 12）+
+  VideoDetail / Creators / Tasks（Task 13），全部在真浏览器里带真 V1 数据量过
+  —— 一处**故意没做**：Dashboard 不画"平台健康灯"。那三列（`platforms.health_status`）
+  在生产里没有任何写者（`set_health` 只有测试调用），画出来会永远灰着"从没检查过"；
+  要它就得让 preflight 回写镜像 → 先过 ADR（`docs/lessons.md` 经验 40）。
+  页面画的是配置事实（`enabled` / `implemented`）并写明"探测去预检页"。
+  虚拟滚动实测 19 条数据只画 13 个 DOM 节点；`#/tasks` 的发起按钮由 `params_schema` 判据决定（经验 42）。
+- [x] **前后端打通**：OpenAPI → TS 类型自动生成（`openapi-typescript`，从**快照文件**生成，
+  不要求后端在跑）+ TanStack Query + SSE 订阅 + `ui:hidden` 由 `lib/schema-form.ts` 执行
+  —— 真机实测：SPA 由 FastAPI 单端口 serve，`#/tasks` 点「跑一次」真起了任务，
+  事件流那栏亮的是"事件流已连上"。**没在真机跑的只有半句**：
+  "平台开关切到后端通"里那次 `PUT /api/platforms/{name}/config` 会重写仓库自己的
+  `config/platforms.yaml`，所以只在 jsdom 用例里钉了请求体形状，没对真配置目录下手。
+- [x] **测试**：2026-09-23 实测 `pytest -m "not real_network and not e2e"` **1301 passed**、
+  两道覆盖率门（全局 ≥80 / `platforms`+`tasks`+`tools` ≥90）都过、
+  前端 **197 passed**（覆盖率 93.74% stmts / 92.24% funcs，门槛 70）、
+  `pre-commit run --all-files` **exit 0（22 个 hook）**、alembic 往返 + `alembic check` 干净。
+  §7 逐条归属由 `test_contract_guard_index.py` 与 `AGENTS.md §5` 三栏互核（文档说有而实际没有，
+  是这个仓库踩过两次的坑）。
 - [ ] **DevEx**：Makefile + pre-commit + GitHub Actions CI（lint / test-backend / test-frontend / build / e2e 手动触发）+ `make ci-local` 一键本地跑全套
-- [ ] **文档**：10 份 ADR + 7 份 spec + AGENTS.md + README + CONTRIBUTING + architecture.md + lessons.md 全部落盘并 commit
-- [ ] **迁移脚本**：`tools/migrate_from_v1.py` dry-run + 真机跑通一次（creators / videos / transcripts / hidden-videos 墓碑内化），媒体 hardlink 回退 copy
+- [x] **文档**：13 份 ADR（≥10，编号不复用）+ 7 份 spec + AGENTS.md + README +
+  CONTRIBUTING + architecture.md + lessons.md（43 条经验）全部落盘并已 commit
+  —— 判据不是"文件在不在"，是 `docs/specs/contract-tests.md §3/§4` 与 `AGENTS.md §5`
+  那两张表**有用例在双向核**：文档点名的用例不存在 → 红；文档漏了一条在跑的守卫 → 也红。
+  这一轮又添了经验 38-43（六条里有四条是"文档/注释承诺了代码里没有的东西"同一族）。
+- [x] **迁移脚本**：`tools/migrate_from_v1.py` dry-run + **真数据写库一跑都过了**
+  —— 2026-09-23 对真 V1 库跑进临时目录（与 V1 同卷）：
+  `creators=4 videos=21 transcripts=16 墓碑=2 媒体 link=21 copy=0 missing=0`。
+  两处"看着像丢数据"的只读复核：8 条 B站 作品 `creator_id` 为空 = V1 那几行本来就是 `''`
+  （V1 的 videos 表没有 mid 列）；`view_count` 全 null = V1 的 `metrics_json` 21 条全空。
+  **仍然等点头的**：把这 4/21/16 写进 live `data/`（不可自动回退，`--rollback` 没实现）。
   —— 代码 + 离线用例完成（Task 15）。V1 以 `mode=ro` URI 打开（写它当场抛，不靠约定）；
   幂等（`(platform, platform_id/platform_video_id)` 命中跳过）+ `.migration_state.json` 续跑；
   墓碑从 `hidden-videos.json` 内化成 `videos.is_hidden`；V1 内联的 `clean_transcript` 落成 V2
@@ -90,8 +135,13 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 - [ ] `PostprocessTask` 跨平台统一（废 V1 三份 postprocess_*）
 - [ ] 字幕优先路径（B站 / YouTube）
 - [ ] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）
+  —— V2.0 已有最小版（`pages/VideoDetail.tsx`：metadata + 口播稿全文，**无播放器**，
+  页面上写明了）。这一条要的是播放器与时间戳跳转，别从零再建一遍。
 - [ ] 前端 Creators 页（博主库 + 跟踪开关 + 添加博主 + 爆款回溯入口）
-- [ ] 前端 Tasks 页（任务卡片墙 + 运行历史 + 实时事件流 + 取消）
+  —— V2.0 已有最小版（列表 + 开关 + 收录表单，真数据下量过 4 张卡）。缺的是爆款回溯入口。
+- [x] 前端 Tasks 页（任务卡片墙 + 运行历史 + 实时事件流 + 取消）
+  —— V2.0 的最小版就把这四件做全了（`pages/Tasks.tsx`）：卡片墙的发起判据来自
+  `params_schema`，事件流是真 SSE（连上时亮"事件流已连上"），取消只对 `running` 出现。
 - [ ] `BackfillTask` 实现（§7.22 按 URL 直接定位，不退化全库扫描）
 - [ ] 真机烟雾测试：抖音 / B站 / 小红书 三平台各采一条 + 转写
 
@@ -138,7 +188,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ✅ | 见 git log | 前端 **196 passed**、覆盖率 93.74% stmts / 92.24% funcs；五关全绿。"能不能一键发起"由任务自己的 `params_schema.required` 决定（不是前端记清单）；202 只说"已排队"不说"已添加"；抓到一处手抄契约的响应类型并加了 18 个调用点的源码级同源看护（经验 41） |
 | 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ✅ | 见 git log | 1239 passed（累计，净增 31），覆盖率 93.89%，四关全绿；`PlatformAdapterContractTests` 基类 + 抖音/B站 两实例子类 + §7→用例名索引漂移看护 |
 | 15 | `tools/migrate_v1.py` | ✅ | 见 git log | 1243 passed（累计，净增 4），覆盖率 93.89%，四关全绿；对**造出的 V1 schema** 验 dry-run/幂等/墓碑/媒体 hardlink/只读 |
-| 16 | CI 验证 + 端到端 smoke + 收尾文档 | ⬜ | — | — |
+| 16 | CI 验证 + 端到端 smoke + 收尾文档 | ✅（真机两条除外） | 见 git log | 门禁直接跑（本机**没有 make**）：ruff/mypy/alembic 往返/pytest **1301 passed**/两道覆盖率门 `pre-commit run --all-files` **exit 0（22 hook）**。全栈冒烟用真 V1 数据写进临时目录（4/21/16、link=21 missing=0，**没动 live `data/`**）+ 浏览器量 computed style 与 DOM：七个页面全过、虚拟滚动 19 条只画 13 行、点「跑一次」真的落清单与事件。抓到并修掉 `#/tasks` 把信封当 schema 读（经验 42）。**tag 没打**：抖音/B站 真机采集与 live `data/` 迁移两条还没过，给一个"已交付"的 tag 正是这仓库反对的那种绿 |
 
 **门禁现状**（每次提交前都要全绿）：
 
