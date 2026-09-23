@@ -81,7 +81,7 @@ e2e:  ## Playwright E2E（L6）
 	$(PLAYWRIGHT) test
 
 coverage:  ## 生成 HTML coverage 报告
-	$(PYTEST) --cov=src/intelligence_hub_v2 --cov-report=html --cov-report=term-missing
+	$(PYTEST) --cov=src/intelligence_hub_v2 --cov=tools --cov-report=html --cov-report=term-missing
 	@echo "→ htmlcov/index.html"
 
 # 与 ci.yml 的**后端那一半**对齐：以前这个 target 不跑覆盖率门禁、也不跑 alembic，
@@ -93,7 +93,7 @@ ci-local:  ## 本地跑 CI 的后端全套（前端存在时再带上前端）
 	@echo "=== coverage 门禁（全局 ≥80 / platforms+tasks ≥90）==="
 	$(PYTEST) -m "not real_network and not e2e" -q
 	$(COVERAGE) report --fail-under=80
-	$(COVERAGE) report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*' --fail-under=90
+	$(COVERAGE) report --include='src/intelligence_hub_v2/platforms/*,src/intelligence_hub_v2/tasks/*,tools/*' --fail-under=90
 	@if [ -f frontend/package.json ]; then 	  echo "=== lint-frontend + test-frontend + build ==="; 	  $(MAKE) lint-frontend && $(MAKE) test-frontend && $(MAKE) build; 	else 	  echo "（frontend/package.json 不在 —— Task 10-13 未开工，前端三项跳过）"; 	fi
 	@echo "=== ✅ ci-local 全过 ==="
 

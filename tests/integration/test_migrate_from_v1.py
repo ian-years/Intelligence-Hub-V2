@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from errno import EXDEV
 from pathlib import Path
@@ -34,6 +35,7 @@ from typing import NoReturn
 import pytest
 from tools.migrate_from_v1 import main, migrate, open_v1_readonly
 
+from intelligence_hub_v2.errors import StorageError
 from intelligence_hub_v2.storage.db import SqliteStorage
 from intelligence_hub_v2.storage.files import FileStorage
 
@@ -610,6 +612,195 @@ def test_dry_run_creates_no_database_and_no_directories(tmp_path, monkeypatch) -
     target = tmp_path / "v2data"
     found = sorted(str(p.relative_to(target)) for p in target.rglob("*")) if target.exists() else []
     assert found == [], f"dry-run 写了东西：{found}"
+
+
+async def test_a_failing_row_does_not_abort_the_rest(
+    tmp_path: Path,
+    unseeded_storage: SqliteStorage,
+    files: FileStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """逐行隔离是 C1 的孪生保险：一行炸不能让 21 行的库变成"跑到第三条停了"。
+
+    这层 `except (StorageError, ValidationError)` 是本轮新加的，而**它自己一次都没被
+    驱动过**（unmappable 平台在更早的地方就被拦了）—— 未测的兜底等于没有兜底。
+    """
+    root = _build_v1(
+        tmp_path / "v1",
+        creators=[
+            _creator(V1_DOUYIN, "sec1", "会失败的那个"),
+            _creator(V1_DOUYIN, "sec2", "正常的"),
+        ],
+        videos=[],
+    )
+    original = unseeded_storage.creators.insert_or_get
+    calls = {"n": 0}
+
+    async def flaky(draft: object) -> tuple[object, bool]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise StorageError("模拟：约束撞了")
+        return await original(draft)
+
+    monkeypatch.setattr(unseeded_storage.creators, "insert_or_get", flaky)
+
+    report = await migrate(root, unseeded_storage, files, dry_run=False)
+
+    assert calls["n"] == 2, "第一行失败之后不许提前收摊"
+    assert (
+        any("会失败的那个" not in line and "模拟：约束撞了" in line for line in report.errors)
+        or report.errors
+    )
+    assert await unseeded_storage.creators.find("douyin", "sec2") is not None
+
+
+def test_the_real_cli_run_writes_into_the_target_tree(tmp_path: Path, monkeypatch) -> None:
+    """`main()` 的非 dry-run 那一支：以前只有 dry-run 走过 `_amain`，
+    也就是说"用户真敲的那条命令"从来没被执行过。"""
+    root = _one_douyin_creator_and_video(tmp_path / "v1")
+    _write_tombstones(root, [])
+    before = _digest_tree(root)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "app.yaml").write_text("data:\n  dir: v2data\n", encoding="utf-8")
+    (config_dir / "platforms.yaml").write_text(
+        "douyin:\n  enabled: true\n  display_name: 抖音\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--v1-root", str(root), "--config-dir", "config"])
+
+    assert code == 0, "没有映射失败就该退出码 0（有 errors 时必须非 0）"
+    assert (tmp_path / "v2data" / "intelligence_hub.sqlite3").is_file()
+    assert (tmp_path / "v2data" / ".migration_state.json").is_file()
+    assert _digest_tree(root) == before  # V1 一行不动
+    # 第二次跑是幂等的：状态文件命中，不再新增行
+    assert main(["--v1-root", str(root), "--config-dir", "config"]) == 0
+
+
+async def test_a_row_without_an_identity_is_reported_and_skipped(
+    tmp_path: Path, unseeded_storage: SqliteStorage, files: FileStorage
+) -> None:
+    """缺 `platform_video_id` 的行：记一条带 V1 行 id 的错误并跳过，不写半条数据。"""
+    root = _build_v1(
+        tmp_path / "v1",
+        creators=[_creator(V1_DOUYIN, "sec1", "姜胡说")],
+        videos=[
+            _video(
+                id="rowNoId",
+                platform=V1_DOUYIN,
+                platform_video_id="",
+                creator_id="sec1",
+                video_title="没有身份的行",
+                transcript_status="未转写",
+            ),
+            _video(
+                id="rowOk",
+                platform=V1_DOUYIN,
+                platform_video_id="pvOk",
+                creator_id="sec1",
+                video_title="正常的",
+                transcript_status="未转写",
+            ),
+        ],
+    )
+
+    report = await migrate(root, unseeded_storage, files, dry_run=False)
+
+    assert any("rowNoId" in line for line in report.errors)
+    assert await unseeded_storage.videos.find_by_platform_id("douyin", "pvOk") is not None
+
+
+async def test_moving_media_that_fails_both_ways_is_reported_not_silent(
+    tmp_path: Path,
+    unseeded_storage: SqliteStorage,
+    files: FileStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """hardlink 与 copy 都失败时：记 errors、`media_path` 留 None，但**视频行照写**
+    （V2 里"有作品行没媒体"是合法中间态，静默丢一条作品才是错）。"""
+    root = _standard_v1(tmp_path / "v1")
+    real_link = os.link
+
+    def _boom(*_a: object) -> None:
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(os, "link", _boom)
+    monkeypatch.setattr(shutil, "copy2", lambda *_a, **_k: (_ for _ in ()).throw(OSError(5, "io")))
+    try:
+        report = await migrate(root, unseeded_storage, files, dry_run=False)
+    finally:
+        monkeypatch.setattr(os, "link", real_link)
+
+    assert any("媒体搬运失败" in line for line in report.errors)
+    row = await unseeded_storage.videos.find_by_platform_id("douyin", "pv1")
+    assert row is not None and row.media_path is None
+
+
+async def test_a_failing_video_row_does_not_abort_the_rest(
+    tmp_path: Path,
+    unseeded_storage: SqliteStorage,
+    files: FileStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """creator 那一侧同形的兜底已经测过，视频这一半也要驱动一次 —— 否则"漏测的那半"
+    正是下一次改动会碰到的那半。"""
+    root = _build_v1(
+        tmp_path / "v1",
+        creators=[_creator(V1_DOUYIN, "sec1", "姜胡说")],
+        videos=[
+            _video(
+                id="bad",
+                platform=V1_DOUYIN,
+                platform_video_id="pvBad",
+                creator_id="sec1",
+                video_title="会失败的",
+                transcript_status="未转写",
+            ),
+            _video(
+                id="good",
+                platform=V1_DOUYIN,
+                platform_video_id="pvGood",
+                creator_id="sec1",
+                video_title="正常的",
+                transcript_status="未转写",
+            ),
+        ],
+    )
+    original = unseeded_storage.videos.insert_or_get
+
+    async def flaky(draft: object) -> tuple[object, bool]:
+        if getattr(draft, "platform_video_id", "") == "pvBad":
+            raise StorageError("模拟：视频行撞约束")
+        return await original(draft)
+
+    monkeypatch.setattr(unseeded_storage.videos, "insert_or_get", flaky)
+
+    report = await migrate(root, unseeded_storage, files, dry_run=False)
+
+    assert any("pvBad" in line for line in report.errors)
+    assert await unseeded_storage.videos.find_by_platform_id("douyin", "pvGood") is not None
+
+
+def test_the_cli_reports_mapping_failures_instead_of_hiding_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """有 errors 时退出码必须非 0，且把错误打出来 —— 一次性脚本"静默少迁一半"最难查。"""
+    root = _standard_v1(tmp_path / "v1")  # 含一条 V2 没有的平台
+    _write_tombstones(root, [])
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "app.yaml").write_text("data:\n  dir: v2data\n", encoding="utf-8")
+    (config_dir / "platforms.yaml").write_text(
+        "douyin:\n  enabled: true\n  display_name: 抖音\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["--v1-root", str(root), "--config-dir", "config"])
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert V1_UNMAPPED in out and "未迁入" in out
 
 
 # ---------------------------------------------------------------- 只读句柄（原有看护）

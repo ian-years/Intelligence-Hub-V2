@@ -254,6 +254,7 @@ addopts = [
     "--strict-config",
     "-ra",
     "--cov=src/intelligence_hub_v2",
+    "--cov=tools",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-fail-under=80",
@@ -271,7 +272,9 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src/intelligence_hub_v2"]
+# 测量清单只由 addopts 里的 `--cov` 决定：pytest-cov 一旦拿到 `--cov` 就**覆盖**这里的
+# source，两处各写一份等于留一份死的真相源（实测：加了 tools 而报告里没有它）。
+source = ["src/intelligence_hub_v2", "tools"]
 branch = true
 omit = ["*/tests/*", "*/__main__.py"]
 
