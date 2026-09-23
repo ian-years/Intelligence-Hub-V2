@@ -1684,6 +1684,48 @@ set_health(  →  只有 tests/ 里 8 处 + src 里的定义本身
 
 ---
 
+#### 经验 41 · 手写的响应类型是契约的抄本：给 18 处调用点配一条同源看护（Task 13 博主页）
+
+**现象**：写博主页时要用 `useAddCreator()` 的返回值告诉用户"收录好了"。
+那个 hook 声明的是 `api.post<Creator>("/creators", body)`，而**端点回的是 202 + `TaskAccepted`**
+（`{task_id}`）—— 照 `data.name` 读就是 `undefined`。
+`src/api/hooks/useCreators.ts` 上面那段注释还写着「`POST /api/creators` 立即回一个 Creator」，
+也就是说这段错有自己的文字背书。三条证据分开看：
+
+```
+api/v1/creators.py:48      response_model=TaskAccepted, status_code=202
+openapi-snapshot.json      202 → $ref TaskAccepted
+useCreators.ts:33          api.post<Creator>("/creators", body)     ← 手写的这一条是错的
+```
+
+**根因**：`client.ts` 的请求方法把响应类型交给**调用点的泛型参数**，
+而那个参数是人写的。生成物 `schema.d.ts` 里正确形状一直都在（`paths[...].responses["202"]`），
+没有人去指它。查询参数、字段名同理会漂：`hidden` 漂成 `boolean`（经验 39）、
+`tracking` 先写成 `is_tracking`（Task 11 那次是人肉翻快照才发现的）。
+
+**为什么第三次才配看护**：前两次都是"写用例时正好去读了快照"。
+那种抓法覆盖不到第三次 —— 只有当有人真的去**消费**那个响应时才会撞。
+所以这次的修法是结构性的：把"每个调用点的响应类型 == 快照给那个端点声明的 schema 名"
+变成一条会跑的判据。
+
+**解法**：① 类型改成 `api.post<Schemas["TaskAccepted"]>`，注释重写并说清
+"202 之后列表里还不会有这位博主，界面只能说『已排队』"；
+② `src/api/schema.spec.ts` 新增一条源码级扫描：遍历 `src/api/hooks/*.ts` 里的
+`api.(get|post|put|patch)<T>("path")`，把 `T`（含 `X[]`、`Schemas["Y"]`、
+以及 `type X = Schemas["Y"]` 这类别名）解析成 schema 名，与快照里那个端点 2xx 的
+`$ref`（数组则取 `items.$ref` 再加 `[]`）比。**自由 `dict[str, Any]` 的路由跳过并计数** ——
+`/platforms/{p}/schema`、`/preflight` 那几处本来就是手写的窄类型，由各自的用例钉生产者形状。
+
+**判据**：扫到 18 个可比调用点（前置断言 `>= 12` 且跳过的 `> 0`，两者都是防空转）。
+可推论的一般纪律：**凡是"能从契约生成而人又手写了一遍"的东西，都要有一条把它按回契约的用例** ——
+类型、枚举、字段名、路由前缀都属于这一类。手抄一次的次数越多，越不该靠人记得去对。
+
+**看护**：`src/api/schema.spec.ts` 的"每个 hook 声明的响应类型与快照同名"两条
+（变异验证过：把 `useAddCreator` 改回 `api.post<Creator>` 就红，
+报错点名 `useCreators.ts: POST /api/creators 声明的是 Creator，契约给的是 TaskAccepted`）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

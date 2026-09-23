@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -121,6 +121,106 @@ describe("TaskRunRecord.status 的枚举与界面状态表", () => {
 
   it("RUN_STATUS_META 的键与枚举**双向**相等：少一个=新状态没颜色，多一个=留着没人写的状态", () => {
     expect(Object.keys(RUN_STATUS_META).sort()).toEqual([...statuses].sort());
+  });
+});
+
+/**
+ * 每一个 `api.<verb><T>(path)` 的 `T`，都要与快照给那个端点声明的 2xx schema **同名**。
+ *
+ * 起因是三个同形状的 bug：`VideoFilter.hidden` 手写成 `boolean`（契约是 enum）、
+ * `PATCH /creators/{id}/tracking` 的字段名先写成 `is_tracking`、
+ * `useAddCreator` 写的是 `api.post<Creator>` 而那个端点回的是 202 + `TaskAccepted`
+ * （连注释都跟着说"立即回一个 Creator"）。前两个是"写用例时人肉去翻快照"抓到的 ——
+ * 那种抓法不会覆盖第三个，直到有人真去读那个响应。
+ *
+ * 自由 `dict[str, Any]` 的路由（`/platforms/{p}/schema`、`/preflight` 那类）没有 schema 可比，
+ * 跳过并计入 `skipped`：那几处的形状是手写的，由各自的用例钉
+ * （`PreflightSummary` 那一条钉的是生产者字符串形状）。
+ */
+describe("每个 hook 声明的响应类型与快照同名", () => {
+  const hookDir = new URL("./hooks/", import.meta.url);
+  const files = readdirSync(hookDir).filter((name) => name.endsWith(".ts"));
+  expect(files.length).toBeGreaterThanOrEqual(5);
+
+  const mismatches: string[] = [];
+  let checked = 0;
+  let skipped = 0;
+
+  /** `/api/videos/{video_id}` 与 `/api/videos/${String(id)}` 要能对上：按段比，`{x}` 当通配。 */
+  function findOperation(path: string, verb: string): Record<string, unknown> | undefined {
+    for (const [pattern, item] of Object.entries(snapshot.paths)) {
+      const patternParts = pattern.split("/");
+      const givenParts = path.split("/");
+      if (patternParts.length !== givenParts.length) continue;
+      const same = patternParts.every((part, index) => {
+        const given = givenParts[index] ?? "";
+        return part === given || (part.startsWith("{") && part.endsWith("}"));
+      });
+      if (!same) continue;
+      return (item as Record<string, Record<string, unknown>>)[verb];
+    }
+    return undefined;
+  }
+
+  function schemaNameOf(operation: Record<string, unknown> | undefined): string | null {
+    const responses = (operation?.["responses"] ?? {}) as Record<string, unknown>;
+    const code = Object.keys(responses).find((key) => key.startsWith("2"));
+    const content = (responses[code ?? ""] as { content?: Record<string, unknown> } | undefined)
+      ?.content;
+    const schema = (
+      content?.["application/json"] as { schema?: Record<string, unknown> } | undefined
+    )?.schema;
+    if (typeof schema?.$ref === "string") return basenameOf(schema.$ref);
+    if (schema?.type === "array") {
+      const items = schema["items"] as { $ref?: string } | undefined;
+      if (typeof items?.$ref === "string") return `${basenameOf(items.$ref)}[]`;
+    }
+    return null;
+  }
+
+  function basenameOf(ref: string): string {
+    const tail = ref.split("/").pop() ?? ref;
+    return tail.replace(/~1/g, "/");
+  }
+
+  for (const file of files) {
+    const source = read(`frontend/src/api/hooks/${file}`);
+    // `export type Creator = Schemas["Creator"]` 这一类：把别名换成它指向的 schema 名
+    const aliases = new Map<string, string>();
+    for (const match of source.matchAll(/type\s+(\w+)\s*=\s*Schemas\["(\w+)"\]/g)) {
+      if (match[1] && match[2]) aliases.set(match[1], match[2]);
+    }
+    for (const call of source.matchAll(
+      /api\.(get|post|put|patch)<\s*([^>]+?)\s*>\(\s*[`'"]([^`'"]+)[`'"]/g,
+    )) {
+      const [, verb, generic, rawPath] = call;
+      if (verb === undefined || generic === undefined || rawPath === undefined) continue;
+      const path = `/api${rawPath.replace(/\$\{[^}]*\}/g, "{}")}`;
+      const expected = schemaNameOf(findOperation(path, verb));
+      if (expected === null) {
+        skipped += 1;
+        continue;
+      }
+      const suffix = generic.endsWith("[]") ? "[]" : "";
+      const inline = /^Schemas\["(\w+)"\]$/.exec(suffix ? generic.slice(0, -2) : generic);
+      const base = inline?.[1] ?? (suffix ? generic.slice(0, -2) : generic);
+      const given = `${aliases.get(base) ?? base}${suffix}`;
+      checked += 1;
+      if (given !== expected) {
+        mismatches.push(
+          `${file}: ${verb.toUpperCase()} ${path} 声明的是 ${given}，契约给的是 ${expected}`,
+        );
+      }
+    }
+  }
+
+  it("扫到了足够多的调用点（否则下面那条是空转）", () => {
+    expect(checked).toBeGreaterThanOrEqual(12);
+    expect(skipped).toBeGreaterThan(0);
+  });
+
+  it("没有一个 hook 的响应类型与契约漂了", () => {
+    expect(mismatches, mismatches.join("\n")).toEqual([]);
   });
 });
 

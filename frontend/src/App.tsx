@@ -5,13 +5,16 @@ import { Layout } from "@/components/shared/Layout";
 import { PageShell } from "@/components/shared/PageShell";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { TokenSheet } from "@/dev/TokenSheet";
+import { Creators } from "@/pages/Creators";
 import { Dashboard } from "@/pages/Dashboard";
 import { Feed } from "@/pages/Feed";
+import { Tasks } from "@/pages/Tasks";
+import { VideoDetail } from "@/pages/VideoDetail";
 import { Preflight } from "@/pages/Preflight";
 import { Settings } from "@/pages/Settings";
 import type { PatternName } from "@/lib/patterns";
 
-/** Task 13 未开工的路由渲染这一块，而不是空白页。
+/** 没有对应后端能力或没排期的路由渲染这一块，而不是空白页。
  *
  * 空白页会被读成"这个平台没有数据"；写清楚"这一页要等哪个任务"才是真话。
  * Task 13 落地时**逐个删掉**这里的条目：留着就是死代码。
@@ -44,18 +47,9 @@ export default function App(): JSX.Element {
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="feed" element={<Feed />} />
-        <Route
-          path="video/:id"
-          element={<PageNotBuilt pattern="waves" label="作品详情" task="Task 13" />}
-        />
-        <Route
-          path="creators"
-          element={<PageNotBuilt pattern="confetti" label="博主" task="Task 13" />}
-        />
-        <Route
-          path="tasks"
-          element={<PageNotBuilt pattern="confetti" label="任务" task="Task 13" />}
-        />
+        <Route path="video/:id" element={<VideoDetail />} />
+        <Route path="creators" element={<Creators />} />
+        <Route path="tasks" element={<Tasks />} />
         <Route path="settings" element={<Settings />} />
         <Route path="preflight" element={<Preflight />} />
         <Route path="tokens" element={<TokenSheet />} />

@@ -135,7 +135,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ✅ | 见 git log | 前端 20 passed（覆盖率 90.3% stmts / 86.7% funcs，门槛 70），后端 1301 passed 不回归；`tsc --noEmit` / eslint `--max-warnings=0` / stylelint / prettier / `vite build` 五关全绿；令牌的"三件事"用 computed style 验过（ADR-0013） |
 | 11 | 前端 API 层 + SSE + stores + Router + Layout | ✅ | 见 git log | 前端 **59 passed**、覆盖率 89.4% stmts / 82.1% funcs（门槛 70）、tsc/eslint+stylelint/prettier/build 全绿；`schema.d.ts` 由快照生成并双向核同源；`event-schema.md §7` 的 `onmessage` 样例改为能跑的形状（经验 35） |
 | 12 | 页面 Dashboard / Feed / Settings / Preflight | ✅ 4/4 | 见 git log | 前端 **164 passed**、覆盖率 91.54% stmts / 87.33% funcs（门槛 70）、tsc / eslint+stylelint / prettier / build 五关全绿；`QueryState` 把四态互斥从一页变成五页共用；作品流虚拟滚动 + 墓碑可取消；抓掉两个真 bug（`hidden` 查询参数与契约 enum 漂移、`cn()` 把 `border-memphis` 吃掉 → 经验 38/39） |
-| 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ⬜ | — | — |
+| 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ✅ | 见 git log | 前端 **196 passed**、覆盖率 93.74% stmts / 92.24% funcs；五关全绿。"能不能一键发起"由任务自己的 `params_schema.required` 决定（不是前端记清单）；202 只说"已排队"不说"已添加"；抓到一处手抄契约的响应类型并加了 18 个调用点的源码级同源看护（经验 41） |
 | 14 | 契约测试抽象基类 + 16 条 V1 陷阱看护 | ✅ | 见 git log | 1239 passed（累计，净增 31），覆盖率 93.89%，四关全绿；`PlatformAdapterContractTests` 基类 + 抖音/B站 两实例子类 + §7→用例名索引漂移看护 |
 | 15 | `tools/migrate_v1.py` | ✅ | 见 git log | 1243 passed（累计，净增 4），覆盖率 93.89%，四关全绿；对**造出的 V1 schema** 验 dry-run/幂等/墓碑/媒体 hardlink/只读 |
 | 16 | CI 验证 + 端到端 smoke + 收尾文档 | ⬜ | — | — |
