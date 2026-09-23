@@ -479,6 +479,9 @@ class ConfigManager:
         self._config_dir = Path(config_dir)
         self._app: AppConfig | None = None
         self._platforms: dict[str, PlatformConfig] = {}
+        self._loaded = False
+        """load() 过没有。写盘要合并盘上内容 + 内存那几段，没 load 过的内存是空的
+        （判据与理由见 `write_platform_config`）。"""
         self._subscribers: list[PlatformConfigChanged] = []
         self._write_lock = threading.Lock()
 
@@ -506,6 +509,7 @@ class ConfigManager:
         """
         self._app = load_app_config(self.app_yaml_path)
         self._platforms = self._load_platforms()
+        self._loaded = True
         logger.info(
             "config.loaded",
             config_dir=str(self._config_dir),
@@ -623,6 +627,17 @@ class ConfigManager:
             msg = f"平台 {name} 的配置必须是 {schema.__name__}，实际是 {type(config).__name__}"
             raise TypeError(msg)
 
+        # 没 load() 过的 manager 内存是空的，而写盘要按内存重建文件 —— 一次调用就能把
+        # 其他平台的整段配置抹掉（实测 bilibili 段消失、douyin 自己的 cookies_file 归 null）。
+        # 注意判据是"有没有 load 过"，不是"注册表里的平台是否齐全"：文件里只写了
+        # douyin 是合法配置，那样内存里本来就只有 douyin。
+        if not self._loaded:
+            msg = (
+                f"ConfigManager 还没 load() 就要写 {name} 的配置。写盘是按内存重建 "
+                f"platforms.yaml 的，空内存等于把整份文件清空 —— 先 ConfigManager.load()。"
+            )
+            raise ConfigError(msg, path=str(self.platforms_yaml_path))
+
         payload = config.model_dump(mode="json")
 
         with self._write_lock:
@@ -644,16 +659,19 @@ class ConfigManager:
         return target
 
     def _current_platforms_dump(self) -> dict[str, Any]:
-        """当前内存里所有平台配置的 JSON 化快照，按注册表顺序。
+        """盘上现有内容打底，再盖内存里那几份**校验过的**配置，按注册表顺序。
 
-        以内存为准而不是重读盘：写盘时重读一份可能已损坏的文件，
-        等于把「改一个开关」变成「顺便炸一次全量配置」。
+        为什么不是"只用内存"：那等于假设内存与盘同步，而 load() 之后文件可能被别人改过
+        （V2.1 装回来又退回 V2.0、或运维正在编辑）—— 那种情况下按内存重建会把盘上多出来
+        的段静默删掉。为什么不是"只用盘"：盘上那份没经过 Pydantic 校验，写盘时拿它当权威
+        等于把"改一个开关"变成"顺便被一份坏文件绑架"。
+        合起来的语义是：**内存覆盖式更新自己负责的那几段，别人加的段原样保留。**
         """
-        return {
-            platform: self._platforms[platform].model_dump(mode="json")
-            for platform in PLATFORM_CONFIG_SCHEMAS
-            if platform in self._platforms
-        }
+        merged: dict[str, Any] = dict(read_yaml_mapping(self.platforms_yaml_path))
+        for platform in PLATFORM_CONFIG_SCHEMAS:
+            if platform in self._platforms:
+                merged[platform] = self._platforms[platform].model_dump(mode="json")
+        return merged
 
 
 __all__ = [

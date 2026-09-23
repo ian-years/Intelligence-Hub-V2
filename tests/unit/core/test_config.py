@@ -410,6 +410,69 @@ def test_alias_does_not_leak_into_other_sections(
     assert cfg.storage.wal_mode is True
 
 
+_TWO_PLATFORMS = (
+    "douyin:\n  enabled: true\n  display_name: 抖音\n"
+    "  cookies_file: data/cookies/douyin.com.txt\n"
+    "bilibili:\n  enabled: false\n  display_name: B站\n"
+    "  ytdlp_cookies_from_browser: chrome\n"
+)
+
+
+def test_write_without_load_refuses_instead_of_erasing_other_platforms(tmp_path: Path) -> None:
+    """没 `load()` 就写 = 只把内存里那一个平台写回盘，另一个平台的整段配置当场消失。
+
+    `platforms.yaml` 是 git 跟踪的运维配置：一次调用就能删掉 bilibili 整段（实测连
+    douyin 自己的 `cookies_file` 都被重置成 null），下一次 `get_platform("bilibili")`
+    直接 KeyError。写盘"以内存为准而不重读盘"的决定本身是对的（盘上文件可能损坏，
+    重读等于把"改一个开关"变成"顺便炸一次全量配置"）—— 缺的是**内存不全时不许写**。
+    """
+    _write_platforms_yaml(tmp_path, _TWO_PLATFORMS)
+    before = (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
+    mgr = ConfigManager(config_dir=tmp_path)
+
+    with pytest.raises(ConfigError, match="load"):
+        mgr.write_platform_config("douyin", DouyinConfig(display_name="抖音", enabled=False))
+
+    assert (tmp_path / "platforms.yaml").read_text(encoding="utf-8") == before
+
+
+def test_write_after_load_keeps_the_other_platform_sections(tmp_path: Path) -> None:
+    """正常路径（先 load）写一个平台，不许碰到另一个平台那一段。"""
+    _write_platforms_yaml(tmp_path, _TWO_PLATFORMS)
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+
+    mgr.write_platform_config("douyin", DouyinConfig(display_name="抖音", enabled=False))
+
+    again = ConfigManager(config_dir=tmp_path)
+    again.load()
+    assert again.get_platform("douyin").enabled is False
+    bilibili = again.get_platform("bilibili")
+    assert bilibili.enabled is False and bilibili.display_name == "B站"
+    assert bilibili.ytdlp_cookies_from_browser == "chrome"
+
+
+def test_write_preserves_a_section_added_to_disk_after_load(tmp_path: Path) -> None:
+    """load() 之后有人手工往文件里加了一个平台段，再 PUT 另一个平台不许把它抹掉。
+
+    这是"以内存为准重建整份文件"最隐蔽的一种失败：内存是完整的、也确实 load 过，
+    盘上却多了一段内存不知道的（V2.1 装回来又退回 V2.0、或者人正在编辑）。
+    """
+    _write_platforms_yaml(tmp_path, "douyin:\n  enabled: true\n  display_name: 抖音\n")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+    _write_platforms_yaml(
+        tmp_path,
+        "douyin:\n  enabled: true\n  display_name: 抖音\n"
+        "bilibili:\n  enabled: false\n  display_name: B站\n",
+    )
+
+    mgr.write_platform_config("douyin", DouyinConfig(display_name="抖音", enabled=False))
+
+    text = (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
+    assert "bilibili" in text, f"盘上新出现的那一段被抹掉了：\n{text}"
+
+
 def test_config_dir_is_created_on_write(tmp_path: Path) -> None:
     """config/ 不存在时写盘要能自己长出来（V1 §4.1 的 mkdir 纪律）。"""
     nested = tmp_path / "cfg"

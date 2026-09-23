@@ -2,7 +2,15 @@
 #
 # 结构：**顶层 key 就是平台名**（`douyin` / `bilibili` / ...），不再套一层 `platforms:`。
 # 原因是 `PUT /api/platforms/{name}/config` 要原子重写整个文件，
-# 扁平结构下「文件内容 == 平台配置表」，重写时不会误伤别的段。
+# 扁平结构下「文件内容 == 平台配置表」，重写时不会误伤别的段
+# （`_current_platforms_dump` 以盘上现有内容打底、内存覆盖自己那几段；
+#   以前是按内存重建，实测会把没在内存里的平台段整个删掉）。
+#
+# **这些注释活不过第一次 PUT**：`yaml.safe_dump` 不保留注释，
+# 服务端写完这个文件后就只剩数据。所以字段的解释不写在这里 ——
+# 活真相是各平台 `config.py` 里的 `Field(description=...)`，
+# 前端从 `/api/platforms/{name}/schema` 拿 JSON Schema 自动渲染。
+# 想改说明请改那个，改这里的注释只活得过一次写盘。
 # 全局行为（超时、健康检查、Feed 是否显示已禁用平台的历史）在 `app.yaml`。
 #
 # 改这个文件后**重启服务**才生效；运行时改配置走 `PUT /api/platforms/{name}/config`，

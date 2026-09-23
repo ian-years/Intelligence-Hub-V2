@@ -325,6 +325,25 @@ async def update_platform_config(
 - 配置文件仍写盘的原因：审计、备份、可进 git
 - 敏感字段（token）走 `config/feishu.yaml`（gitignore），不进 `platforms.yaml`
 
+> **实施期修订（2026-09-23）· 上面那条"可进 git"要配两个限定。**
+>
+> 1. **注释活不过第一次 `PUT`。** `yaml.safe_dump` 不保留注释，实测首写就抹掉
+>    `platforms.yaml` 顶部与逐字段的 96 行说明。**决定：不为此引入 `ruamel.yaml`**
+>    （多一个运行时依赖，换来的是一份"人写的注释与代码谁更新"长期不一致的文件）。
+>    字段说明的活真相改成 JSON Schema 的 `Field(description=...)` —— 前端本来就是从
+>    `/api/platforms/{name}/schema` 拿 schema 渲染表单，说明写在那里才可能被读到、
+>    也才可能被测到；`platforms.yaml` 降级成"数据 + 一段会消失的注释"，
+>    这一点已写进该文件自己的头部。
+> 2. **"重写不会误伤别的段"以前是假的。** `_current_platforms_dump` 以前只按内存重建，
+>    于是两种情况会真删数据：未 `load()` 的 manager 写一次（其他平台段整个消失），
+>    以及 `load()` 之后有人往文件里加了段（那一段被抹）。现在改成
+>    "盘上现有内容打底 + 内存覆盖自己那几段"，并且未 `load()` 直接 `ConfigError`。
+>    看护：`tests/unit/core/test_config.py::test_write_without_load_refuses_...` 与
+>    `test_write_preserves_a_section_added_to_disk_after_load`。
+>
+> 还没做的一小项：`reload_platform()` 写 `self._platforms[name]` 时没拿 `_write_lock`，
+> 与并发 `write_platform_config` 交错时可能把刚重载的值又推回盘上（低频，记在 lessons 待办）。
+
 ---
 
 ## 6. 环境变量映射
