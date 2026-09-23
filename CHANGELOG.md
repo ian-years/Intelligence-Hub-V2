@@ -105,6 +105,16 @@
 - `storage` fixture 参数化跑两档后端（`memory` = `create_all` / `file` = 真 Alembic），
   外加三条漂移看护：`check_schema_matches_migrations()`、`alembic upgrade/downgrade/upgrade` 往返、
   以及一条**验证漂移看护本身能发现漂移**的用例
+- **Task 12 之一 · Preflight 页**（`/preflight`，四页里的第一页）：
+  `usePreflight` 的三态分开渲染 —— 全绿 / 部分可用 / 有不可用的地方，外加
+  "读不到"（显示 `ApiError` 原文）与"补发被挂起"两种非结果态，
+  四种情况互相**不许**露出对方的文案。失败明细逐条给出 `platform` / `stage` /
+  `error_kind` 与原文。`tools_missing` 单独不判红这件事在页面上说出来（要紧由平台决定），
+  不然一栏红色工具清单会被读成"环境完了"。
+  `lib/formatters.ts` 的 `parsePairs`/`parseNames` 拆的是 `tasks/preflight.py` 拼出来的字符串，
+  所以用例同时钉生产者形状（`", ".join(f"{k}={v}")` 改了 → 前端红）。
+  `PreflightSummary` 按 handler 实际写的 9 个键声明（路由返回的是自由 `dict`）。
+  顺带修掉 `Sidebar` 同一条坑：`isPaused` 以前会一直显示"读取中…"（经验 36）
 - **契约基类补到 `contract-tests.md §4` 承诺的形状**：通用用例 7 条 → 11 条
   （能力声明快照、能力与配置三个镜像字段一致、列表流式产出的形状与 `limit` 是上限、
   媒体产物说得出走了哪条路 + 兜底必留原文），钩子 2 个 → 6 个且全部 `@abstractmethod`；

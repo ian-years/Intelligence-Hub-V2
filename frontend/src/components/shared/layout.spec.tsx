@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,8 +14,8 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-function renderLayout(): void {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: 0 } } });
+function renderLayout(retry = 0): void {
+  const client = new QueryClient({ defaultOptions: { queries: { retry } } });
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
@@ -30,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  onlineManager.setOnline(true);
   vi.unstubAllGlobals();
 });
 
@@ -57,6 +58,20 @@ describe("Layout / Sidebar", () => {
     expect(screen.getByText("B站")).toBeTruthy();
     // 关掉的平台**不删条目**，只压暗：删掉会让人以为"这个构建没有 B站"。
     expect(screen.getByText("B站").closest(".memphis-badge")).toHaveClass("opacity-40");
+  });
+
+  /** "读取中…" 与 "被暂停" 必须分开：窗口不在前台时 react-query 挂起补发，
+   * `isPending` 会一直 true —— 只写"读取中"就等于承诺"马上就出来了"。
+   * （2026-09-23 在真实页面量到的正是这个状态：请求发出去了、返回了 404、
+   * 然后重试被挂起，界面从此停在"读取中…"。） */
+  it("补发被挂起时说「被暂停」，不说「读取中…」", async () => {
+    vi.mocked(fetch).mockImplementation(async () =>
+      jsonResponse(409, { detail: "配置层还没起来" }),
+    );
+    onlineManager.setOnline(false);
+    renderLayout(3);
+    expect(await screen.findByText(/被暂停/)).toBeTruthy();
+    expect(screen.queryByText(/读取中/)).toBeNull();
   });
 
   /** 这条是 `AGENTS.md §1.3` 在 UI 上的落点：读不到要看得见，不能渲染成空列表。 */

@@ -63,7 +63,13 @@ export function Sidebar(): JSX.Element {
         {/* 平台清单来自 `/api/platforms`：侧栏这块是"哪些平台现在是活的"，
             不是前端自己列的四家 —— 关掉的平台会从这里消失，这正是要看见的。 */}
         <span className="text-body-sm">平台</span>
-        {platforms.isPending && <span className="text-body-sm">读取中…</span>}
+        {/* paused 与 pending 必须分开说：窗口不在前台时 react-query 会挂起补发，
+            此时 `isPending` 永远是 true —— 只写"读取中…"就等于让界面看起来
+            "马上就出来了"，而它其实不动了（2026-09-23 在真实页面里量到的就是这个）。 */}
+        {platforms.isPaused && <span className="text-body-sm">读取被暂停（窗口不在前台）</span>}
+        {platforms.isPending && !platforms.isPaused && (
+          <span className="text-body-sm">读取中…</span>
+        )}
         {platforms.isError && (
           <span className="text-body-sm text-coral-red">读不到：{platforms.error.message}</span>
         )}

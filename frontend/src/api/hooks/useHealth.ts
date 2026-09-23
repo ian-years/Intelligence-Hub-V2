@@ -24,12 +24,28 @@ export interface FailureRecord {
   error_kind: string | null;
 }
 
-/** 源是 `tasks/preflight.py` 的 `run_preflight`（路由只是把它的三样东西原样交出来）。
- * `summary` 在 OpenAPI 里是自由对象，所以这里按 handler 实际写的那 9 个键声明，
- * 页面**不许**假设某个键一定在（`preflight.py` 会按平台数量少写键）。 */
+/** `summary` 在 OpenAPI 里是自由对象（路由的返回注解是 `dict[str, Any]`），
+ * 所以类型只能在前面按 `tasks/preflight.py` 实际写的那 9 个键声明。
+ * 保留索引签名是因为它会**按情况少写键**（没有启用平台时那句是空串拼接的结果），
+ * 页面因此不许假设某个键一定在。 */
+export interface PreflightSummary {
+  platforms_ok: number;
+  platforms_degraded: number;
+  platforms_unreachable: number;
+  /** "ok" / "unreachable" */
+  storage: string;
+  /** "present" / "missing" */
+  asr_model: string;
+  /** 逗号 + 空格拼的 `k=v`，生产者与解析法都由 `lib/formatters.spec.ts` 钉住 */
+  platform_status: string;
+  tools_present: string;
+  tools_missing: string;
+  [key: string]: string | number | undefined;
+}
+
 export interface PreflightReport {
   status: PreflightStatus;
-  summary: Record<string, string | number>;
+  summary: PreflightSummary;
   failures: FailureRecord[];
 }
 

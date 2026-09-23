@@ -1485,6 +1485,38 @@ pytest 的模块收集器看的是**模块命名空间里以 `Test` 开头的类
 
 ---
 
+#### 经验 36 · `isPending` 不是"马上就出来"：窗口不在前台时 react-query 会挂起补发（Task 12）
+
+**现象**：`vite preview` + in-app browser（没有可见表面）里，侧栏平台块停在"读取中…"，
+而控制台明明有两次 `404 /api/platforms`。同一份代码在 jsdom 里 1 秒后就变成
+"读不到：配置层还没起来"。我第一版写下的结论是"大概率是重试窗口 + 隐藏标签页 timer 节流" ——
+**那是猜的，而且猜错了一半**，所以这条经验连那次错判一起记。
+
+**量到的事实**（一条条在页面上读出来的，不是推的）：
+`navigator.onLine === true`、`document.visibilityState === "hidden"`、
+`/api/preflight` 发出去了 1 次并返回 404、之后没有第 2 次。
+把 react-query 的状态打出来是 `isPending: true` + **`isPaused: true`** ——
+`fetchStatus` 停在 `paused`，因为 focusManager 认为窗口没聚焦，**补发被挂起**。
+
+**根因**：`isPending` 一个布尔被界面同时用来表达三件事 —— "还没开始"、"正在飞"、
+"被挂起，不会自己动"。第三种在无人值守的界面里最阴：它看起来像在等结果，
+其实永远等不到，而那块区域下面什么都不显示。
+
+**解法**：界面分开三态。`Sidebar` 与 `Preflight` 都加了 `isPaused` 分支，
+文案说清"第一次请求已经发出去、重试要等页面回到前台"，并明确写
+**"这一栏不是环境没问题"**。`isPending && !isPaused` 才是"读取中"。
+
+**判据**：**任何"读数据"的界面都要问 `isPaused`**，不能只看 `isPending` / `isError`。
+另外：一条 UI 结论必须由页面自己说话（读 `innerText` / `getComputedStyle`）来定案 ——
+拿"我以为的浏览器行为"当结论，就是这条经验原来的样子。
+
+**看护**：`src/components/shared/layout.spec.tsx` 的
+`补发被挂起时说「被暂停」，不说「读取中…」`（用 `onlineManager.setOnline(false)` 造挂起态）
+与 `src/pages/preflight.spec.tsx` 的
+`补发被挂起时说「被暂停」，既不说正在探测也不说全绿`。
+
+---
+
 #### 经验 35 · 契约文档里的代码样例也得能跑：`EventSource.onmessage` 一帧都收不到（Task 11）
 
 **现象**：`docs/specs/event-schema.md §7` 给的前端样例是
