@@ -83,17 +83,28 @@ class BaseRepository:
 
     @asynccontextmanager
     async def _scope(self) -> AsyncIterator[AsyncSession]:
-        """拿到一个可用的 session。
+        """拿到一个可用的 session，**并把约束违例翻译成本仓库的异常族**。
 
         - 在外层事务里：直接复用，**不 commit / 不 close**（交给外层）。
         - 不在事务里：开一个短事务，正常退出即 commit，异常即 rollback。
+
+        翻译放在这里、而不是各方法自己写 `try`，是因为这一个位置已经包住了两条分支
+        里的每一次 `execute()`：本 schema 没有 `DEFERRABLE` 外键，SQLite 的
+        UNIQUE / FK / NOT NULL / CHECK 判定全部发生在语句执行当场（不是 commit 时），
+        所以"任何 DML 违例"必然落在这个 `try` 内。
+        按动词切（当初只给 insert/delete 补 `except`）会漏掉整片 UPDATE 路径 ——
+        判据是"会不会发 DML"，不是"是哪个动词"。见经验 11 与经验 24，
+        看护在 `tests/unit/storage/test_integrity_translation.py`。
         """
         ambient = CURRENT_SESSION.get()
-        if ambient is not None:
-            yield ambient
-            return
-        async with self._session_factory() as session, session.begin():
-            yield session
+        try:
+            if ambient is not None:
+                yield ambient
+                return
+            async with self._session_factory() as session, session.begin():
+                yield session
+        except IntegrityError as exc:
+            raise self._translate_integrity(exc) from exc
 
     # ---- 行 → Pydantic ----
 

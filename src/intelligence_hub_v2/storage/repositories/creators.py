@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from typing import Any, Unpack
 
 from sqlalchemy import Select, func, select, update
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.errors import ConflictError
 from intelligence_hub_v2.models.creator import (
@@ -112,12 +111,9 @@ class CreatorRepository(BaseRepository):
         values = draft.model_dump()
         values["created_at"] = now
         values["updated_at"] = now
-        try:
-            async with self._scope() as session:
-                result = await session.execute(_T.insert().values(**values))
-                new_id = inserted_id(result)
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            result = await session.execute(_T.insert().values(**values))
+            new_id = inserted_id(result)
         return await self.get_or_raise(new_id)
 
     async def insert_or_get(self, draft: CreatorDraft) -> tuple[Creator, bool]:

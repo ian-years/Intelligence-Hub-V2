@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.models.task import TaskRunRecord
 from intelligence_hub_v2.storage.repositories.base import BaseRepository, affected_rows
@@ -106,11 +105,8 @@ class TaskRunRepository(BaseRepository):
             "started_at": started_at or datetime.now(UTC),
             "progress": 0.0,
         }
-        try:
-            async with self._scope() as session:
-                await session.execute(_T.insert().values(**values))
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            await session.execute(_T.insert().values(**values))
         return await self.get_or_raise(task_id)
 
     async def set_progress(self, task_id: str, progress: float) -> None:

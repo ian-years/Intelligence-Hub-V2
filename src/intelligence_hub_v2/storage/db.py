@@ -249,7 +249,13 @@ class SqliteStorage:
         self._echo = echo
         self._engine: AsyncEngine | None = None
         self._sessionmaker: async_sessionmaker[AsyncSession] | None = None
-        self._repositories: _Repositories | None = None
+        # Repository 容器在**构造期**就装配好，不等 initialize()：每个 Repository 握的是
+        # `self.new_session` 这个工厂（见 `BaseRepository.__init__` 的理由），构造它们
+        # 不需要连接池。以前它跟着 initialize() 走，于是 `storage.events` 在 lifespan
+        # 之前拿不到 —— `create_app()` 正是那条路，生产启动直接抛
+        # "还没 initialize()"（验收判据 2 因此当时是纸面的）。
+        # 真正的门在第一次查询：`_require_sessionmaker()`，那条文案同时盖住 close()。
+        self._repositories = _Repositories(self.new_session)
 
     # ---- 构造 ----
 
@@ -314,7 +320,6 @@ class SqliteStorage:
                 await connection.run_sync(metadata.create_all)
 
         self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        self._repositories = _Repositories(self.new_session)
         logger.info(
             "storage.initialized",
             db_path=str(self._db_path),
@@ -346,7 +351,6 @@ class SqliteStorage:
             await self._engine.dispose()
             self._engine = None
         self._sessionmaker = None
-        self._repositories = None
 
     async def healthcheck(self) -> bool:
         """`SELECT 1` 真往返。返回 False 而不是抛异常 —— preflight 要的是红绿灯。"""
@@ -385,31 +389,31 @@ class SqliteStorage:
 
     @property
     def platforms(self) -> PlatformRepository:
-        return self._require_repos().platforms
+        return self._repositories.platforms
 
     @property
     def creators(self) -> CreatorRepository:
-        return self._require_repos().creators
+        return self._repositories.creators
 
     @property
     def videos(self) -> VideoRepository:
-        return self._require_repos().videos
+        return self._repositories.videos
 
     @property
     def transcripts(self) -> TranscriptRepository:
-        return self._require_repos().transcripts
+        return self._repositories.transcripts
 
     @property
     def task_runs(self) -> TaskRunRepository:
-        return self._require_repos().task_runs
+        return self._repositories.task_runs
 
     @property
     def events(self) -> EventRepository:
-        return self._require_repos().events
+        return self._repositories.events
 
     @property
     def manifests(self) -> ManifestRepository:
-        return self._require_repos().manifests
+        return self._repositories.manifests
 
     @property
     def sessionmaker(self) -> async_sessionmaker[AsyncSession]:
@@ -436,12 +440,6 @@ class SqliteStorage:
             msg = "SqliteStorage 不可用（还没 initialize()，或已经 close()）"
             raise StorageError(msg)
         return self._sessionmaker
-
-    def _require_repos(self) -> _Repositories:
-        if self._repositories is None:
-            msg = "SqliteStorage 还没 initialize()"
-            raise StorageError(msg)
-        return self._repositories
 
 
 class _Repositories:

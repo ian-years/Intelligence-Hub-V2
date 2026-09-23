@@ -21,7 +21,6 @@ from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.engine import RowMapping
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.models.event import EventType, StoredEvent
 from intelligence_hub_v2.storage.repositories.base import BaseRepository, affected_rows, inserted_id
@@ -63,12 +62,9 @@ class EventRepository(BaseRepository):
             # 出问题时人眼读不了。
             "payload_json": json.dumps(payload or {}, ensure_ascii=False),
         }
-        try:
-            async with self._scope() as session:
-                result = await session.execute(_T.insert().values(**values))
-                new_id = inserted_id(result)
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            result = await session.execute(_T.insert().values(**values))
+            new_id = inserted_id(result)
         return StoredEvent(
             id=new_id,
             type=event_type,

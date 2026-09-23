@@ -24,7 +24,6 @@ from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.errors import StorageError
 from intelligence_hub_v2.models.platform import HEALTH_STATUSES, HealthStatus, PlatformRecord
@@ -196,14 +195,13 @@ class PlatformRepository(BaseRepository):
         V2.0 只有抖音/B站，V2.1 才加小红书/YouTube，"平台退出"这条路
         在可预见的版本里不会被走到，真走到了也必须先把博主数据处置掉。
 
-        必须翻译 `IntegrityError`：不翻译的话调用方（Settings 页的"移除平台"）
-        会拿到一屏 SQLAlchemy traceback，而它需要的是"这个平台下还有 N 位博主"。
+        翻译由 `BaseRepository._scope()` 统一负责（这里不再各写一个 `try`）：
+        不翻译的话调用方（Settings 页的"移除平台"）会拿到一屏 SQLAlchemy traceback，
+        而它需要的是"这个平台下还有 N 位博主"。`prune_unknown()` 走的是同一条外键，
+        而它由 lifespan 在启动期调用 —— 那里漏翻译等于服务起不来。
         """
-        try:
-            async with self._scope() as session:
-                result = await session.execute(_T.delete().where(_T.c.name == name))
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            result = await session.execute(_T.delete().where(_T.c.name == name))
         return affected_rows(result) > 0
 
     async def prune_unknown(self, keep: Iterable[str]) -> int:
@@ -215,6 +213,12 @@ class PlatformRepository(BaseRepository):
 
         `keep` 为空时**一条都不删**（防御：传错参数把整张表清空，
         然后所有平台的健康状态归零，看着像"全部平台挂了"）。
+
+        这里没写 `try/except` 不是遗漏：`creators.platform` 是 RESTRICT 外键，
+        残留平台下面有博主时这条 DELETE 必然违例，而翻译由 `_scope()` 统一做
+        （`tests/unit/storage/test_integrity_translation.py::test_prune_unknown_*`）。
+        本方法由 lifespan 在启动期调用（`main.py:116`），漏翻译的形态是
+        "退回旧构建后服务起不来，给的是一句裸 traceback"。
         """
         names = list(keep)
         if not names:

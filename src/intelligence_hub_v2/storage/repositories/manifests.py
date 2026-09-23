@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.errors import StorageError
 from intelligence_hub_v2.models.manifest import Manifest, ManifestRecord
@@ -65,12 +64,9 @@ class ManifestRepository(BaseRepository):
             # ensure_ascii=True），所以 failures[].error 里的中文原文是可读的。
             "content_json": manifest.model_dump_json(),
         }
-        try:
-            async with self._scope() as session:
-                result = await session.execute(_T.insert().values(**values))
-                new_id = inserted_id(result)
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            result = await session.execute(_T.insert().values(**values))
+            new_id = inserted_id(result)
         return ManifestRecord(id=new_id, **values)
 
     # ---- 读 ----

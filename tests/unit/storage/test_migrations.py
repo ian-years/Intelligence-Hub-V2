@@ -280,22 +280,29 @@ def test_memory_url_is_special_cased() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_repositories_are_unavailable_before_initialize() -> None:
-    """不返回半初始化的 Repository 让调用方拿到 None 再猜。"""
+ACCESSORS = ("platforms", "creators", "videos", "transcripts", "task_runs", "events", "manifests")
+
+
+async def test_accessors_resolve_before_initialize_but_queries_do_not() -> None:
+    """拿句柄放行、发查询才拦 —— 判据从"访问属性"挪到了"真的要用连接"。
+
+    原来这一条断的是"属性本身就抛"。那个门放错位置了：Repository 只握工厂，构造它
+    不需要连接池，而 `create_app()` 恰好在 lifespan `initialize()` 之前就要拿到
+    `storage.events` —— 于是生产启动路径整个跑不起来（见
+    `test_app_lifespan.py::test_create_app_boots_without_an_injected_state`）。
+    "不许拿到半初始化的东西然后静默凑合"这层意思由 `_require_sessionmaker()` 保住，
+    报错点离原因只差一次调用。
+    """
     storage = SqliteStorage.in_memory()
-    for accessor in (
-        "platforms",
-        "creators",
-        "videos",
-        "transcripts",
-        "task_runs",
-        "events",
-        "manifests",
-    ):
-        with pytest.raises(StorageError, match="initialize"):
-            getattr(storage, accessor)
-    with pytest.raises(StorageError, match="initialize"):
-        _ = storage.sessionmaker
+    try:
+        for accessor in ACCESSORS:
+            assert getattr(storage, accessor) is not None, accessor
+        with pytest.raises(StorageError, match="不可用"):
+            await storage.videos.count()
+        with pytest.raises(StorageError, match="不可用"):
+            _ = storage.sessionmaker
+    finally:
+        await storage.close()
 
 
 async def test_initialize_is_idempotent() -> None:
@@ -380,12 +387,17 @@ async def test_memory_storage_shares_one_connection() -> None:
         await storage.close()
 
 
-async def test_close_releases_the_repositories() -> None:
+async def test_close_leaves_no_live_sessionmaker_but_stays_idempotent() -> None:
+    """close() 关的是连接池与 sessionmaker，不是 Repository 对象。
+
+    句柄留在原地不影响正确性 —— 下一次查询会撞上"不可用"（下面这两行，
+    以及 `test_repositories_fail_our_way_after_close`）。
+    """
     storage = SqliteStorage.in_memory()
     await storage.initialize()
     await storage.close()
-    with pytest.raises(StorageError, match="initialize"):
-        _ = storage.platforms
+    with pytest.raises(StorageError, match="不可用"):
+        await storage.platforms.count()
     await storage.close()  # 幂等
 
 

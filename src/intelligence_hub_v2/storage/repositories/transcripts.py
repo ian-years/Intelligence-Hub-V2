@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.models.transcript import TranscriptDraft, TranscriptRecord
 from intelligence_hub_v2.storage.repositories.base import BaseRepository, affected_rows
@@ -62,12 +61,9 @@ class TranscriptRepository(BaseRepository):
             "video_id": video_id,
             "created_at": datetime.now(UTC),
         }
-        try:
-            async with self._scope() as session:
-                await session.execute(_T.delete().where(_T.c.video_id == video_id))
-                await session.execute(_T.insert().values(**values))
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            await session.execute(_T.delete().where(_T.c.video_id == video_id))
+            await session.execute(_T.insert().values(**values))
         return TranscriptRecord.model_validate(values)
 
     async def delete(self, video_id: int) -> bool:

@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from typing import Any, Unpack
 
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
 
 from intelligence_hub_v2.errors import ConflictError, StorageError
 from intelligence_hub_v2.models.transcript import TranscriptDraft, TranscriptRecord
@@ -119,12 +118,9 @@ class VideoRepository(BaseRepository):
         values = draft.model_dump()
         values["created_at"] = now
         values["updated_at"] = now
-        try:
-            async with self._scope() as session:
-                result = await session.execute(_T.insert().values(**values))
-                new_id = inserted_id(result)
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            result = await session.execute(_T.insert().values(**values))
+            new_id = inserted_id(result)
         video = await self.get(new_id)
         if video is None:  # pragma: no cover - 插完就读不到只可能是并发删了
             msg = f"插入后立即读不到 video id={new_id}"
@@ -237,12 +233,9 @@ class VideoRepository(BaseRepository):
         await self.get_or_raise(video_id)
         now = datetime.now(UTC)
         values = transcript.model_dump() | {"video_id": video_id, "created_at": now}
-        try:
-            async with self._scope() as session:
-                await session.execute(_TT.delete().where(_TT.c.video_id == video_id))
-                await session.execute(_TT.insert().values(**values))
-        except IntegrityError as exc:
-            raise self._translate_integrity(exc) from exc
+        async with self._scope() as session:
+            await session.execute(_TT.delete().where(_TT.c.video_id == video_id))
+            await session.execute(_TT.insert().values(**values))
         return TranscriptRecord.model_validate(values)
 
     async def has_transcript(self, video_id: int) -> bool:

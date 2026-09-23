@@ -11,11 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import pytest
 
 from intelligence_hub_v2.core.config import ConfigManager
 from intelligence_hub_v2.core.task_registry import DepsFactory
 from intelligence_hub_v2.core.task_runner import TaskRunner, TaskScheduler
-from intelligence_hub_v2.main import _sync_platform_mirror, build_components
+from intelligence_hub_v2.errors import StorageError
+from intelligence_hub_v2.main import _sync_platform_mirror, build_components, create_app
 from intelligence_hub_v2.platforms.registry import PlatformRegistry
 from intelligence_hub_v2.storage.db import SqliteStorage
 from intelligence_hub_v2.storage.files import FileStorage
@@ -26,6 +28,42 @@ douyin:
 bilibili:
   enabled: false
 """
+
+
+async def test_repository_handles_resolve_before_initialize_but_queries_do_not(
+    tmp_path: Path,
+) -> None:
+    """Repository 握的是"取 session 的工厂"，构造它不需要连接池。
+
+    真正的门在第一次查询上（`_require_sessionmaker`）。把门放在"拿句柄"这一步，
+    等于让 `create_app()` 在 lifespan 之前无法装配 —— 见下一条用例。
+    """
+    storage = SqliteStorage(tmp_path / "not-yet.sqlite3")
+
+    videos = storage.videos  # 拿句柄不许抛
+
+    with pytest.raises(StorageError, match="不可用"):
+        await videos.count()
+
+
+def test_create_app_boots_without_an_injected_state(tmp_path: Path) -> None:
+    """`uv run intelligence-hub` 走的就是这条路（uvicorn factory → `create_app()`）。
+
+    以前 `create_app()` 在 `storage.initialize()` 之前就去取 `storage.events`
+    （`build_components` 里 `InProcessEventBus(events=storage.events)`），
+    生产启动路径当场抛 `SqliteStorage 还没 initialize()`。
+    而这里原有的用例都是"先 initialize 再 build_components"或"注入 state="，
+    所以这条路一次都没被跑过 —— 验收判据 2（服务能起来）当时是纸面的。
+    """
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "app.yaml").write_text(f"data:\n  dir: {tmp_path.as_posix()}/data\n", encoding="utf-8")
+    (cfg / "platforms.yaml").write_text(_PLATFORMS_YAML, encoding="utf-8")
+
+    app = create_app(config_dir=cfg)
+
+    paths = set(app.openapi()["paths"])
+    assert "/api/health" in paths and "/api/events" in paths
 
 
 async def test_build_components_wires_everything(tmp_path: Path) -> None:
