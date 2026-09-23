@@ -827,7 +827,7 @@ schema 改了 YAML 没改 → 红；YAML 里加了未注册的平台 → 红；�
 > 所以除了漂移看护本身，还要一条直接读 `sqlite_master` 比对约束取值与约束名清单的用例
 > （`tests/unit/storage/test_schema_types.py`）。
 > 只做前者会留下一个"看起来有两处看护、实际只有一处"的错觉。
-> `settings.ts` 那条仍在待办池，Task 10/11 落前端时做。
+> `settings.ts` 那条已在 Task 11 落地（`frontend/src/stores/` + 4 条用例），见 `docs/specs/contract-tests.md §3` 的 §7.24 行。
 
 ### 实施阶段（V2.0）· Task 3（存储层）
 
@@ -1241,7 +1241,7 @@ lifespan 注册它为 `reload_platform` 的订阅者；`PUT` 路由 reload 后�
 反向同理：**改了行为要回头删掉那句承诺**（本轮 `_maybe_attach_transcript` 就顺手删了
 `dry_run` 分支里已经走不到的记账代码）。
 
-**看护**：桥回环校验、`prune_unknown` 的 `IntegrityError` 翻译各自欠一条用例（见待办）。
+**看护**：（当时欠的两条已补，2026-09-23）桥回环 = `tests/unit/infra/test_cdp_bridge.py::test_non_loopback_bridge_urls_are_rejected_at_construction`（参数化含 `127.0.0.1.evil.com` 这种要 DNS 才看得出来的写法）；`prune_unknown` 与 UPDATE 路径的翻译 = `tests/unit/storage/test_integrity_translation.py`（memory / file 双后端各跑一遍，因为翻译上提到了 `BaseRepository._scope()`）。
 
 #### 经验 25 · 计划表的漏报，和虚报一样贵
 

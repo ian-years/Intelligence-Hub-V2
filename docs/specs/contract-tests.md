@@ -52,7 +52,7 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | §7.20 桥的浏览器被人关掉后 formerly 会一直报绿；现已收口（`/health` 503 + 真请求自愈） | `test_503_means_browser_dead_not_bridge_down` + `test_bridge_available_is_true_on_503` + `test_dead_browser_during_navigate_raises_so_self_heal_can_run` | L1 | `tests/unit/infra/test_cdp_bridge.py` |
 | §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `TestDashSplit`：`test_pair_reaches_the_caller_as_a_video_audio_pair`、`test_only_yt_dlp_reported_paths_are_considered`（不扫目录）、`test_two_webm_tracks_are_told_apart_by_size`、`test_a_pair_artifact_points_the_transcriber_at_the_audio_track`（与 `audio_path_of()` 接通） | L2 | `tests/contracts/test_bilibili_adapter.py` + `tests/contracts/test_bilibili_helpers.py` |
 | §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | **未落地**（V2.1 的 Backfill 任务） | — | — |
-| §7.24 「持续跟踪」的值必须是真布尔 | `test_set_tracking_rejects_non_bool` + `test_tracking_rejects_non_boolean_with_422` | L1 + L3 | `tests/unit/storage/test_creators_repo.py` + `tests/integration/test_api_creators.py`（后半句"默认值只能有一处"**未落地**：要等前端 settings store，见 §3.1） |
+| §7.24 「持续跟踪」的值必须是真布尔 | `test_set_tracking_rejects_non_bool` + `test_tracking_rejects_non_boolean_with_422` | L1 + L3 | `tests/unit/storage/test_creators_repo.py` + `tests/integration/test_api_creators.py`（后半句"默认值只能有一处"由 Task 11 落地：唯一默认值在 `frontend/src/stores/settings.ts` 一处，看护是 `frontend/src/stores/settings.spec.ts` 那 4 条—— 含"localStorage 里是字符串 `\"false\"` 时不认，回到唯一默认值"与"写非布尔直接拒"。前端用例的名字不是 `test_*`，所以本行表格里点名的仍是那两条 Python 用例） |
 | §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_finalizes_on_every_exit_path`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/test_manifest_finalization.py` |
 
 ### 3.1 已落地的看护（截至 Task 3，2026-09-22）
@@ -88,7 +88,10 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 **仍未落地**（按计划属于后续任务）：§7.9（ASR 标点，V2.1）、
 §7.13 的 `diff -rq` 那半、§7.19（PATH 上的 ffmpeg / ffprobe，已由 Task 8 preflight 在
 `summary["tools_missing"]` 里报出）、§7.22（按位抓取的 URL 直定位，归 V2.1 的 `BackfillTask`）、
-§7.24 的 L4 前端部分（Task 10-13 一起做）。
+
+
+**已落地（补记 2026-09-23）**：§7.24 的 L4 前端那一半 —— 跟踪默认值只有一处
+（`frontend/src/stores/settings.ts`）＋ 4 条用例（`settings.spec.ts`）。
 
 **已落地**：
 
