@@ -12,12 +12,13 @@
     "preview": "vite preview",
     "lint": "eslint . --max-warnings=0 && stylelint \"**/*.css\"",
     "lint:css": "stylelint \"**/*.css\"",
-    "format": "prettier --write --ignore-path .gitignore .",
+    "format": "prettier --write --ignore-path .prettierignore .",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
     "coverage": "vitest run --coverage",
     "tokens": "tsx scripts/gen-tokens.ts",
-    "gen:api": "openapi-typescript http://127.0.0.1:8789/openapi.json -o src/api/schema.d.ts"
+    "gen:api": "openapi-typescript ../docs/specs/openapi-snapshot.json -o src/api/schema.d.ts",
+    "gen:api:live": "openapi-typescript http://127.0.0.1:8789/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@fontsource/archivo-black": "^5.2.5",

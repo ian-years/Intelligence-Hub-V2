@@ -73,6 +73,25 @@
   令牌对照页 `src/dev/TokenSheet.tsx`；
   20 条用例里最要紧的是 `src/styles/tokens.spec.ts`：把 `ui-tokens.md` 的 YAML 源解出来
   逐条核 CSS、核 `tokens.json` 逐字节等于投影、核图案与色板一致（四条破坏做过变异验证）
+- **Task 11** · 前端 API 层 + SSE + stores + 路由外壳：
+  `src/api/client.ts`（唯一出口：非 2xx 一律 `ApiError`，422 的数组 detail 展开成 `loc: msg`，
+  响应不是 JSON 时留原文前 160 字 —— `response.json()` 会消耗 body，所以错误分支只读一次 `text()`）、
+  `src/api/keys.ts`（query key 单处定义）、`src/api/json-schema.ts`（`ui:hidden` / `ui:advanced`
+  是契约键，所以类型里就有；`resolveRef` 解 `$defs` 一层）、5 个 hook 文件（URL/动词/请求体
+  逐条有用例钉，包括「跟踪开关发的是 `tracking` 不是 `is_tracking`」与「转写稿 404 是正常态、
+  500 不是」）；`src/api/schema.d.ts` 由 `npm run gen:api` 从 **`docs/specs/openapi-snapshot.json`**
+  生成（不需要后端在跑），同源由 `src/api/schema.spec.ts` 双向核；生成物进 `.prettierignore`
+- **Task 11** · `src/events/useTaskEvents.ts`：`/api/events` 订阅。后端每帧都带
+  `event: <type>`，`EventSource.onmessage` **一帧都收不到**，所以逐类型 `addEventListener`；
+  服务端不发 `id:`，重连由前端带 `since=<最后一条已收到事件的时间戳>` 重开（退避 0.5→10s），
+  缓冲区有界 500，`status`/`error` 交回界面。`EVENT_TYPES` 与 Python `EventType`
+  由用例逐字核（漏一个名字的症状是那种事件静默收不到）。`docs/specs/event-schema.md §7`
+  的样例同步改成能跑的形状（`docs/lessons.md` 经验 35）
+- **Task 11** · stores 与外壳：`stores/settings.ts` 是 V1 §7.24"跟踪默认值只有一处"在前端的
+  落点（`localStorage` 当外部输入处理：`"false"` 这种字符串不认，回到唯一默认值；
+  写非布尔直接拒），`stores/ui.ts` 只管侧栏；`Layout`/`Sidebar`/`PageShell` +
+  `App.tsx` 的 7 条 `HashRouter` 路由与 `/tokens` 开发页。侧栏的平台清单读自
+  `/api/platforms`（**读不到要显示原因，不许渲染成安静的一片空**）
 
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），

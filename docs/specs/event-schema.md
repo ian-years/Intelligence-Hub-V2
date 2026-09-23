@@ -342,32 +342,36 @@ CREATE INDEX idx_task_events_type_time ON task_events(type, timestamp);
 
 ## 7. 前端订阅模式
 
+文件：`frontend/src/events/useTaskEvents.ts`（不在这份样例里重实现，只写契约）。
+
 ```typescript
-// frontend/src/hooks/useTaskEvents.ts
-import { useEffect, useState } from 'react';
-import type { Event, EventType } from '@/lib/api-types';
-
-export function useTaskEvents(taskId: string, types?: EventType[]) {
-  const [events, setEvents] = useState<Event[]>([]);
-
-  useEffect(() => {
-    const params = new URLSearchParams({ task_id: taskId });
-    if (types?.length) params.set('types', types.join(','));
-
-    const es = new EventSource(`/api/events?${params}`);
-    es.onmessage = (e) => setEvents((prev) => [...prev, JSON.parse(e.data)]);
-    es.onerror = () => { /* EventSource 自动重连 */ };
-
-    return () => es.close();
-  }, [taskId, types?.join(',')]);
-
-  return events;
+const es = new EventSource(`/api/events?${params}`);   // params: task_id / types / since
+// 后端每一帧都带 `event: <type>`，而 EventSource 只把**没有** `event:` 字段的帧
+// 交给 `onmessage` —— 所以必须逐类型注册，onmessage 这条路一次都不会触发。
+for (const type of types?.length ? types : EVENT_TYPES) {
+  es.addEventListener(type, (raw) => append(JSON.parse(raw.data)));
 }
+es.onerror = () => { /* 由 hook 关掉旧连接、退避后带 since 重开 */ };
 ```
 
-**断线重连**：`EventSource` 自动重连，重连时浏览器会带 `Last-Event-ID` 头（如果服务端发了 `id:` 字段）。V2 服务端**不发** `id:` 字段（事件 ID 是 SQLite 自增，前端用不上），重连后从 `since=<last_timestamp>` 拉历史回放。
+**断线重连**：V2 服务端**不发** `id:` 字段（事件 ID 是 SQLite 自增，前端用不上），
+所以浏览器自带的 `Last-Event-ID` 重连拿不到回放位置。重连由前端自己做，
+带 `since=<最后一条已收到事件的 timestamp>` 重开一条连接（这才是 §7 原来那段
+"重连后从 since 拉历史回放"的实际形状 —— 样例里那句依赖 `EventSource` 自动重连，
+自动重连既不会补 `since`，也不会在 URL 上带任何东西）。
 
----
+**必须可见的失败**：`useTaskEvents` 返回 `{events, status, error}`。
+`status` 是 `"connecting" | "open" | "reconnecting" | "offline"`；
+页面要把 `error` 原文渲染出来。"订阅挂了但界面继续显示旧数据"
+就是 V1 §7.20 那句"红了但不知道为什么红"的前端版。
+
+> **2026-09-23 改正**：这一节原来的样例是
+> `es.onmessage = (e) => setEvents((prev) => [...prev, JSON.parse(e.data)])`。
+> 那个写法对着 V2 的后端**一帧都收不到**（理由见上）。样例被抄进实现的概率
+> 远高于被读懂的概率，所以它现在必须是能跑的形状。
+> 看护：`src/events/useTaskEvents.spec.ts` 里
+> `具名事件必须逐个注册：onmessage 这条路在后端形状下一次都不会触发`。
+
 
 ## 8. V1 契约对应
 

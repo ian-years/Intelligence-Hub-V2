@@ -1,14 +1,73 @@
 import type { JSX } from "react";
+import { Route, Routes } from "react-router-dom";
 
-import { TokenSheet } from "./dev/TokenSheet";
+import { Layout } from "@/components/shared/Layout";
+import { PageShell } from "@/components/shared/PageShell";
+import { HardShadowCard } from "@/components/memphis/HardShadowCard";
+import { TokenSheet } from "@/dev/TokenSheet";
+import type { PatternName } from "@/lib/patterns";
 
-/**
- * Task 10 的临时根组件：整页就是令牌对照。
+/** Task 12 / 13 未开工的路由渲染这一块，而不是空白页。
  *
- * Task 11 会把它换成 `HashRouter + Layout + 7 个业务路由`，`TokenSheet` 挪到
- * `/tokens` 那条开发路由下（不是第 8 个业务页）。留在这里的理由只有一条：
- * 没有这一页，"三件事"（直角 / 3px 黑边 / 无模糊硬阴影）就只能靠读 CSS 判断。
- */
+ * 空白页会被读成"这个平台没有数据"；写清楚"这一页要等哪个任务"才是真话。
+ * Task 12-13 落地时**逐个删掉**这里的条目：留着就是死代码。 */
+function PageNotBuilt({
+  pattern,
+  label,
+  task,
+}: {
+  pattern: PatternName;
+  label: string;
+  task: string;
+}): JSX.Element {
+  return (
+    <PageShell pattern={pattern}>
+      <HardShadowCard>
+        <h1>{label}</h1>
+        <p className="text-body-md">
+          这一页还没开工（<code>{task}</code>）。API 层、SSE 与 stores 已经可用： 见{" "}
+          <code>src/api/hooks/</code> 与 <code>src/events/useTaskEvents.ts</code>。
+        </p>
+      </HardShadowCard>
+    </PageShell>
+  );
+}
+
 export default function App(): JSX.Element {
-  return <TokenSheet />;
+  return (
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<PageNotBuilt pattern="dots" label="总览" task="Task 12" />} />
+        <Route
+          path="feed"
+          element={<PageNotBuilt pattern="stripes" label="作品流" task="Task 12" />}
+        />
+        <Route
+          path="video/:id"
+          element={<PageNotBuilt pattern="waves" label="作品详情" task="Task 13" />}
+        />
+        <Route
+          path="creators"
+          element={<PageNotBuilt pattern="confetti" label="博主" task="Task 13" />}
+        />
+        <Route
+          path="tasks"
+          element={<PageNotBuilt pattern="confetti" label="任务" task="Task 13" />}
+        />
+        <Route
+          path="settings"
+          element={<PageNotBuilt pattern="checker" label="设置" task="Task 12" />}
+        />
+        <Route
+          path="preflight"
+          element={<PageNotBuilt pattern="stripes" label="预检" task="Task 12" />}
+        />
+        <Route path="tokens" element={<TokenSheet />} />
+        <Route
+          path="*"
+          element={<PageNotBuilt pattern="dots" label="没有这条路由" task="路由表" />}
+        />
+      </Route>
+    </Routes>
+  );
 }

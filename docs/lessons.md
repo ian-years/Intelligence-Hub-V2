@@ -1485,6 +1485,39 @@ pytest 的模块收集器看的是**模块命名空间里以 `Test` 开头的类
 
 ---
 
+#### 经验 35 · 契约文档里的代码样例也得能跑：`EventSource.onmessage` 一帧都收不到（Task 11）
+
+**现象**：`docs/specs/event-schema.md §7` 给的前端样例是
+`es.onmessage = (e) => setEvents((prev) => [...prev, JSON.parse(e.data)])`。
+照它写实现，界面上的事件流会**永远是空的**，而且不报错：连接是开的、后端在发、
+`onmessage` 一次都不触发。
+
+**根因**：`EventSource` 只把**没有** `event:` 字段的帧交给 `onmessage`。
+而 V2 后端每一帧都带 `event: <type>`（`api/v1/events.py` 里
+`return {"event": event.type.value, "data": ...}`）。具名事件必须逐个
+`addEventListener(type, …)`。同一段样例里还有第二处不成立：
+"自动重连后从 `since=` 拉回放" —— `EventSource` 的自动重连只会复用**同一个 URL**，
+不会补任何查询参数，所以 `since` 必须由前端自己重开连接时带上。
+
+**为什么会写成这样**：样例是**在实现之前**写进契约文档的，而且从来没被执行过一次。
+文档里的代码比文档里的散文更容易骗人 —— 它看起来已经是实现，读者（和抄它的人）
+不会再去验证。（同一族的另一例：`§4` 那份设想中的抽象基类，见经验 34 附近那几条。）
+
+**解法**：`src/events/useTaskEvents.ts` 按 `types` 全集逐个注册监听器，自己管重连
+（退避 + 带 `since=<最后一条已收到事件的时间戳>`），并把 `status` / `error` 交回界面；
+`§7` 那段样例改写成能跑的形状，并注明"为什么原来那行收不到东西"。
+
+**判据**：**契约文档里的代码样例，要么被执行过，要么就标成"形状示意"**。
+写样例的人负责给它配一条用例 —— 这次配的是"具名帧进得来 + 未命名帧进不来"两条断言，
+后者专门钉住"为什么不能只挂 `onmessage`"，否则下一个人还会觉得 `onmessage` 更简单。
+
+**看护**：`src/events/useTaskEvents.spec.ts`（9 条：逐类型注册、首连不带 `since` /
+重连带、断线时 `status=reconnecting` 且 `error` 有人看见、没有 `EventSource` 时
+`offline` 而不是静默、`types` 决定注册集合与 query、缓冲区有界 500、卸载后不再重连，
+外加 `EVENT_TYPES` 与 Python `EventType` 一字不差 —— 漏一个名字的症状就是那种事件静默收不到）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

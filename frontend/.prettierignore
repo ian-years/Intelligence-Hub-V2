@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+
+# 生成物不重排：`src/api/schema.d.ts` 由 `npm run gen:api` 从 OpenAPI 快照生成，
+# 而 `src/api/schema.spec.ts` 是按生成器**自己写出的缩进**去比对快照的 ——
+# prettier 把 4 空格改成 2 空格，那条用例就会报"少了一堆路径"（假红）。
+src/api/schema.d.ts
