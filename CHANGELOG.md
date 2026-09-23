@@ -122,6 +122,14 @@
   因为它用 `encoding="locale"` 读 = 中文 Windows 的 GBK）；中文理由挪进 `alembic/env.py` 与 `docs/lessons.md`
 - `pyproject.toml` 的 ruff 豁免补 `TC002`：它与已豁免的 `TC001/TC003` 是同一条理由的另一半，
   漏掉会得到"同一个仓库一半文件把 import 挪进 `TYPE_CHECKING`、一半不挪"的分裂写法
+- **14 个"渲染得出来、后端没人读"的平台配置字段标上 `ui:hidden`**（ADR-0012；
+  不是 ADR-0011 那次"直接删"，因为这些模型是 `extra="forbid"` 而 `config/platforms.yaml`
+  里这 14 个键全在 —— 删字段等于让那份文件走 `extra_forbidden`，起不来）：
+  每个都补了 `Field(description=...)` 写明实际生效规则与真源（`FieldInfo` 才是进 schema 的那一份，
+  紧跟赋值的 docstring 不进）。同时补上 `config-schema.md §4` 一直承诺却从没被标过的
+  `ui:advanced`，并把 §3.2 代码块里 ADR-0011 说"已删除"却仍留着的 `cookie_variant_order` 对齐。
+  看护是 `tests/unit/platforms/test_config_fields_have_readers.py`（双向棘轮，判据走 AST
+  —— 散文不能当读取路径，实测 `bilibili.list_strategy` 就是被一句 docstring 放过去的）
 
 ### Fixed
 - `ManifestBuilder.fail()` 静默丢弃异常原文（违反 V1 §1.3「不许吞错」）

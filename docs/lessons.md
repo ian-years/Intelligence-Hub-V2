@@ -1403,6 +1403,60 @@ CI 在 Linux 上生成的是 LF —— 而快照比对的全部意义就是两�
 
 ---
 
+#### 经验 32 · "有没有人读这个字段"的判据，会被一句注释满足
+
+**现象**：写 ADR-0012 那条守卫（每个配置字段要么有人读、要么标 `ui:hidden`）时，
+判据是"`.字段名` 出现在 `src/` 的文本里"。跑出来的名单**少了** `bilibili.list_strategy` ——
+而 `BilibiliAdapter._enumerate` 其实完全不按它选路（看的是 `external_browser_manifest_path`
+给没给）。它在 `platforms/bilibili/listing.py` 的**模块 docstring** 里被"读"到了一次：
+「走哪条由 `capabilities.list_strategy` 与配置决定」。
+
+同一轮里还有一个反向的自伤：`_SRC` 的相对层级写成 `parents[2]`（指进了 `tests/`），
+语料变成空串，于是 14 个字段变成"全部字段都是死的"。
+
+**根因**：这两条是同一件事的两面 —— **守卫的判据是文本，而代码里最像"读取路径"的文本是注释**。
+一个只会狂报红的守卫和红一次就被 `# noqa` 掉的守卫最后效果一样；
+一个能被散文满足的守卫则稳定地把最要命的那类谎言（说明与行为不符）放过去。
+
+**解法**：判据走 AST —— 每个文件 `ast.parse`，把裸字符串语句换成 `None`，再 `ast.unparse`
+（注释与 docstring 同时消失），然后才在剩下的纯代码上匹配属性访问。
+语料另有一处要按平台切：`retry_max` 在 B站 被读一次不等于抖音那个也有人读。
+
+**判据**：写"某样东西有没有被使用/被实现"这类守卫时，先问**散文能不能满足它**。
+能，就先补一个"把散文剥掉"的步骤，再谈名单。
+并且：**新写一条守卫，第一件事是让它对一个已知的真死字段变红**（这条是靠
+`bilibili.list_strategy` 现场发现的，不是靠想）。
+
+**看护**：`tests/unit/platforms/test_config_fields_have_readers.py` 四条（先红后绿）。
+
+---
+
+#### 经验 33 · 子类重新声明字段，会静默丢掉父类的 schema 标记和 description
+
+**现象**：打算"在 `PlatformConfig` 基类标一次 `ui:hidden`，四个平台都生效"。
+实测（`docs/adr/0012` 的「背景」第 3 条）：子类写 `use_cdp_bridge: bool = False`
+之后 `C.model_fields['use_cdp_bridge'].json_schema_extra is None`、`.description is None` ——
+两个都丢，而且丢得很安静：JSON Schema 里就是没有那个键，不看 schema 没人知道。
+
+**根因**：重新标注等于换一个全新的 `FieldInfo`，Pydantic 不从父类合并 `metadata`
+/ `json_schema_extra` / `description`。而本仓库每个平台的 `config.py`
+**就是要重新声明**这些字段（把 `MediaStrategy` 收窄成单值 `Literal`、改默认值），
+所以"在基类标"这个写法在这份代码里恰好必然失效。
+
+**解法**：标记一律打在**重新声明的那一处**（`DouyinConfig` / `BilibiliConfig` 自己），
+并把"`ui:advanced` 在每个平台的 `advanced` 上真的存在"写成一条独立断言 ——
+它就是专门盯这个失效模式的，因为 `advanced` 每个平台都重新声明。
+
+**判据**：任何"契约键靠 Pydantic 元数据带出去"的东西（`description`、`json_schema_extra`、
+后续可能的 `examples`），都要**从最终子类的 schema 里查**，不是从定义处查。
+定义处看到的那句，可能在真实 schema 里根本不存在。同理：**紧跟赋值的 docstring 不进 schema**，
+只有 `Field(description=...)` 会 —— 所以对前端可见的解释只有一种写法。
+
+**看护**：同上文件的 `test_advanced_group_carries_the_collapse_marker` 与
+`test_hidden_fields_explain_themselves`（后者读的正是 schema 可见的 `field.description`）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

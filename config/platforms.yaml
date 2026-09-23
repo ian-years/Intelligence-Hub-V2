@@ -11,6 +11,13 @@
 # 活真相是各平台 `config.py` 里的 `Field(description=...)`，
 # 前端从 `/api/platforms/{name}/schema` 拿 JSON Schema 自动渲染。
 # 想改说明请改那个，改这里的注释只活得过一次写盘。
+#
+# **下面有一些键当前没有任何实现路径**（`retry_max` / `prefer_subtitles` /
+# `use_cdp_bridge` / `media_strategy` / `list_strategy` 等 14 个）：它们照样能写、能读回来，
+# 但什么都不改变。它们在 JSON Schema 里标了 `ui:hidden`，所以 Settings 页不会把它们渲染成
+# 一个点了没反应的开关。名单、理由与**解封顺序**在 `docs/adr/0012`；
+# 看护是 `tests/unit/platforms/test_config_fields_have_readers.py`（新增长出来就红）。
+#
 # 全局行为（超时、健康检查、Feed 是否显示已禁用平台的历史）在 `app.yaml`。
 #
 # 改这个文件后**重启服务**才生效；运行时改配置走 `PUT /api/platforms/{name}/config`，

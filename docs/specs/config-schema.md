@@ -184,6 +184,12 @@ class PlatformConfig(BaseModel):
 >
 > 另一处：`Capabilities` 是 `@dataclass(frozen=True, slots=True)`，
 > **不进配置**（`docs/specs/platform-adapter.md`），改它要发版 —— 见 `docs/lessons.md` 经验 4。
+>
+> **第三处（2026-09-23，`docs/adr/0012`）**：上面 `use_cdp_bridge` 那句
+> "`capabilities.needs_browser=True` 时必须 `True`" 今天**没有任何代码强制**——
+> 装不装桥完全由 `needs_browser` 决定（`core/task_registry.py` 的 `DepsFactory`），
+> 这个字段一行都没被读。所以它在两个平台子类里都标了 `ui:hidden`；
+> **在基类标是无效的**，子类重新声明会换掉 `FieldInfo`（见 §4 第 2 条）。
 
 ### 3.1 `DouyinConfig`
 
@@ -201,9 +207,9 @@ class PlatformConfig(BaseModel):
 
 ```python
 class DouyinConfig(PlatformConfig):
-    media_strategy: Literal["yt_dlp_with_fallback"] = "yt_dlp_with_fallback"
-    list_strategy: Literal["browser_scroll"] = "browser_scroll"
-    use_cdp_bridge: bool = True
+    media_strategy: Literal["yt_dlp_with_fallback"] = "yt_dlp_with_fallback"   # ui:hidden
+    list_strategy: Literal["browser_scroll"] = "browser_scroll"                # ui:hidden
+    use_cdp_bridge: bool = True                                               # ui:hidden
 
     ytdlp_cookies_from_browser: str | None = None
     """浏览器档的目标浏览器。默认 None = **没有浏览器档**（V1 §7.3：
@@ -214,15 +220,22 @@ class DouyinConfig(PlatformConfig):
     fallback_to_page_play_url: bool = True
     """yt-dlp 失败时是否兜底到页面播放直链（V1 §7.2，常态）。"""
 
-    advanced: DouyinAdvanced = DouyinAdvanced()
+    advanced: DouyinAdvanced = Field(..., json_schema_extra={"ui:advanced": True})
 
 
 class DouyinAdvanced(BaseModel):
-    retry_max: int = Field(default=3, ge=0)
-    retry_backoff_seconds: float = Field(default=2.0, ge=0.0)
-    request_timeout_seconds: int = Field(default=30, ge=1)
-    max_video_duration_seconds: int | None = None
+    retry_max: int = Field(default=3, ge=0)                          # ui:hidden，V2.0 未实现
+    retry_backoff_seconds: float = Field(default=2.0, ge=0.0)        # ui:hidden，同上
+    request_timeout_seconds: int = Field(default=30, ge=1)           # ui:hidden，抖音侧没读
+    max_video_duration_seconds: int | None = None                    # ui:hidden，collect 没过滤器
 ```
+
+> **修订（2026-09-23，`docs/adr/0012`）**：上面 7 个 `ui:hidden` 是量出来的，不是装饰 ——
+> 它们在代码里一行都没被读（抖音的重试/超时实际走 `DouyinAdapter` 里写死的
+> `DIRECT_BUDGET_SECONDS` / `YTDLP_BUDGET_SECONDS`）。为什么不删字段：这些模型是
+> `extra="forbid"`，而 `config/platforms.yaml`（这 7 个键都在里面）每次启动都要过校验 ——
+> 删字段等于让那份文件走 `extra_forbidden`，症状从"表单上一个空开关"变成"升级后服务起不来"。
+> 解封顺序见 ADR-0012。
 
 ### 3.2 `BilibiliConfig`
 
@@ -236,35 +249,41 @@ class DouyinAdvanced(BaseModel):
 ```python
 class BilibiliConfig(PlatformConfig):
     media_strategy: Literal["yt_dlp"] = "yt_dlp"
-    list_strategy: Literal["api"] = "api"
-    use_cdp_bridge: bool = False
-
-    cookie_variant_order: tuple[Literal["exported_file", "browser", "anonymous"], ...] = (
-        "exported_file",
-        "browser",
-        "anonymous",
-    )
-    """cookie 三档阶梯（V1 §7.15）。"""
+    list_strategy: Literal["yt_dlp_flat", "external_manifest"] = "yt_dlp_flat"  # ui:hidden，见下
+    use_cdp_bridge: bool = False                                               # ui:hidden
 
     ytdlp_cookies_from_browser: str | None = "chrome"
     external_browser_manifest_path: Path | None = None
-    prefer_subtitles: bool = True
+    prefer_subtitles: bool = True                                              # ui:hidden：ASR 在 V2.1
 
-    advanced: BilibiliAdvanced = BilibiliAdvanced()
+    advanced: BilibiliAdvanced = Field(..., json_schema_extra={"ui:advanced": True})
 
 
 class BilibiliAdvanced(BaseModel):
-    require_login_for_high_quality: bool = True
+    require_login_for_high_quality: bool = True    # ui:hidden：画质由 cookie 阶梯走到哪一档决定
     dash_split_handling: Literal["auto", "merge", "keep_split"] = "auto"
-    retry_max: int = 3
-    retry_backoff_seconds: float = 2.0
-    request_timeout_seconds: int = 30
+    retry_max: int = 3                             # ui:hidden，V2.0 没有重试循环
+    retry_backoff_seconds: float = 2.0             # ui:hidden，同上
+    request_timeout_seconds: int = 30              # 有人读：适配器每一段预算都用它
     search_fallback_node_playwright: bool = False
 ```
+
+> `media_strategy` 同样是 `ui:hidden`（单一取值的 Literal 是文档不是配置，真源
+> `capabilities.media_strategy`）。`list_strategy` 那一条比"没人读"更糟：
+> `BilibiliAdapter._enumerate` 选路看的是「`external_browser_manifest_path` 给了没、
+> 给了但没命中就回落」，**不看这个字段** —— 界面上写 `yt_dlp_flat`、实际照样用外部清单。
+> 它是 ADR-0012 解封清单的第 1 位。
+>
+> `cookie_variant_order` 已经不在这个模型里了（ADR-0011 的 Task 7 追记：它与
+> `capabilities.cookie_variants` 是同一份顺序写两遍）。但**这个代码块当时没跟着改**，
+> 于是"注记说删了、示例还在"成了第二处真相 —— 2026-09-23 一并对齐。
 
 ### 3.3 `XiaohongshuConfig` / `YoutubeConfig`
 
 类似，详见 `src/intelligence_hub_v2/platforms/<name>/config.py`。
+**新平台接进来会自动进 ADR-0012 那张网**（守卫遍历 `PLATFORM_CONFIG_SCHEMAS` 的全部成员）：
+每个字段要么有人读、要么按 §4 的三条约定标 `ui:hidden` + 写 description。
+V1 §7.24「跟踪开关没人读」那类坑最容易长在正是新平台的第一个版本。
 
 ---
 
@@ -280,7 +299,27 @@ async def get_platform_schema(name: str) -> dict:
     return config_cls.model_json_schema()
 ```
 
-前端用 `react-jsonschema-form` 或自渲染表单。`ui:advanced` 标记（通过 `Field(json_schema_extra={"ui:advanced": True})`）让前端把高级字段折叠。
+前端用 `react-jsonschema-form` 或自渲染表单。两个标记都由字段自己的
+`Field(json_schema_extra=...)` 带出来：
+
+| 标记 | 前端必须怎么做 | 谁在守 |
+|---|---|---|
+| `ui:advanced: true` | 把这一组默认折叠（不是不渲染） | `test_advanced_group_carries_the_collapse_marker` |
+| `ui:hidden: true` | **不渲染这个字段**（值仍在 yaml 里，加载与回写照旧） | `test_every_visible_field_has_a_reader` |
+
+三条实现期约定（都是量出来的，不是设想）：
+
+1. **组内叶子全被 `ui:hidden` 时不渲染这个组** —— 否则 `douyin.advanced`（四个字段今天全隐藏）
+   会渲染成一个点开以后什么都没有的折叠条。
+2. **标记必须打在子类重新声明的那一处。** 子类写 `use_cdp_bridge: bool = False` 会换一个全新的
+   `FieldInfo`，父类上的 `json_schema_extra` 与 `description` **双双丢掉**（实测），
+   而且丢得很安静：schema 里就是没有那个键。
+3. **`ui:hidden` 的字段必须带 `Field(description=...)` 说明"为什么没有效果 + 真源在哪 + 什么时候有"。**
+   紧跟赋值的 docstring **不进 JSON Schema**（Pydantic 只吃 `Field(description=...)`），
+   所以对契约不可见；隐藏而不解释等于把撒谎从表单挪进注释缺失。
+
+判据与"为什么不干脆删字段"见 `docs/adr/0012`；现存 14 个隐藏字段的名单与**解封顺序**
+就在 ADR-0012 的表里（`bilibili.list_strategy` 排第一：它是唯一一个读出来行为与界面不符的）。
 
 ---
 
