@@ -1457,6 +1457,34 @@ CI 在 Linux 上生成的是 LF —— 而快照比对的全部意义就是两�
 
 ---
 
+#### 经验 34 · 把 `Test*` 类 import 进另一个测试文件，等于把整套用例再跑一遍（Task 14 收口）
+
+**现象**：给 `contract-tests.md §4` 补看护时算测试数目对不上，于是逐目录 `--collect-only` 数。
+`tests/contracts/test_contract_guard_index.py` 收集出 **28 个 item**，而这个文件自己只写了
+6 条测试 —— 另外 22 个是 `TestDouyinContract` / `TestBilibiliContract` 的用例被**第二次**收集
+（11 条 ×2）。改成只 import 模块之后：本文件 7 个 item（6 + 新增那条），
+`tests/contracts` 目录的收集数从 **310 掉到 289**，一条用例都不少，只是不再跑两遍。
+
+**根因**：那两行 `from tests.contracts.test_platform_adapter import TestDouyinContract, ...`。
+pytest 的模块收集器看的是**模块命名空间里以 `Test` 开头的类**，导入进来的与定义在本文件的
+一视同仁。所以"为了断言 `issubclass(...)` 而把类 import 过来"这个看起来很正常的写法，
+效果是整套契约每次全跑被跑两遍，而且第二遍挂在索引看护这个文件名下 ——
+失败时 pytest 报的是 `test_contract_guard_index.py::...::test_healthcheck_...`，
+读的人会去查那个文件，而它跟这条用例毫无关系。
+
+**解法**：只 `import <module> as _abc`，用 `_abc.TestDouyinContract` 访问；
+类名不进本模块命名空间。`PlatformAdapterContractTests` 不以 `Test` 开头，
+按名字 import 无害，留着是为了读 `_abc_members()` 时不绕。
+
+**判据**：**测试文件之间不要按名字 import `Test*` 类**，要复用就 import 模块。
+凡"数目对不上"都要当场算平 —— 这次如果按"多了几个就认了"处理，
+这 21 个重复收集会一直留在 CI 时间里，而且下次谁看失败信息都会找错文件。
+
+**看护**：`test_this_module_binds_no_test_classes`（AST 查本文件模块级有没有绑 `Test*` 名字，
+并**先断言 `_abc` 里确实有两个可被重复收集的类** —— 否则这条绿灯可能只是没东西可查）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

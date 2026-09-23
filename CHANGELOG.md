@@ -72,6 +72,16 @@
 - `storage` fixture 参数化跑两档后端（`memory` = `create_all` / `file` = 真 Alembic），
   外加三条漂移看护：`check_schema_matches_migrations()`、`alembic upgrade/downgrade/upgrade` 往返、
   以及一条**验证漂移看护本身能发现漂移**的用例
+- **契约基类补到 `contract-tests.md §4` 承诺的形状**：通用用例 7 条 → 11 条
+  （能力声明快照、能力与配置三个镜像字段一致、列表流式产出的形状与 `limit` 是上限、
+  媒体产物说得出走了哪条路 + 兜底必留原文），钩子 2 个 → 6 个且全部 `@abstractmethod`；
+  各平台自己写的 4 条重复用例删掉、值搬进 `expected_capabilities()`。
+  §4 从"一段设想中的代码样例"改成两张受测的名单表，
+  新看护 `test_contract_tests_section_4_is_the_abc_itself` **双向**核相等
+- **修掉一整套契约用例每次全跑被跑两遍**：`test_contract_guard_index.py` 按名字 import 了
+  `TestDouyinContract` / `TestBilibiliContract`，而 pytest 会把模块命名空间里（**含 import 进来的**）
+  `Test*` 类当成本模块收集 —— `tests/contracts` 收集数 310 → 289，一条不少。
+  纪律由 `test_this_module_binds_no_test_classes` 钉住（`docs/lessons.md` 经验 34）
 
 ### Changed
 - **`docs/adr/0011`：cookie 阶梯的顺序只有一处真源。**

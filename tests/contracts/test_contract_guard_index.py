@@ -24,11 +24,14 @@ import ast
 import re
 from pathlib import Path
 
-from tests.contracts.test_platform_adapter import (
-    PlatformAdapterContractTests,
-    TestBilibiliContract,
-    TestDouyinContract,
-)
+from tests.contracts import test_platform_adapter as _abc
+from tests.contracts.test_platform_adapter import PlatformAdapterContractTests
+
+# **按模块导入，一个 `Test*` 名字都不绑**：pytest 会把"出现在本模块命名空间里的
+# `Test*` 类"（**导入进来的也算**）当成本模块的用例收集一遍，于是整套契约用例每次
+# 全跑都被跑两次 —— 一次来自 `test_platform_adapter.py`，一次挂在本文件名下，
+# 失败时报的文件还是错的（我第一次看到 28 items 就是这个原因）。
+# 这条纪律由 `test_this_module_binds_no_test_classes` 钉住。
 
 _TESTS_ROOT = Path(__file__).resolve().parent.parent
 
@@ -318,8 +321,8 @@ def test_contract_tests_doc_rows_point_at_real_tests() -> None:
 
 
 def test_abstract_base_is_subclassed_by_both_shipped_platforms() -> None:
-    assert issubclass(TestDouyinContract, PlatformAdapterContractTests)
-    assert issubclass(TestBilibiliContract, PlatformAdapterContractTests)
+    assert issubclass(_abc.TestDouyinContract, PlatformAdapterContractTests)
+    assert issubclass(_abc.TestBilibiliContract, PlatformAdapterContractTests)
     contract_tests = {n for n in dir(PlatformAdapterContractTests) if n.startswith("test_")}
     # 抽象基类至少带这几条通用契约，V3 继承即得。
     assert {
@@ -328,3 +331,123 @@ def test_abstract_base_is_subclassed_by_both_shipped_platforms() -> None:
         "test_healthcheck_returns_structured_report",
         "test_parse_creator_url_yields_non_url_platform_id",
     } <= contract_tests
+
+
+_ABC_SOURCE = (_TESTS_ROOT / "contracts" / "test_platform_adapter.py").read_text(encoding="utf-8")
+_DOC_CASE_ROWS = re.compile(r"^\|\s*`(test_\w+)`", re.MULTILINE)
+_DOC_HOOK_ROWS = re.compile(r"^\|\s*`(\w+)\(", re.MULTILINE)
+
+
+def _section_4_names(doc: str, heading: str, *, end_at: str, pattern: re.Pattern[str]) -> list[str]:
+    """取 §4 某个小节的表格里**第一列**那些反引号名。
+
+    只匹配第一列是有意的：早期版本把两种名字混在一个集合里收，结果说明文字里
+    提一句 `video_fixture()` 就被当成"文档声明的一条用例"。列位置是唯一可靠的
+    "这一行是在**列举**它"的信号。
+    """
+    if heading not in doc:
+        msg = f"contract-tests.md 里没有小节「{heading}」"
+        raise AssertionError(msg)
+    body = doc.split(heading, 1)[1].split(end_at, 1)[0]
+    return sorted({m.group(1) for line in body.splitlines() if (m := pattern.match(line))})
+
+
+def test_contract_tests_section_4_is_the_abc_itself() -> None:
+    """`contract-tests.md §4` 列的用例名与钩子名，必须与 ABC 里的**集合相等**。
+
+    §3 那张表只查"文档点名的用例还在不在"（单向），所以它挡不住"文档漏写了一条真实用例"，
+    而 §4 更糟：它是一整段 `python` 代码样例，写的是**设想中的**基类 —— 里面三条用例
+    （`test_capabilities_match_expected` / `test_list_creator_videos_yields_...` /
+    `test_download_media_artifact_...`）与那个 `expected_capabilities` 钩子
+    从来没有被实现过，而基类实际有的七条里四条文档没提。
+
+    双向相等是唯一能同时挡住这两个方向的形状：漏一条 → 红；多一条 → 也红。
+    代码体本身不比对（那会退化成"改实现必须改文档"），**名字才是契约**。
+    """
+    doc = (_TESTS_ROOT.parent / "docs" / "specs" / "contract-tests.md").read_text(encoding="utf-8")
+    cases = _section_4_names(doc, "### 4.1", end_at="### 4.2", pattern=_DOC_CASE_ROWS)
+    hooks = _section_4_names(doc, "### 4.2", end_at="\n## 5.", pattern=_DOC_HOOK_ROWS)
+
+    actual_cases, actual_hooks = _abc_members()
+
+    assert cases == actual_cases, (
+        "§4.1 的用例清单与 ABC 不等。文档缺："
+        f"{sorted(set(actual_cases) - set(cases))}；文档多（用例已被删/改名）："
+        f"{sorted(set(cases) - set(actual_cases))}"
+    )
+    assert hooks == actual_hooks, (
+        "§4.2 的钩子清单与 ABC 的 `@abstractmethod` 不等。文档缺："
+        f"{sorted(set(actual_hooks) - set(hooks))}"
+        f"；文档多：{sorted(set(hooks) - set(actual_hooks))}"
+    )
+
+
+def _abc_members() -> tuple[list[str], list[str]]:
+    """从 AST 取 ABC 的 (用例名, 抽象钩子名)。
+
+    走 AST 而不是 `dir()` + `getattr`：抽象与否要看**装饰器**，而 `dir()` 只能看到
+    绑定后的函数对象（`abstractmethod` 挂在 `__isabstractmethod__` 上，判起来
+    要么依赖 CPython 的类名字符串、要么对 `functools.wraps` 敏感）。装饰器是源码里
+    唯一的事实来源，也是改代码的人真正动到的那个东西。
+    """
+    tree = ast.parse(_ABC_SOURCE)
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PlatformAdapterContractTests"
+    )
+    cases: list[str] = []
+    hooks: list[str] = []
+    for node in cls.body:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        is_abstract = any(
+            (isinstance(dec, ast.Attribute) and dec.attr == "abstractmethod")
+            or (isinstance(dec, ast.Name) and dec.id == "abstractmethod")
+            for dec in node.decorator_list
+        )
+        if node.name.startswith("test_"):
+            cases.append(node.name)
+        elif is_abstract:
+            hooks.append(node.name)
+    return sorted(cases), sorted(hooks)
+
+
+def test_this_module_binds_no_test_classes() -> None:
+    """本文件不许在模块级绑任何 `Test*` 名字 —— 那会让整套契约用例被收集两遍。
+
+    前置条件先钉住（否则"没有违规"可能只是"没东西可查"）：`_abc` 那个模块里确实
+    有两个会被重复收集的 `Test*` 类。
+    """
+    collected = [
+        name
+        for name in dir(_abc)
+        if name.startswith("Test") and isinstance(getattr(_abc, name), type)
+    ]
+    assert collected == ["TestBilibiliContract", "TestDouyinContract"], collected
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    bound: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom | ast.Import):
+            for alias in node.names:
+                bound.extend(_testy_names(alias.asname or alias.name))
+        elif isinstance(node, ast.ClassDef):
+            bound.extend(_testy_names(node.name))
+        elif isinstance(node, ast.Assign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bound.extend(_testy_names(target.id))
+
+    assert not bound, (
+        "这些 `Test*` 名字被绑在本模块的顶层，pytest 会把它们当本模块的用例再收集一遍"
+        f"（同一批契约每次全跑被跑两次，失败时报的文件还是错的）：{bound}。"
+        "改成 `import <module> as _x` 后用 `_x.TestY`。"
+    )
+
+
+def _testy_names(name: str) -> list[str]:
+    """`a.b.Test` / `Test` 都取最后一段判断（import 的 `as` 别名同理）。"""
+    last = name.rsplit(".", 1)[-1]
+    return [last] if last.startswith("Test") and last != "Tests" else []

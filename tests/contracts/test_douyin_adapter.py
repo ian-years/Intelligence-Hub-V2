@@ -37,7 +37,7 @@ from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.media import SingleFileArtifact
 from intelligence_hub_v2.models.video import VideoMeta
-from intelligence_hub_v2.platforms.base import AdapterDeps, Capabilities, PlatformAdapter
+from intelligence_hub_v2.platforms.base import AdapterDeps, PlatformAdapter
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
 from intelligence_hub_v2.platforms.douyin import adapter as adapter_module
 from intelligence_hub_v2.platforms.douyin import media as media_module
@@ -1220,27 +1220,11 @@ class TestContractShape:
         adapter: PlatformAdapter = make_adapter(tmp_path)
         assert isinstance(adapter, PlatformAdapter)
 
-    def test_capabilities_match_the_shipped_spec_table(self) -> None:
-        """`docs/specs/platform-adapter.md §3` 那张表的一行。改这里等于改契约，要走 ADR。"""
-        assert DouyinAdapter.capabilities == Capabilities(
-            needs_browser=True,
-            needs_cookies=True,
-            cookie_variants=("exported_file", "browser", "none"),
-            supports_subtitles=False,
-            supports_dash_split=False,
-            list_strategy="browser_scroll",
-            media_strategy="yt_dlp_with_fallback",
-        )
-
-    def test_capabilities_and_the_config_defaults_agree_on_strategies(self, tmp_path: Path) -> None:
-        """能力声明与配置默认值是两处真相，**必须**一致 ——
-        不一致时前端按配置渲染、调度器按能力决策，两边各说各话。"""
-        defaults = DouyinConfig(display_name="抖音")
-        caps = DouyinAdapter.capabilities
-        assert caps.list_strategy == defaults.list_strategy
-        assert caps.media_strategy == defaults.media_strategy
-        assert caps.needs_browser == defaults.use_cdp_bridge
-        assert set(caps.cookie_variants) >= {"exported_file", "none"}
+    # 能力声明的**快照**与"必须和配置默认值一致"两条已经上提到契约基类：
+    # `test_platform_adapter.py::test_capabilities_match_expected`（值在
+    # `TestDouyinContract.expected_capabilities()`）与
+    # `...::test_capabilities_agree_with_the_config_mirrors`。
+    # 改那份快照等于改契约（`docs/specs/platform-adapter.md §3` 那张表的一行），要走 ADR。
 
     def test_config_schema_is_the_douyin_model(self) -> None:
         assert DouyinAdapter.config_schema() is DouyinConfig

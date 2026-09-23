@@ -111,111 +111,70 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 
 ## 4. L2 适配器契约测试抽象基类
 
-```python
-# tests/contracts/test_platform_adapter.py
-import abc
-import pytest
-from intelligence_hub_v2.platforms.base import PlatformAdapter, Capabilities
+文件：`tests/contracts/test_platform_adapter.py`。每个平台的测试类继承
+`PlatformAdapterContractTests`，实现 §4.2 那六个钩子，就自动获得 §4.1 那整套通用契约 ——
+**V3 加新平台或重写老平台，基类一字不改**。
 
+> **2026-09-23 重写**：这一节原来是一整段 `python` 代码样例，写的是**设想中的**基类 ——
+> 里面三条用例与 `expected_capabilities` 钩子从未被实现，而基类实际有的七条里四条没被提到。
+> 现在只列**名字**，并且由 `test_contract_tests_section_4_is_the_abc_itself`
+> 双向核相等（文档多用例 → 红，文档漏用例 → 也红）。代码体不在核对范围内：
+> **名字是契约，实现不是**，否则改一行实现要改两份文档。
 
-class PlatformAdapterContractTests(abc.ABC):
-    """每个平台 Adapter 的测试类继承它，自动获得整套契约用例。
-    V3 加新平台或重写老平台，这套测试一字不改、自动复用。"""
+### 4.1 通用契约用例
 
-    @abc.abstractmethod
-    def adapter(self) -> PlatformAdapter:
-        """子类返回被测 adapter 实例（用 mock deps）。"""
+| 用例 | 钉住什么 | V1 出处 / 契约位置 |
+|---|---|---|
+| `test_platform_name_is_a_valid_token` | 平台名是全小写下划线 token（它同时是 `PLATFORMS`、`PLATFORM_CONFIG_SCHEMAS` 与 `platforms.yaml` 的 key） | §7.10 结构自洽 |
+| `test_is_registered_as_platform_adapter` | 实现真的满足 `PlatformAdapter` Protocol（`runtime_checkable` 只查方法在不在，签名靠 mypy 那一层） | `platforms/base.py` |
+| `test_capabilities_match_expected` | 声明与子类给的**快照**逐字段相等：阶梯顺序、要不要桥、支不支持字幕/分片 | §7.3 / §7.15，`docs/adr/0011` |
+| `test_capabilities_are_frozen_declaration` | 能力是 `frozen` 的类级声明，跑起来不许被改写 | ADR-0004 |
+| `test_capabilities_agree_with_the_config_mirrors` | 配置里 `list_strategy` / `media_strategy` / `use_cdp_bridge` 那三个镜像字段与声明一致 —— 它们没有读取路径（ADR-0012），唯一的作用就是回显，回显错了比不回显更糟 | `docs/adr/0012` |
+| `test_config_schema_is_platform_config_subclass` | `config_schema()` 是 `PlatformConfig` 子类（`/api/platforms/{name}/schema` 能渲染的前提） | `config-schema.md §3` |
+| `test_healthcheck_returns_structured_report` | 报告结构化，且 **`is_healthy` 只认显式 `ok`**（"测不到"不是绿灯） | §7.20 |
+| `test_parse_creator_url_yields_non_url_platform_id` | 交回的 `platform_id` 是平台原生 ID，不是 URL 里的东西 | §7.1 |
+| `test_list_creator_videos_streams_well_formed_meta` | 流式产出的 `VideoMeta` 有身份、平台名对得上、挂在请求的那个 ref 下，且 `limit` **是上限** | `platform-adapter.md §2.3` |
+| `test_download_media_reports_how_it_got_the_file` | 产物说得出走了哪条路、文件真在磁盘上且非空；声明了兜底的平台在非 `yt_dlp` 来源时必须带失败原文 | §7.2 |
+| `test_unsupported_subtitles_returns_none_not_raise` | `supports_subtitles=False` 时 `fetch_subtitles` 回 `None` 而不是抛 | `platforms/base.py` |
 
-    @abc.abstractmethod
-    def expected_capabilities(self) -> Capabilities:
-        """子类返回期望的 capabilities，用于校验声明一致性。"""
+**故意不在这里**：cookie 阶梯的 argv 长什么样、DASH 分片怎么配对、桥 503 的自愈、
+页面 JS 的脏行过滤 —— 那些是平台独有的深水区，留在 `test_<platform>_adapter.py`。
 
-    # ---- 通用契约 ----
+### 4.2 子类必须提供的钩子（全部 `@abc.abstractmethod`）
 
-    def test_name_is_lowercase_underscore(self):
-        assert self.adapter().name == self.adapter().name.lower()
-        assert " " not in self.adapter().name
+| 钩子 | 要回什么 | 为什么必须是它 |
+|---|---|---|
+| `build(tmp_path)` | mock 依赖装出来的适配器实例 | 不许碰网络 / 真浏览器 / 真二进制（`real_network` 是另一个 marker） |
+| `expected_capabilities()` | 该平台**应当**声明的 `Capabilities` 快照 | 见 §4.1 第 3 行：真源仍是类上那一份，这里是看护它的快照（同 OpenAPI 快照的位置） |
+| `resolvable_profile_url()` | 一个能离线解析的博主主页链接 | `parse_creator_url` 那条用例的唯一输入 |
+| `video_fixture()` | 一条自洽的 `VideoMeta` | 字幕那条用例要一个输入 |
+| `listing_adapter(tmp_path, monkeypatch)` | 已经 primed 到"枚举上面那个链接能出至少一条"的适配器 | 出 0 条按失败处理，**不许 `pytest.skip`**（§7.14：绿色的 skip 会让看护静默消失） |
+| `downloadable(tmp_path, monkeypatch)` | 一对能离线走完一次 `download_media()` 的 `(适配器, 视频)` | 声明兜底的平台必须 primed 成"yt-dlp 失败 → 走兜底"，否则那条断言永远不成立 |
 
-    def test_capabilities_match_expected(self):
-        assert self.adapter().capabilities == self.expected_capabilities()
-
-    def test_config_schema_is_platform_config_subclass(self):
-        from intelligence_hub_v2.platforms.base import PlatformConfig
-
-        assert issubclass(self.adapter().config_schema(), PlatformConfig)
-
-    async def test_healthcheck_returns_structured_report(self):
-        report = await self.adapter().healthcheck()
-        assert report.platform == self.adapter().name
-        assert report.status in ("ok", "degraded", "unreachable", "unknown")
-        assert report.checked_at is not None
-
-    async def test_parse_creator_url_normalizes_to_platform_id(self):
-        # 子类提供有效 URL fixture
-        url = self.valid_creator_url()
-        ref = await self.adapter().parse_creator_url(url)
-        assert ref.platform == self.adapter().name
-        assert ref.platform_id  # 非空
-        assert not ref.platform_id.startswith("http")  # V1 §7.1：不是 URL
-
-    async def test_list_creator_videos_yields_video_meta_with_required_fields(self):
-        ref = await self.adapter().parse_creator_url(self.valid_creator_url())
-        videos = []
-        async for v in self.adapter().list_creator_videos(ref, limit=3):
-            videos.append(v)
-            assert v.platform == self.adapter().name
-            assert v.platform_video_id
-            assert v.title
-            assert v.webpage_url
-        assert len(videos) > 0 or pytest.skip("no videos available")
-
-    async def test_download_media_artifact_includes_source_and_error_when_fallback(self):
-        # 用 fixture 视频
-        video = await self.first_video_fixture()
-        artifact = await self.adapter().download_media(video, dest=tmp_path)
-        assert artifact.media_source in ("yt_dlp", "page_play_url", "dash_merged", "dash_split")
-        if artifact.media_source != "yt_dlp":
-            assert artifact.yt_dlp_error is not None  # V1 §7.2：兜底时原文必须保留
-
-    # ---- 子类要提供的 fixture ----
-
-    @abc.abstractmethod
-    def valid_creator_url(self) -> str: ...
-
-    @abc.abstractmethod
-    async def first_video_fixture(self): ...
-```
-
-**每个平台的测试类**：
+### 4.3 每个平台的测试类长这样
 
 ```python
-# tests/contracts/test_douyin_adapter.py
-class TestDouyinAdapter(PlatformAdapterContractTests, IsolatedAsyncioTestCase):
-    def adapter(self):
-        return make_douyin_adapter_with_mocks()
+class TestDouyinContract(PlatformAdapterContractTests):
+    def build(self, tmp_path):
+        return make_adapter(tmp_path)          # 平台文件里的 mock 依赖工厂
 
     def expected_capabilities(self):
         return Capabilities(
             needs_browser=True,
             needs_cookies=True,
-            cookie_variants=("exported_file", "browser", "none"),
+            cookie_variants=("exported_file", "browser", "none"),  # 改这行要走 ADR
             supports_subtitles=False,
             supports_dash_split=False,
             list_strategy="browser_scroll",
             media_strategy="yt_dlp_with_fallback",
         )
 
-    def valid_creator_url(self):
-        return "https://v.douyin.com/abc123/"
-
-    async def first_video_fixture(self):
-        return load_douyin_video_fixture()
-
-    # ---- 抖音特有契约 ----
-    async def test_short_url_follows_302_to_sec_uid(self): ...  # §7.1
-    async def test_yt_dlp_failure_triggers_page_play_url(self): ...  # §7.2
-    async def test_page_play_url_does_not_persist_signed_cdn_url(self): ...  # §7.2 补充
+    # + 上面那四个 fixture 钩子，各 1~4 行（复用平台测试文件里已有的 helper）
 ```
+
+平台**特有**契约仍写在 `tests/contracts/test_<platform>_adapter.py`，例如抖音的
+`test_fallback_marks_the_source_and_keeps_the_yt_dlp_original_text`（§7.2 的原文级断言）
+与 B站 的 `test_pair_reaches_the_caller_as_a_video_audio_pair`（§7.21）。
 
 ---
 

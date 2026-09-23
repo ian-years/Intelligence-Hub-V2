@@ -32,7 +32,7 @@ from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.media import SingleFileArtifact, VideoAudioPairArtifact
 from intelligence_hub_v2.models.video import VideoMeta
-from intelligence_hub_v2.platforms.base import AdapterDeps, Capabilities, PlatformAdapter
+from intelligence_hub_v2.platforms.base import AdapterDeps, PlatformAdapter
 from intelligence_hub_v2.platforms.bilibili import listing, subtitles
 from intelligence_hub_v2.platforms.bilibili import media as bili_media
 from intelligence_hub_v2.platforms.bilibili.adapter import BilibiliAdapter
@@ -1081,24 +1081,18 @@ class TestContractShape:
         adapter: PlatformAdapter = make_adapter(tmp_path)
         assert isinstance(adapter, PlatformAdapter)
 
-    def test_capabilities_match_the_shipped_spec_table(self) -> None:
-        assert BilibiliAdapter.capabilities == Capabilities(
-            needs_browser=False,
-            needs_cookies=True,
-            cookie_variants=("exported_file", "browser", "anonymous"),
-            supports_subtitles=True,
-            supports_dash_split=True,
-            list_strategy="yt_dlp_flat",
-            media_strategy="yt_dlp",
-        )
+    # 能力声明的**快照**与"与配置默认值一致"两条上提到契约基类了
+    # （`test_platform_adapter.py::test_capabilities_match_expected`，值在
+    # `TestBilibiliContract.expected_capabilities()`；以及
+    # `...::test_capabilities_agree_with_the_config_mirrors`）。
 
-    def test_capabilities_and_config_defaults_agree(self) -> None:
-        defaults = BilibiliConfig(display_name="B站")
-        caps = BilibiliAdapter.capabilities
-        assert caps.list_strategy == defaults.list_strategy
-        assert caps.media_strategy == defaults.media_strategy
-        assert caps.needs_browser == defaults.use_cdp_bridge is False
-        assert caps.supports_subtitles == defaults.prefer_subtitles
+    def test_the_subtitle_preference_mirrors_the_declaration(self) -> None:
+        """`prefer_subtitles` 必须与 `supports_subtitles` 一致。
+
+        这条留在平台侧而不是上提：那个字段是 B站 独有的（基类没有），而且它今天
+        `ui:hidden`、没人读（ADR-0012）—— 唯一还成立的作用就是"别和声明打架"。
+        """
+        assert BilibiliAdapter.capabilities.supports_subtitles == BilibiliConfig().prefer_subtitles
 
     def test_config_schema_is_the_bilibili_model(self) -> None:
         assert BilibiliAdapter.config_schema() is BilibiliConfig
