@@ -132,7 +132,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 | 7 | BilibiliAdapter | ✅ | 见 git log | 1090 passed（累计，净增 169），覆盖率 94.32%，四关全绿；B站 模块 90-100% |
 | 8 | TaskRunner + TaskRegistry + 6 个 handler | ✅ | 见 git log | 1172 passed（累计，净增 82），覆盖率 94.67%，四关全绿；`tasks/` 各模块 92-100%，`task_runner` 93% / `task_registry` 94% |
 | 9 | FastAPI app + 全部 API 路由 + SSE | ✅ | 见 git log | 1208 passed（累计，净增 36），覆盖率 93.89%，四关全绿；`api/` 各路由 82-100%，`main.py` 58%（lifespan 胶水 + cli 未全覆盖） |
-| 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ⬜ | — | — |
+| 10 | 前端脚手架 + 孟菲斯 tokens（可与 Task 3-9 并行） | ✅ | 见 git log | 前端 20 passed（覆盖率 90.3% stmts / 86.7% funcs，门槛 70），后端 1301 passed 不回归；`tsc --noEmit` / eslint `--max-warnings=0` / stylelint / prettier / `vite build` 五关全绿；令牌的"三件事"用 computed style 验过（ADR-0013） |
 | 11 | 前端 API 层 + SSE + stores + Router + Layout | ⬜ | — | — |
 | 12 | 页面 Dashboard / Feed / Settings / Preflight | ⬜ | — | — |
 | 13 | 页面 VideoDetail / Creators / Tasks（V2.0 最小版） | ⬜ | — | — |

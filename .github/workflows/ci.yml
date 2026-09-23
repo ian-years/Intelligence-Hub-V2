@@ -14,7 +14,10 @@ on:
 
 env:
   UV_VERSION: '0.5.x'
-  NODE_VERSION: '20'
+  # 与本机实测过的版本对齐：jsdom 30 的传递依赖 whatwg-url@17 要求 node ^22.14||>=24，
+  # 装在 20 上是一串 EBADENGINE 警告 + 一个没人验过的运行期。
+  # package.json 的 engines 写的是同一个下限（经验 27：门禁的工具版本要与真跑的版本一致）。
+  NODE_VERSION: '22.14'
   PYTHON_VERSION: '3.12'
 
 concurrency:

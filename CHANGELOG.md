@@ -59,6 +59,20 @@
   `tests/contracts/_doubles.py` 加 `flat_playlist` 记录；
   `tests/fixtures/bilibili/` 九份，其中四份是 2026-09-22 打真接口抓回来的响应
   （其余在文件里用 `_comment` 标了合成原因）。`tests/unit/test_import_layers.py` 的入口加到六个。
+- **Task 10** · 前端脚手架 + 孟菲斯设计令牌（`frontend/` 原先只有一个 `.gitkeep`）：
+  Vite 8.3 + React 19.3 + TS 5.9（`strict` + `noUncheckedIndexedAccess` +
+  `exactOptionalPropertyTypes`）+ Tailwind v4（`@tailwindcss/vite`，vite 中间代理只绑回环）+
+  Vitest 5（jsdom + Testing Library，覆盖率门槛 70 写在 `vite.config.ts` 与 CI 同一处）+
+  eslint 10 flat config / stylelint 16 / prettier 3；
+  `src/styles/tokens.css`（`@theme` = **唯一真源**，ADR-0013）、`patterns.css`（§6 五种图案 +
+  `.bg-pattern-*` 工具类 + `.page-*` 一页一种）、`globals.css`（§8 组件类：卡/按钮/徽章/输入/开关 +
+  §7 的跳点加载与 `prefers-reduced-motion`）；
+  `tokens.json` 是单向投影（`npm run tokens`），`src/lib/tokens.ts` 从它读动效值并把
+  `cubic-bezier(...)` 解析成四个数（读不懂就抛，不静默没有缓动）；
+  四个孟菲斯基件（`PlatformBadge` / `HardShadowCard` / `PatternBackground` / `MemphisButton`）+
+  令牌对照页 `src/dev/TokenSheet.tsx`；
+  20 条用例里最要紧的是 `src/styles/tokens.spec.ts`：把 `ui-tokens.md` 的 YAML 源解出来
+  逐条核 CSS、核 `tokens.json` 逐字节等于投影、核图案与色板一致（四条破坏做过变异验证）
 
 ### Added（测试与门禁）
 - 存储层测试 **554 条**（`tests/unit/storage/` 486 + `tests/unit/test_safe_filename.py` 68），

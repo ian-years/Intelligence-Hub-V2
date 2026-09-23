@@ -104,21 +104,24 @@ repos:
     hooks:
       - id: eslint
         name: eslint
-        entry: bash -c 'cd frontend && npx eslint --fix --max-warnings=0'
+        entry: bash -c 'cd frontend && npx eslint . --fix --max-warnings=0'
         language: system
         files: ^frontend/.*\.(ts|tsx|js|jsx|mjs|cjs)$
         pass_filenames: false
 
       - id: prettier
         name: prettier
-        entry: bash -c 'cd frontend && npx prettier --write --ignore-path .gitignore'
+        # 目标 `.` 是必需的：`pass_filenames: false` 时不传文件，prettier 会去读 stdin，
+        # 得到一个"No parser and no file path given"。这四个钩子在前端开工前永远
+        # Skipped(no files to check)，所以这条坏法一直没暴露（经验 27 的前端版）。
+        entry: bash -c 'cd frontend && npx prettier --write --ignore-path .gitignore .'
         language: system
         files: ^frontend/.*\.(ts|tsx|js|jsx|json|css|md|html)$
         pass_filenames: false
 
       - id: stylelint
         name: stylelint
-        entry: bash -c 'cd frontend && npx stylelint --fix'
+        entry: bash -c 'cd frontend && npx stylelint --fix "**/*.css"'
         language: system
         files: ^frontend/.*\.css$
         pass_filenames: false

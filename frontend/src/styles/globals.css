@@ -1,0 +1,237 @@
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./patterns.css";
+
+/* §8 组件令牌 + §1/§3 的三条纪律：直角、3px 黑边、无模糊硬阴影。
+ * 这一层是"组件类"，不是工具类：孟菲斯的形状规则在每个组件里都一样，
+ * 写成一处的代价远低于让 7 个页面各自 `border-[3px] shadow-[...]` 拼一遍。
+ */
+
+@layer base {
+  html {
+    font-family: var(--font-body);
+    color: var(--color-ink-black);
+    background-color: var(--color-paper-cream);
+  }
+
+  body {
+    margin: 0;
+    font-size: var(--text-body-md);
+    line-height: var(--text-body-md--line-height);
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+    font-weight: var(--font-weight-bold);
+    margin: 0;
+  }
+
+  h1 {
+    font-size: var(--text-h1);
+    line-height: var(--text-h1--line-height);
+  }
+
+  h2 {
+    font-size: var(--text-h2);
+    line-height: var(--text-h2--line-height);
+  }
+
+  h3 {
+    font-size: var(--text-h3);
+    line-height: var(--text-h3--line-height);
+  }
+
+  code,
+  pre {
+    font-family: var(--font-mono);
+  }
+
+  /* 键盘可达性：焦点必须看得见，而且要是孟菲斯的样子（黑边 + 硬阴影），
+   * 不是浏览器那圈淡蓝 ring —— 后者在这个色板上几乎不存在。 */
+  :focus-visible {
+    outline: var(--border-width-memphis) solid var(--color-ink-black);
+    outline-offset: 2px;
+    box-shadow: var(--shadow-hard-sm);
+  }
+}
+
+@layer utilities {
+  /* §3 的"3px 黑边"是一条规则，不是一个数字：Tailwind v4 没有 `--border-width-*`
+   * 这个主题命名空间（`border-2` / `border-4` 是写死的档位），所以自己补一条工具类，
+   * 值仍然来自 `tokens.css`。不这么写就得在 7 个页面里各抄一遍 `border-[3px]` ——
+   * 那种任意值 stylelint 看不见，改宽度时也没人回来改全。 */
+  .border-memphis {
+    border-style: solid;
+    border-width: var(--border-width-memphis);
+  }
+
+  .border-badge {
+    border-style: solid;
+    border-width: var(--border-width-badge);
+  }
+}
+
+@layer components {
+  .memphis-card {
+    background: var(--color-paper-cream);
+    border: var(--border-width-memphis) solid var(--color-ink-black);
+    border-radius: var(--radius-none);
+    box-shadow: var(--shadow-hard);
+    padding: var(--spacing-scale-6);
+  }
+
+  .memphis-card--hover {
+    transition:
+      transform var(--duration-instant) var(--ease-snap),
+      box-shadow var(--duration-instant) var(--ease-snap);
+  }
+
+  .memphis-card--hover:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-hard-lg);
+  }
+
+  .memphis-btn {
+    border: var(--border-width-memphis) solid var(--color-ink-black);
+    border-radius: var(--radius-none);
+    box-shadow: var(--shadow-hard-sm);
+    padding: var(--spacing-scale-3) var(--spacing-scale-5);
+    font-family: var(--font-heading);
+    font-size: var(--text-h3);
+    line-height: var(--text-h3--line-height);
+    font-weight: var(--font-weight-bold);
+    cursor: pointer;
+    transition:
+      transform var(--duration-fast) var(--ease-bounce),
+      box-shadow var(--duration-fast) var(--ease-bounce);
+  }
+
+  /* §7 button_press：按下压扁 → 弹回。写在 :active 而不是 JS 里，
+   * 因为键盘触发（Enter/Space）也要有同一个反馈。 */
+  .memphis-btn:active {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 var(--color-ink-black);
+  }
+
+  .memphis-btn:disabled {
+    background: var(--color-grey-mist);
+    color: var(--color-ink-black);
+    cursor: not-allowed;
+  }
+
+  .memphis-btn--primary {
+    background: var(--color-electric-blue);
+    color: var(--color-paper-cream);
+  }
+
+  .memphis-btn--secondary {
+    background: var(--color-paper-cream);
+    color: var(--color-ink-black);
+  }
+
+  .memphis-btn--danger {
+    background: var(--color-coral-red);
+    color: var(--color-paper-cream);
+  }
+
+  /* 徽章是**唯一**允许圆角的地方（§3：pill 只给状态徽章）。 */
+  .memphis-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-scale-1);
+    border: var(--border-width-badge) solid var(--color-ink-black);
+    border-radius: var(--radius-pill);
+    padding: var(--spacing-scale-1) var(--spacing-scale-3);
+    font-size: var(--text-body-sm);
+    line-height: var(--text-body-sm--line-height);
+  }
+
+  .memphis-input {
+    background: var(--color-paper-cream);
+    border: var(--border-width-memphis) solid var(--color-ink-black);
+    border-radius: var(--radius-none);
+    padding: var(--spacing-scale-3);
+    font-family: var(--font-body);
+    font-size: var(--text-body-md);
+  }
+
+  .memphis-input:focus {
+    box-shadow: var(--shadow-hard-sm);
+  }
+
+  .memphis-switch {
+    position: relative;
+    width: var(--switch-width);
+    height: var(--switch-height);
+    border: var(--border-width-memphis) solid var(--color-ink-black);
+    border-radius: var(--radius-none);
+    background: var(--color-grey-mist);
+  }
+
+  .memphis-switch[data-on="true"] {
+    background: var(--color-mint-green);
+  }
+
+  .memphis-switch::after {
+    content: "";
+    position: absolute;
+    top: calc((var(--switch-height) - var(--switch-knob)) / 2 - var(--border-width-memphis));
+    left: calc((var(--switch-height) - var(--switch-knob)) / 2 - var(--border-width-memphis));
+    width: var(--switch-knob);
+    height: var(--switch-knob);
+    border: var(--border-width-badge) solid var(--color-ink-black);
+    border-radius: var(--radius-none);
+    background: var(--color-paper-cream);
+    transition: transform var(--duration-fast) var(--ease-bounce);
+  }
+
+  .memphis-switch[data-on="true"]::after {
+    transform: translateX(calc(var(--switch-width) - var(--switch-knob) - 2 * 4px));
+  }
+
+  /* §7 loading：**不许用圆环**（孟菲斯没有圆环）。三个替代：旋转三角、
+   * 跳动圆点、摇摆波浪线。圆点这个最省，先给全局用。 */
+  .memphis-loading {
+    display: inline-flex;
+    gap: var(--spacing-scale-1);
+  }
+
+  .memphis-loading > i {
+    width: var(--spacing-scale-2);
+    height: var(--spacing-scale-2);
+    background: var(--color-ink-black);
+    animation: memphis-hop var(--duration-slow) var(--ease-bounce) infinite;
+  }
+
+  .memphis-loading > i:nth-child(2) {
+    animation-delay: 80ms;
+  }
+
+  .memphis-loading > i:nth-child(3) {
+    animation-delay: 160ms;
+  }
+}
+
+@keyframes memphis-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(calc(-1 * var(--spacing-scale-2)));
+  }
+}
+
+/* §7 纪律第三条 + a11y：系统要求减少动效时全部降到瞬时。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

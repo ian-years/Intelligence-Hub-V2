@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+.vite
+
+# openapi-typescript 的输出是**受测产物**（提交进库），不是构建产物：
+# 漂移由 src/api/schema.spec.ts 那条用例盯，所以这里**不**忽略 src/api/schema.d.ts。

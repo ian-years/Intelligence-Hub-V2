@@ -1,0 +1,126 @@
+/* 孟菲斯设计令牌 —— `docs/specs/ui-tokens.md` 的 CSS 落地。
+ *
+ * **这一份是唯一真源**：`tokens.json`（V3 复用的机器可读版）与 Tailwind 的工具类
+ * 都从这里生成 / 读取（`npm run tokens` + `src/styles/tokens.spec.ts` 双向核漂移）。
+ * 为什么不是计划里写的"YAML 源 → 三份产物"：Tailwind v4 的 `@theme` 本身就是
+ * 机器可读的令牌声明，再引入一份 YAML 源就是第三处真相（ADR-0013）。
+ *
+ * 纪律（§1/§3）：直角、3px 黑边、无模糊硬阴影。`stylelint.config.js` 会拒
+ * `border-radius` 与带模糊的 `box-shadow`，别指望评审时口头约定。
+ */
+
+@theme {
+  /* ---- §2.1 主色 ---- */
+  --color-electric-blue: #0066ff;
+  --color-coral-red: #ff6b6b;
+  --color-lemon-yellow: #ffd93d;
+  --color-mint-green: #6bcb77;
+  --color-hot-pink: #ff3d9a;
+
+  /* ---- §2.2 中性色 ---- */
+  --color-ink-black: #0a0a0a;
+  --color-paper-cream: #faf7f2;
+  --color-grey-mist: #d8d8d8;
+
+  /* ---- §2.3 语义色（指向主色，不重复字面量）---- */
+  --color-success: var(--color-mint-green);
+  --color-warning: var(--color-lemon-yellow);
+  --color-danger: var(--color-coral-red);
+  --color-info: var(--color-electric-blue);
+
+  /* ---- §2.4 平台色 ---- */
+  --color-platform-douyin: var(--color-hot-pink);
+  --color-platform-bilibili: var(--color-electric-blue);
+  --color-platform-xiaohongshu: var(--color-coral-red);
+  --color-platform-youtube: var(--color-lemon-yellow);
+
+  /* ---- §3 形状语言 ---- */
+  --border-width-memphis: 3px;
+  --border-width-badge: 2px;
+  --radius-none: 0px;
+  --radius-pill: 9999px;
+  --shadow-hard-sm: 3px 3px 0 var(--color-ink-black);
+  --shadow-hard: 6px 6px 0 var(--color-ink-black);
+  --shadow-hard-lg: 10px 10px 0 var(--color-ink-black);
+
+  /* ---- §4 排版（字体由 @fontsource 自托管，不走 CDN）---- */
+  --font-display: "Archivo Black", sans-serif;
+  --font-heading: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* §4 的 weight 用 Tailwind v4 默认主题自带的那一档（`--font-weight-black: 900`、
+   * `--font-weight-bold: 700`、`--font-weight-normal: 400`），这里**不再声明一份**：
+   * `@theme` 里 `--font-*` 与 `--font-weight-*` 两个命名空间都会生成 `font-<名字>`
+   * 工具类，再取 `display` / `heading` / `body` / `mono` 这四个名字就是和字体族撞名。
+   *
+   * 一处与 §4 有出入的事实（记在这儿而不是留成口头约定）：装上的
+   * `@fontsource/archivo-black` 只有 400 一档（目录里只有 `400.css` / `latin-400.css`），
+   * 而 §4 要 display 用 900 → 浏览器拿 400 的字面做合成加粗。要精确控制得换一款有 900 的字。 */
+
+  --text-display-xl: 3rem;
+  --text-display-xl--line-height: 1;
+  --text-display-xl--letter-spacing: -0.02em;
+  --text-display-lg: 2.25rem;
+  --text-display-lg--line-height: 1.1;
+  --text-display-lg--letter-spacing: -0.01em;
+  --text-display-md: 1.75rem;
+  --text-display-md--line-height: 1.2;
+  --text-display-md--letter-spacing: 0;
+
+  --text-h1: 2rem;
+  --text-h1--line-height: 1.2;
+  --text-h2: 1.5rem;
+  --text-h2--line-height: 1.3;
+  --text-h3: 1.25rem;
+  --text-h3--line-height: 1.4;
+
+  --text-body-lg: 1.125rem;
+  --text-body-lg--line-height: 1.6;
+  --text-body-md: 1rem;
+  --text-body-md--line-height: 1.6;
+  --text-body-sm: 0.875rem;
+  --text-body-sm--line-height: 1.5;
+
+  --text-mono-md: 0.9375rem;
+  --text-mono-md--line-height: 1.5;
+  --text-mono-sm: 0.8125rem;
+  --text-mono-sm--line-height: 1.5;
+
+  /* ---- §5 间距（4px 单位；scale 就是 Tailwind 的 p-* / m-* / gap-*）---- */
+  --spacing: 4px;
+
+  /* ---- §7 动效 ---- */
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-snap: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+
+  /* ---- §8 组件令牌里那几个尺寸 ---- */
+  --switch-width: 64px;
+  --switch-height: 32px;
+  --switch-knob: 22px;
+}
+
+/* §5 的 scale 是**离散**的（0 1 2 3 4 5 6 8 10 12 16 20 24），不是连续倍数。
+ * Tailwind v4 给了 `--spacing` 之后任何整数都能用（`p-7` = 28px），那是"任意值"的
+ * 后门 —— 挡它的是 `src/styles/tokens.spec.ts` 里那条"13 档一档不差"，
+ * 以及组件里一律用 `--spacing-scale-*`（`p-3` 这种整数档位在 TSX 里看得见、
+ * 在 CSS 里查得到；改 scale 时那条用例会红，而不会静默多出 11 个没定义的值）。 */
+@theme {
+  --spacing-scale-0: 0;
+  --spacing-scale-1: 4px;
+  --spacing-scale-2: 8px;
+  --spacing-scale-3: 12px;
+  --spacing-scale-4: 16px;
+  --spacing-scale-5: 20px;
+  --spacing-scale-6: 24px;
+  --spacing-scale-8: 32px;
+  --spacing-scale-10: 40px;
+  --spacing-scale-12: 48px;
+  --spacing-scale-16: 64px;
+  --spacing-scale-20: 80px;
+  --spacing-scale-24: 96px;
+}

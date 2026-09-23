@@ -1,0 +1,11 @@
+{
+  "singleQuote": false,
+  "printWidth": 100,
+  "trailingComma": "all",
+  "overrides": [
+    {
+      "files": ["*.css"],
+      "options": { "printWidth": 200 }
+    }
+  ]
+}

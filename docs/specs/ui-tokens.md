@@ -1,8 +1,11 @@
 # Spec: UI Tokens（孟菲斯设计令牌）
 
 > **状态**：Locked（V2.0 起契约稳定，改动需走 ADR）
-> **源文件**：`frontend/src/styles/tokens.css` + `frontend/tokens.json` + `frontend/tailwind.config.ts`
-> **相关 ADR**：[0008](../adr/0008-frontend-ia-and-memphis-tokens.md)
+> **源文件**：`frontend/src/styles/tokens.css`（`@theme` 块是唯一真源）
+> + `frontend/tokens.json`（它的**投影**，由 `frontend/scripts/gen-tokens.ts` 生成，不手改）
+> **相关 ADR**：[0008](../adr/0008-frontend-ia-and-memphis-tokens.md)、
+> [0013](../adr/0013-token-css-is-the-single-source.md)（2026-09-23：原列的
+> `frontend/tailwind.config.ts` 不再存在 —— Tailwind v4 的主题入口就是 `@theme`）
 
 孟菲斯风格的设计令牌。**V3 换框架时这份令牌直接复用**，是 UI 契约。
 
@@ -319,37 +322,49 @@ export function PlatformBadge({ platform, size = 'md' }: Props) {
 
 ## 10. tokens.json（机器可读）
 
-`frontend/tokens.json` 是上述所有令牌的 JSON 版本，**V3 换框架时直接复用**。生成脚本 `frontend/scripts/gen-tokens.ts` 从 YAML 源生成 JSON + CSS 变量 + Tailwind config，保证三处一致。
+`frontend/tokens.json` 是本节所有令牌的 JSON 版本，**V3 换框架时直接复用**。
+
+**方向是单向的**（2026-09-23 改，见 [`docs/adr/0013`](../adr/0013-token-css-is-the-single-source.md)）：
+源是 `frontend/src/styles/tokens.css` 的 `@theme` 块，`tokens.json` 由
+`frontend/scripts/gen-tokens.ts`（`npm run tokens`）生成的**投影**，不手改。
+原设想是"一份 YAML 源 → JSON + CSS 变量 + Tailwind config 三份产物"，
+而 Tailwind v4 的 `@theme` 本身就已经是机器可读的令牌声明 —— 再加一份 YAML 源
+就是第三处真相。键名与 CSS 变量**一字不差**，所以 §12.1 与 §12.2 是同一件事。
+
+漂移由 `frontend/src/styles/tokens.spec.ts` 钉：`tokens.json` 必须逐字节等于
+"现在重新生成的投影"；本 spec 里下面的 YAML 块也与 `tokens.css` 逐条比
+（色板 / 形状 / 间距 scale / 缓动与时长），所以"文档改了没改代码"同样会红。
 
 ```json
 {
-  "color": {
-    "primary": {
-      "electric_blue": "#0066FF",
-      "coral_red": "#FF6B6B",
-      "lemon_yellow": "#FFD93D",
-      "mint_green": "#6BCB77",
-      "hot_pink": "#FF3D9A"
-    },
-    "neutral": {
-      "ink_black": "#0A0A0A",
-      "paper_cream": "#FAF7F2",
-      "grey_mist": "#D8D8D8"
-    },
-    "platform": {
-      "douyin": "#FF3D9A",
-      "bilibili": "#0066FF",
-      "xiaohongshu": "#FF6B6B",
-      "youtube": "#FFD93D"
-    }
-  },
-  "shape": { ... },
-  "typography": { ... },
-  "spacing": { ... },
-  "motion": { ... },
-  "component": { ... }
+  "source": "src/styles/tokens.css",
+  "tokens": {
+    "--color-electric-blue": "#0066ff",
+    "--color-coral-red": "#ff6b6b",
+    "--color-lemon-yellow": "#ffd93d",
+    "--color-mint-green": "#6bcb77",
+    "--color-hot-pink": "#ff3d9a",
+    "--color-ink-black": "#0a0a0a",
+    "--color-paper-cream": "#faf7f2",
+    "--color-grey-mist": "#d8d8d8",
+    "--color-platform-douyin": "var(--color-hot-pink)",
+    "--border-width-memphis": "3px",
+    "--shadow-hard": "6px 6px 0 var(--color-ink-black)",
+    "--radius-none": "0px",
+    "--radius-pill": "9999px",
+    "--spacing": "4px",
+    "--spacing-scale-6": "24px",
+    "--ease-bounce": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+    "--duration-fast": "150ms"
+  }
 }
 ```
+
+上面只是节选（真实文件 75 条，`npm run tokens` 的输出会把条数打出来）。JS 侧读它的是 `frontend/src/lib/tokens.ts`：
+`cubic-bezier(...)` 会**解析成四个数**再交给 framer-motion，
+时长要求带单位（`150ms` / `0.4s`），看不懂就抛 —— §7 那句
+"所有动效走 framer-motion、令牌从 `tokens.json` 读"因此是真的有出处，
+而不是每个组件自己写一个 `0.15`。
 
 ---
 
