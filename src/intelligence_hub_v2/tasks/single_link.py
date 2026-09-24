@@ -57,6 +57,24 @@ async def run_single_link(ctx: TaskContext, params: SingleLinkParams) -> TaskRes
         }
     )
 
+    # 与 collect 同一条纪律：**先查重再下载**（review P1-10）。原来是无脑下载完才
+    # insert_or_get —— 同一条链接点两次 = 两次完整下载 + 第二次覆盖第一次的产物
+    # （带宽与风控都是成本），summary 却报 `created=0` 仍 `success`。
+    existing = await ctx.storage.videos.find_by_platform_id(platform, video_id)
+    if existing is not None:
+        await ctx.progress(1.0)
+        return TaskResult(
+            status="success",
+            summary={
+                "video_id": existing.id,
+                "platform": platform,
+                "platform_video_id": video_id,
+                "media_source": existing.media_source or "",
+                "created": 0,
+                "skipped": 1,
+            },
+        )
+
     await ctx.progress(0.2, stage="download")
     dest = ctx.files.media_dir(platform, "single-link", video_id, video_id)
     await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)

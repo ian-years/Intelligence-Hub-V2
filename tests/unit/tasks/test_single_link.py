@@ -95,6 +95,9 @@ async def test_link_without_parseable_id_raises_with_original_in_message(storage
 
 
 async def test_re_run_is_not_created_again(storage, files) -> None:
+    """查重必须发生在**下载之前**（review P1-10）：原来是无脑下载完才 insert_or_get
+    —— 同一条链接点两次 = 两次完整下载 + 第二次覆盖第一次的产物（带宽与风控都是成本），
+    summary 却报 `created=0` 仍 `success`。"""
     reg = _reg("bilibili")
     ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
     params = SingleLinkParams(url="https://www.bilibili.com/video/BV1xx411c7mD")
@@ -103,7 +106,10 @@ async def test_re_run_is_not_created_again(storage, files) -> None:
     second = await run_single_link(ctx, params)
 
     assert second.summary["created"] == 0
+    assert second.summary["skipped"] == 1
     assert await storage.videos.count() == 1
+    adapter = reg.get("bilibili")
+    assert adapter.download_calls == ["BV1xx411c7mD"], "第二趟不该再下载"
 
 
 async def test_cancelled_before_start(storage, files) -> None:

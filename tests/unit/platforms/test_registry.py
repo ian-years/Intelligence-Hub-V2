@@ -210,6 +210,21 @@ def test_an_unimplemented_platform_says_what_is_available(registry_factory: obje
     assert "fake" in str(caught.value)
 
 
+def test_a_missing_config_is_diagnosed_as_wiring_not_as_disabled(tmp_path: Path) -> None:
+    """review P1-4：类注册了、配置字典里却没有 —— 这是装配漏了一环。
+
+    `_is_enabled` 对 config=None 也返回 False，检查顺序若先判开关，
+    这条会被谎报成"已被关掉（去 Settings 打开开关）"，而那里根本没有这个平台。
+    """
+    registry = PlatformRegistry(
+        {},  # 配置字典是空的：类在、配置不在
+        lambda name: _deps(tmp_path),
+        classes={"fake": _Adapter},  # type: ignore[arg-type]
+    )
+    with pytest.raises(PlatformError, match="装配漏了一环"):
+        registry.get("fake")
+
+
 def test_instances_are_cached_per_platform(registry_factory: object) -> None:
     """每次都新建就等于把限速整个废掉：适配器握着限速状态与 HTTP 客户端引用。"""
     registry = registry_factory()  # type: ignore[operator]

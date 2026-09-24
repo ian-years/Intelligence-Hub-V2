@@ -97,6 +97,12 @@ export function Tasks(): JSX.Element {
         <h2 className="font-heading text-h3 font-bold">
           实时事件（最近 {String(STREAM)} 条 · 上限 500 条缓冲）
         </h2>
+        {stream.gap && (
+          <p className="memphis-border mt-3 bg-lemon-yellow px-3 py-2 text-body-sm">
+            连接断开过：断线那段时间的事件**已经缺失** —— 全局事件不落库，重连补不回来。
+            想核对发生过什么，看上面的运行历史（那是查库，不经过这条流）。
+          </p>
+        )}
         <HardShadowCard className="mt-3">
           {stream.events.length === 0 ? (
             <p>

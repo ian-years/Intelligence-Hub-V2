@@ -260,6 +260,24 @@ async def test_probe_treats_a_missing_binary_as_an_unanswerable_question(
     assert await has_audio_stream(media) is True
 
 
+async def test_probe_treats_a_timeout_as_an_unanswerable_question_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """review P1-9：ffprobe 卡满 30 秒超时，与"没装"是同一类"问不出来"。
+
+    让 TimeoutError 冒出去的话，一条**已经下好的媒体**会被判成采集失败。
+    """
+    media = tmp_path / "media.mp4"
+    media.write_bytes(b"x" * 32)
+
+    async def fake(*args: Any, **kwargs: Any) -> SubprocessResult:
+        raise TimeoutError("子进程超时：ffprobe 30.0s")
+
+    monkeypatch.setattr(ffmpeg_module, "run_subprocess", fake)
+    assert await probe_streams(media) == []
+    assert await has_audio_stream(media) is True
+
+
 async def test_the_output_directory_is_created(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

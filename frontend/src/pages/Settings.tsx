@@ -158,7 +158,21 @@ function PlatformForm({ platform }: { platform: string }): JSX.Element {
       <div className="mt-6 flex flex-wrap items-center gap-4">
         <MemphisButton
           disabled={!dirty || save.isPending}
-          onClick={() => save.mutate(mergeDraft(base, draft))}
+          onClick={() => {
+            const snapshot = draft;
+            save.mutate(mergeDraft(base, snapshot), {
+              onSuccess: () => {
+                // 只清掉**这次真正保存过的**键：保存请求在途时用户再改的字段
+                // 不能被吞掉。全清的话，"保存成功"与"有 N 处未保存的改动"
+                // 同时挂着（review P1），且在途编辑会被静默丢掉。
+                setDraft((prev) => {
+                  const rest = { ...prev };
+                  for (const key of Object.keys(snapshot)) delete rest[key];
+                  return rest;
+                });
+              },
+            });
+          }}
         >
           {save.isPending ? "保存中…" : "保存"}
         </MemphisButton>

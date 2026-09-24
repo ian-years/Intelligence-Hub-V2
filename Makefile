@@ -49,14 +49,19 @@ install-playwright:  ## Playwright Chromium（E2E 用）
 dev:  ## 同时起后端 :8789 + 前端 :5173（honcho）
 	uv run honcho start
 
+# **必须 --factory**：main.py 没有模块级 `app`（是 create_app 工厂），
+# 写 `main:app` 会报 "Attribute app not found" —— 这条原来就写错了（review P1-8）。
 dev-backend:  ## 仅起后端（reload）
-	uv run uvicorn intelligence_hub_v2.main:app --reload --host 127.0.0.1 --port $(PORT)
+	uv run uvicorn --factory intelligence_hub_v2.main:create_app --reload --host 127.0.0.1 --port $(PORT)
 
 dev-frontend:  ## 仅起前端（Vite HMR）
 	$(NPM) run dev -- --port $(FRONTEND_PORT)
 
+# 用 console script（pyproject: intelligence-hub = main:cli），**不是** `python -m
+# intelligence_hub_v2.main`——那没有任何 __main__ 守卫，跑了不做事、退出码 0，
+# 是"命令看着在、其实从没跑通"（2026-09-24 review P1-8 修掉）。
 run: build  ## 生产模式（构建前端 → 后端 serve 静态文件）
-	uv run python -m intelligence_hub_v2.main
+	uv run intelligence-hub
 
 build:  ## vite build 到 frontend/dist（main.py 的 _mount_frontend 读的就是这一份）
 	$(NPM) run build
@@ -124,7 +129,7 @@ format-frontend:  ## prettier --write
 	$(NPM) run format
 
 typecheck:  ## mypy + tsc
-	$(MYPY) src
+	$(MYPY) src tools
 	$(NPM) run typecheck
 
 # ---------------------------------------------------------------------------
@@ -155,16 +160,18 @@ db-revision:  ## 生成新迁移：make db-revision m="add foo table"
 # 路径要问 Python 自己要：Git Bash 的 /tmp 是 MSYS 视图，本机原生 Python 打不开它
 # （症状是一句看不懂的 `unable to open database file`）。
 db-roundtrip:  ## alembic upgrade → downgrade base → upgrade → check（验收判据 11，跑在临时库上）
-	@db=$$($(PYTHON) -c "import tempfile,os;print(os.path.join(tempfile.gettempdir(),'ih-roundtrip-$$.sqlite3').replace(os.sep,'/'))"); \n	  export INTELLIGENCE_HUB_STORAGE__SQLITE_URL="sqlite:///$$db"; \n	  $(ALEMBIC) upgrade head && $(ALEMBIC) downgrade base && $(ALEMBIC) upgrade head && $(ALEMBIC) check; \n	  rc=$$?; rm -f "$$db" "$$db"-wal "$$db"-shm; \n	  if [ $$rc -eq 0 ]; then echo "✓ 可逆，且 schema 与 ORM 一致"; fi; exit $$rc
+	@db=$$($(PYTHON) -c "import tempfile,os;print(os.path.join(tempfile.gettempdir(),'ih-roundtrip-$$.sqlite3').replace(os.sep,'/'))"); \
+	export INTELLIGENCE_HUB_STORAGE__SQLITE_URL="sqlite:///$$db"; \
+	$(ALEMBIC) upgrade head && $(ALEMBIC) downgrade base && $(ALEMBIC) upgrade head && $(ALEMBIC) check; \
+	rc=$$?; rm -f "$$db" "$$db"-wal "$$db"-shm; \
+	if [ $$rc -eq 0 ]; then echo "✓ 可逆，且 schema 与 ORM 一致"; fi; exit $$rc
 
 # 必须由 Python 自己写文件，不能吃 shell 重定向：本机 Git Bash 下 `python -c ... > x.json`
 # 会按控制台代码页落盘（实测写出 GBK 字节，回头 json.load 直接 UnicodeDecodeError）。
 # CI 那一步用同一个写法，两边字节才可能一致 —— 快照比对的全部意义就在这。
-# newline=chr(10) 不是洁癖：Windows 上 write_text 会把
- 写成
-
-，于是本地生成的
-# 快照带 CRLF（pre-commit 的 mixed-line-ending 会来擦），而 CI 在 Linux 上生成的是 LF。
+# newline=chr(10) 不是洁癖：Windows 上 write_text 默认会把 LF 写成 CRLF，
+# 于是本地生成的快照带 CRLF（pre-commit 的 mixed-line-ending 会来擦），
+# 而 CI 在 Linux 上生成的是 LF。
 snapshot-api:  ## 重新生成 docs/specs/openapi-snapshot.json（改了路由就要跟着提交）
 	@$(PYTHON) -c "import json, pathlib; from intelligence_hub_v2.main import create_app; \
 	doc = json.dumps(create_app().openapi(), indent=2, sort_keys=True, ensure_ascii=False); \

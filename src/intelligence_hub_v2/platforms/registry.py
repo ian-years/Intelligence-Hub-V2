@@ -135,6 +135,14 @@ class PlatformRegistry:
             msg = f"平台 {name!r} 在当前构建里没有适配器实现。可用的：{available}"
             raise PlatformError(name, "task", msg)
 
+        # "没有配置对象"必须**先于**"已被关掉"判（review P1-4）：`_is_enabled` 对
+        # config=None 也返回 False，先判开关会把装配错误谎报成"去 Settings 打开
+        # 开关"—— 而那里根本没有这个平台。原来写在下面的同款检查因此不可达。
+        config = self._configs.get(name)
+        if config is None:
+            msg = f"平台 {name!r} 注册了但没有配置对象 —— ConfigManager 的装配漏了一环"
+            raise PlatformError(name, "task", msg)
+
         if not self._is_enabled(name):
             msg = f"平台 {name!r} 已被关掉（config/platforms.yaml 的 enabled: false）"
             raise TaskRejected(msg)
@@ -142,11 +150,6 @@ class PlatformRegistry:
         cached = self._instances.get(name)
         if cached is not None:
             return cached
-
-        config = self._configs.get(name)
-        if config is None:
-            msg = f"平台 {name!r} 注册了但没有配置对象 —— ConfigManager 的装配漏了一环"
-            raise PlatformError(name, "task", msg)
 
         instance = cls(config, self._deps_factory(name))
         self._instances[name] = instance

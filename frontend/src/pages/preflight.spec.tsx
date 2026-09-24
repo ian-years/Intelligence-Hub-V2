@@ -125,6 +125,32 @@ describe("Preflight 页", () => {
     expect(screen.queryByText(/全绿/)).toBeNull();
   });
 
+  it("重新探测失败时：红色原因出现，上一次的绿灯结论不再同时显示", async () => {
+    // react-query 出错时 `data` 原样保留（status: 'error' 不清 data）。
+    // 不加 `!isError` 约束的话，页面会一边红着"读不到"一边绿着"全绿"
+    // —— 本文件头部那条"三种情况互相不许露出对方文案"的纪律（review P1）。
+    vi.mocked(fetch)
+      .mockImplementationOnce(
+        async () =>
+          new Response(JSON.stringify(green), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      )
+      .mockImplementation(
+        async () =>
+          new Response(JSON.stringify({ detail: "探测那边挂了" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }),
+      );
+    renderPage();
+    await screen.findByText(/全绿/);
+    await userEvent.click(screen.getByRole("button", { name: /重新探测/ }));
+    await screen.findByText(/读不到预检结果/);
+    expect(screen.queryByText(/全绿/)).toBeNull();
+  });
+
   it("请求还没回来时是「正在探测」，既不算失败也不算全绿", () => {
     vi.mocked(fetch).mockImplementation(
       () => new Promise<Response>(() => undefined) as Promise<Response>,

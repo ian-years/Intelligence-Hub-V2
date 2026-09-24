@@ -66,6 +66,16 @@ __all__ = [
 YTDLP = "yt-dlp"
 """命令名。不解析成绝对路径：让 PATH 解析保持一致，"装了但没进 PATH"要如实报错。"""
 
+FLAT_PLAYLIST_DUMP_FLAG = "-j"
+"""枚举输出走哪条 dump：**这一份常量是命令行与解析器共用的契约**。
+
+`-j` / `--dump-json` = 逐条一行一个 JSON；`-J` / `--dump-single-json` = 整个 playlist
+一个对象。下游解析器（`bilibili/listing.py` 的 `parse_dump_json_lines`、fixture
+`tests/fixtures/bilibili/flat_playlist.jsonl`）全都按**逐行**形状写的，命令行侧必须
+使用同一个值 —— 2026-09-24 之前这里写的是 `-J`，而解析器吃 `-j`，B站 枚举恒空
+（review P0-1）。改这个值必须同时改解析器与 fixture，反方向同理。
+"""
+
 ProgressFn = Callable[[str], None]
 
 COOKIE_READ_FAILURE_MARKERS: tuple[str, ...] = (
@@ -102,6 +112,12 @@ V1 §7.15 实测：B站 的 `--flat-playlist` 无 cookie 时随机回 352/412，
 """
 
 _MEDIA_SUFFIXES = (".mp4", ".mkv", ".webm", ".m4a", ".mp3", ".opus")
+
+_MERGE_LINE = re.compile(r'^\[Merger\] Merging formats into "(?P<path>.+)"$')
+"""ffmpeg 合并产物那一行（`postprocessor/ffmpeg.py` 的 `FFmpegMergerPP.run`）。
+
+路径两侧是双引号；文件名里**可以**含空格，所以用 `"` 定界而不是按空白切。
+"""
 
 
 def looks_like_cookie_failure(text: str) -> bool:
@@ -337,7 +353,17 @@ class YtDlpRunner:
         playlist_items: int | None = None,
         timeout: float | None = None,
     ) -> YtDlpResult:
-        """`--flat-playlist -J`：只枚举，不下媒体。V1 §7.15：这一路**也要带 cookie**。"""
+        """`--flat-playlist -j`：只枚举，不下媒体。V1 §7.15：这一路**也要带 cookie**。
+
+        **必须 `-j`（`--dump-json`，一行一条），不是 `-J`（`--dump-single-json`）**：
+        `-J` 把整个 playlist 打成**一个** JSON 对象（`YoutubeDL.to_stdout(json.dumps(...))`
+        一整行），`BilibiliSpaceVideoIE` 返回的 playlist 本体 `id` 是 **mid（纯数字）**，
+        不带 `BV` 形状 —— 于是 `parse_dump_json_lines` 只解析出 1 个 dict、
+        `entry_to_card` 一条 `BiliCard` 都抽不出来，枚举**恒空**。而这层 bug
+        测试抓不到：`FakeYtDlpRunner` 喂的 fixture 正是 `-j` 的逐行形状，
+        真实子进程从未被执行过（2026-09-24 review P0-1）。
+        解析器与命令行必须认同一份契约：`FLAT_PLAYLIST_DUMP_FLAG` 两边共用。
+        """
         ladder = tuple(variants) if variants is not None else self._default_variants
         if not ladder:
             msg = f"没有可用的 cookie 档位，枚举不了 {url}"
@@ -349,7 +375,7 @@ class YtDlpRunner:
             args = [*self._base_args(), *variant.args]
             if playlist_items is not None:
                 args += ["--playlist-items", f"1:{playlist_items}"]
-            args += ["--flat-playlist", "-J", url]
+            args += ["--flat-playlist", FLAT_PLAYLIST_DUMP_FLAG, url]
             result = await self._run(args, cwd=None, on_line=None, timeout=timeout)
             last = result
             attempts.append((variant.label, result.returncode, _tail(result.stderr)))
@@ -450,10 +476,19 @@ def _artifacts_from(stdout: str, dest_dir: Path) -> tuple[Path, ...]:
 
 
 def _path_from_line(line: str) -> str | None:
-    """从一行输出里认出一个媒体文件路径。两种真实句式：
+    """从一行输出里认出一个媒体文件路径。三种真实句式：
 
     - `[download] Destination: media.f137.mp4` —— 正在下
     - `[download] media.mp4 has already been downloaded` —— 跳过（重跑采集是常态）
+    - `[Merger] Merging formats into "media.mp4"` —— **合并产物**（review P0-2）
+
+    第一种是下载器打的，**只在分片各自落盘时出现**；合并后的最终文件由
+    `FFmpegMergerPP` 产出、打的是第三种（yt-dlp `postprocessor/ffmpeg.py`
+    的 `to_screen(f'Merging formats into "{filename}"')`，前缀 `[Merger]`），
+    且合并成功后原分片被删除（`_delete_downloaded_files`）。只认前两种的话，
+    `-f bv*+ba/b --merge-output-format mp4` 这条**常规路径**下报出来的两个
+    `Destination:` 路径都已不存在 → `classify_artifacts` 判 `empty` →
+    媒体明明已经躺在磁盘上却被判"没产出文件"。
 
     第二种曾经配的是 `"has already downloaded: "`（尾巴多了个冒号），
     yt-dlp 从不这么写，于是"这条其实已经有了"被当成"什么都没下"。
@@ -463,6 +498,10 @@ def _path_from_line(line: str) -> str | None:
     if line.startswith(marker):
         candidate = line.removeprefix(marker)
         return candidate if candidate.endswith(_MEDIA_SUFFIXES) else None
+
+    merge = _MERGE_LINE.match(line)
+    if merge is not None:
+        return merge.group("path")
 
     prefix, _, tail = line.partition("[download] ")
     if prefix or not tail:

@@ -64,6 +64,10 @@ def test_finalize_is_idempotent_on_status() -> None:
     second = builder.finalize()
     assert first.status == second.status == "success"
     assert first.summary == second.summary
+    # review P1-6：两次必须是**同一个对象** —— ended_at 各取一次 now 的话，
+    # 事件里的 duration 与落盘的 ended_at 会对不上（同一份凭据两个"结束时刻"）。
+    assert first is second
+    assert first.ended_at == second.ended_at
 
 
 def test_status_setters_are_all_covered() -> None:

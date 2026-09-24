@@ -128,6 +128,37 @@ async def test_one_download_failure_makes_partial_and_keeps_original_text(storag
     assert await storage.videos.count() == 1
 
 
+async def test_a_store_failure_is_recorded_as_store_not_list(storage, files, monkeypatch) -> None:
+    """review P1-5：查重/入库挂了（库打不开、锁死、磁盘满）**不是**"这位博主枚举失败"。
+
+    原来这两处裸奔，异常被 `_collect_one_creator` 的兜底收成 `stage="list"` ——
+    排查方向被带去查平台的枚举接口，且已下载成功的媒体不进 artifacts。
+    判据：stage 是 "store"、原文留着、库行不存在、媒体文件已落盘。"""
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=_single_artifact
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
+
+    async def broken_insert(draft):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(storage.videos, "insert_or_get", broken_insert)
+
+    result = await make_collect_handler(PLATFORM)(ctx, CollectParams())
+
+    assert result.status == "failed"  # 0 下载 1 失败
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.stage == "store"
+    assert failure.video_id == "v1"
+    assert "database is locked" in failure.error
+    assert result.artifacts == [], "没入库的媒体不能进清单的产物列表"
+    assert adapter.download_calls == ["v1"], "下载确实发生过了"
+    assert await storage.videos.count() == 0
+
+
 async def test_list_failure_does_not_swallow_original_or_continue_silently(storage, files) -> None:
     await _seed_creator(storage)
     adapter = FakeAdapter(

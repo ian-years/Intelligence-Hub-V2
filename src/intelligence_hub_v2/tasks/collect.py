@@ -140,8 +140,21 @@ async def _collect_one_video(
     meta: VideoMeta,
     creator: Creator,
 ) -> None:
-    """一条作品：查重 → 下载 → 入库。查重命中直接 `skipped`（记账 ③）。"""
-    existing = await ctx.storage.videos.find_by_platform_id(meta.platform, meta.platform_video_id)
+    """一条作品：查重 → 下载 → 入库。查重命中直接 `skipped`（记账 ③）。
+
+    查重与入库各自包住（review P1-5）：库写不进去不是"这位博主枚举失败"，
+    记 `stage="store"`；漏包的话这些异常会落进 `_collect_one_creator` 的
+    list 兜底，排查方向被带偏，且已下载成功的媒体不进 `artifacts`。
+    """
+    try:
+        existing = await ctx.storage.videos.find_by_platform_id(
+            meta.platform, meta.platform_video_id
+        )
+    except TaskCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 库问不出来也要留原文，并按下一条继续
+        tally.record_store_failure(platform=meta.platform, meta=meta, error=str(exc))
+        return
     if existing is not None:
         tally.skipped += 1
         return
@@ -156,8 +169,14 @@ async def _collect_one_video(
         tally.record_download_failure(platform=meta.platform, meta=meta, error=str(exc))
         return
 
-    draft = build_video_draft(meta, creator_id=creator.id, artifact=artifact, ctx=ctx)
-    row, created = await ctx.storage.videos.insert_or_get(draft)
+    try:
+        draft = build_video_draft(meta, creator_id=creator.id, artifact=artifact, ctx=ctx)
+        row, created = await ctx.storage.videos.insert_or_get(draft)
+    except TaskCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 同上：入库失败记 store，媒体已落盘不回收
+        tally.record_store_failure(platform=meta.platform, meta=meta, error=str(exc))
+        return
     if not created:
         tally.skipped += 1  # 与并发的另一轮抢到了同一条
         return
@@ -323,6 +342,22 @@ class _Tally:
                 creator_id=str(creator.id),
                 error=error,
                 error_kind="List",
+            )
+        )
+
+    def record_store_failure(self, *, platform: str, meta: VideoMeta, error: str) -> None:
+        """查重/入库挂了（review P1-5）。**不是**"这位博主枚举失败"——记成 list
+        会把排查的人带去查平台的枚举接口，而真实原因是库打不开/写不进去。
+        下载已经成功的媒体留在磁盘上：下一轮 `find_by_platform_id` 命中就跳过，
+        不会重复下载。"""
+        self.failed += 1
+        self.failures.append(
+            FailureRecord(
+                platform=platform,
+                stage="store",
+                video_id=meta.platform_video_id,
+                error=error,
+                error_kind="Storage",
             )
         )
 

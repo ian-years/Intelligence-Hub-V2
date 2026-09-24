@@ -144,6 +144,25 @@ async def test_the_timeout_budget_is_respected_loosely() -> None:
     assert 1.0 <= elapsed < 1.0 + KILL_GRACE_SECONDS
 
 
+async def test_a_hard_cancel_kills_the_child_instead_of_waiting_it_out() -> None:
+    """外部 `cancel()` 也要**杀掉子进程**并立刻返回（review P1-1）。
+
+    旧实现只在 `except TimeoutError` 分支杀进程：`CancelledError` 是
+    `BaseException` 走不到，`finally` 的 `await proc.wait()` 变成
+    "等子进程自然结束"—— 睡 30 秒的子进程让取消挂满 30 秒。
+    真实触发：runner 的任务级 `wait_for` 超时、uvicorn 关停、scheduler 硬取消。
+    判据：取消后**远小于**子进程的 30 秒内返回。回归时这条会挂满 30 秒再红。
+    """
+    task = asyncio.create_task(run_subprocess(_py("import time; time.sleep(30)"), timeout=None))
+    await asyncio.sleep(0.5)  # 让子进程真的起来
+    started = asyncio.get_running_loop().time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 15.0, f"取消后 {elapsed:.1f}s 才返回 —— 在等子进程自然结束，收尸挂住了"
+
+
 # ---------------------------------------------------------------------------
 # 缺二进制与 cwd / env
 # ---------------------------------------------------------------------------

@@ -84,6 +84,14 @@ async def probe_streams(media_path: Path, *, timeout: float = 30.0) -> list[Stre
     except LookupError as exc:
         logger.debug("ffprobe.unavailable", reason=str(exc), media=str(media_path))
         return []
+    except (TimeoutError, OSError) as exc:
+        # 超时 / 启动失败与"没装"是同一类"问不出来"（review P1-9）：让它们冒出去的话，
+        # ffprobe 卡 30 秒就把一条**已经下好的媒体**判成采集失败 —— 与下面那条
+        # LookupError 注释是同一个理由、同一个兜底答案。
+        logger.debug(
+            "ffprobe.unusable", reason=f"{type(exc).__name__}: {exc}", media=str(media_path)
+        )
+        return []
     if not result.ok:
         return []
     return _parse_streams(result.stdout)

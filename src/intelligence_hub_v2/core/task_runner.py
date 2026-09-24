@@ -89,7 +89,15 @@ class TaskRunner:
         config_snapshot: Mapping[str, object],
         cancel_token: CancelToken,
     ) -> None:
-        """跑一个任务到终态。异常向外传播（scheduler 吞），终态清单一定写成。"""
+        """跑一个任务到终态。异常向外传播（scheduler 吞），终态清单一定写成。
+
+        "终态一定写成"覆盖 `task_runs.start()` **之后的每一步**，包括
+        `_build_context`：它原先在 `manifest_writer` 之外，DepsFactory/tmp_dir
+        一抛 = 库里留一条永不终结的 `running` 行 + 零清单 + 没有任何终态事件
+        （review P0-4；最恶劣的触发是"平台全被关掉时用户点的恰恰是 preflight"
+        —— 环境已经坏了，用来检查环境的那件事本身也坏了）。现在 `_build_context`
+        在 `manifest_writer` 里面跑，失败走同一套"failed 清单 + 终态 + 事件"。
+        """
         snapshot = dict(config_snapshot)
         await self._storage.task_runs.start(
             task_id=task_id,
@@ -98,41 +106,52 @@ class TaskRunner:
             params=_params_dump(params),
             config_snapshot=snapshot,
         )
-        ctx = self._build_context(definition, task_id, cancel_token, snapshot)
-        try:
-            await self._run_to_terminal(definition, ctx, params, snapshot, task_id)
-        finally:
-            await self._discard_workdir(ctx.workdir)
+        await self._run_to_terminal(definition, task_id, cancel_token, params, snapshot)
 
     async def _run_to_terminal(
         self,
         definition: TaskDefinition,
-        ctx: TaskContext,
+        task_id: str,
+        cancel_token: CancelToken,
         params: BaseModel,
         snapshot: dict[str, object],
-        task_id: str,
     ) -> None:
+        """跑到终态。workdir 的清理在同一个 `finally` 里：**先发终态事件，再删目录**。
+
+        `_build_context` 在 `manifest_writer` **里面**跑（review P0-4）：DepsFactory /
+        tmp_dir 的失败同样落一份 failed 清单 + `task_runs.finish` + `task.failed` 事件，
+        而不是留下一条永不终结的 `running` 行。清理放这里而不是 `execute` 的 finally，
+        是因为异常路径上 `execute` 拿不到还没来得及 return 的 workdir ——
+        "try: x = await ... / finally: clean(x)" 在异常时 x 必然是旧值。
+        """
         timeout = resolve_timeout(definition, self._app.scheduler.task_timeout_seconds)
         builder: ManifestBuilder | None = None
+        workdir: Path | None = None
         try:
-            async with manifest_writer(
-                definition.name,
-                task_id,
-                definition.kind,
-                snapshot,
-                storage=self._storage,
-                files=self._files,
-                bus=self._events,
-                timeout_seconds=timeout,
-            ) as builder:
-                builder.set_platforms(list(definition.platforms))
-                await self._publish_started(definition, ctx, params, snapshot)
-                result = await self._invoke(definition, ctx, params, timeout)
-                _apply_result(builder, result)
-        except Exception:
+            try:
+                async with manifest_writer(
+                    definition.name,
+                    task_id,
+                    definition.kind,
+                    snapshot,
+                    storage=self._storage,
+                    files=self._files,
+                    bus=self._events,
+                    timeout_seconds=timeout,
+                ) as builder:
+                    ctx = self._build_context(definition, task_id, cancel_token, snapshot)
+                    workdir = ctx.workdir
+                    builder.set_platforms(list(definition.platforms))
+                    await self._publish_started(definition, ctx, params, snapshot)
+                    result = await self._invoke(definition, ctx, params, timeout)
+                    _apply_result(builder, result)
+            except Exception:
+                await self._publish_terminal(builder, definition=definition, task_id=task_id)
+                raise
             await self._publish_terminal(builder, definition=definition, task_id=task_id)
-            raise
-        await self._publish_terminal(builder, definition=definition, task_id=task_id)
+        finally:
+            if workdir is not None:
+                await self._discard_workdir(workdir)
 
     async def _discard_workdir(self, workdir: Path) -> None:
         """删掉 `data/tmp/<task_id>/` —— `files.py:338` 与 `task-runner.md §2.3` 承诺的那一步。
@@ -172,8 +191,11 @@ class TaskRunner:
         cancel_token: CancelToken,
         snapshot: Mapping[str, object],
     ) -> TaskContext:
-        workdir = self._files.tmp_dir(task_id, create=True)
+        """先解析依赖、后建目录：依赖解析失败（`TaskRejected` / `KeyError`）时
+        **不产生**待清理的 workdir，`_run_to_terminal` 也就没有泄漏窗口。
+        （`TaskContext` 是纯 dataclass，构造不会再失败 —— 见它的 docstring。）"""
         deps = self._deps(definition.platforms[0]) if definition.platforms else self._deps.default()
+        workdir = self._files.tmp_dir(task_id, create=True)
         bound = self._log.bind(task_id=task_id, task_name=definition.name)
         return TaskContext(
             task_id=task_id,
@@ -278,6 +300,7 @@ class TaskScheduler:
             name: asyncio.Semaphore(per) for name in configs
         }
         self._tokens: dict[str, CancelToken] = {}
+        self._cancellable: dict[str, bool] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     def submit(self, name: str, params: object) -> str:
@@ -288,6 +311,7 @@ class TaskScheduler:
         task_id = str(uuid.uuid4())
         token = CancelToken()
         self._tokens[task_id] = token
+        self._cancellable[task_id] = definition.cancellable
         snapshot = self._config_snapshot(definition)
         self._tasks[task_id] = asyncio.create_task(
             self._guarded(definition, task_id, validated, token, snapshot)
@@ -302,9 +326,11 @@ class TaskScheduler:
         task_id = str(uuid.uuid4())
         token = CancelToken()
         self._tokens[task_id] = token
+        self._cancellable[task_id] = definition.cancellable
         snapshot = self._config_snapshot(definition)
         await self._guarded(definition, task_id, validated, token, snapshot)
         self._tokens.pop(task_id, None)
+        self._cancellable.pop(task_id, None)
         return await self._storage.task_runs.get_or_raise(task_id)
 
     def update_config(self, name: str, config: PlatformConfig) -> None:
@@ -318,11 +344,16 @@ class TaskScheduler:
     def cancel(self, task_id: str) -> bool:
         """请求取消。**协作式**：置位 `CancelToken`，handler 在下一个 await 点自己停。
 
-        返回 False = 这个 id 不在跑（已结束或不存在），调用方据此给前端一个诚实的回执，
-        而不是"点了没反应但界面转圈"。
+        返回 False 的两种情况都说实话（review P1-7 之前只区分第一种）：
+        - 这个 id 不在跑（已结束或不存在）—— 调用方据此给前端诚实的回执；
+        - 任务声明了 `cancellable=False`（preflight / add_creator 全程没有
+          `check_cancelled()` 的等待点，置位也停不下来）。照样回 True 就是
+          "看起来被取消了"、任务却跑到底落 success —— 与"不许臆造"同形。
         """
         token = self._tokens.get(task_id)
         if token is None:
+            return False
+        if not self._cancellable.get(task_id, True):
             return False
         token.cancel()
         return True
@@ -392,6 +423,7 @@ class TaskScheduler:
             )
         finally:
             self._tokens.pop(task_id, None)
+            self._cancellable.pop(task_id, None)
             self._tasks.pop(task_id, None)
 
 

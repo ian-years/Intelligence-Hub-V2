@@ -433,7 +433,16 @@ class DouyinAdapter:
             return None, str(exc)
 
         if result.ok and result.artifacts:
-            return await self._artifact_from_ytdlp(result, video)
+            try:
+                return await self._artifact_from_ytdlp(result, video)
+            except MediaDownloadError as exc:
+                # "yt-dlp 说下好了，但报出来的路径一个都读不到"（classify 判 empty，
+                # 比如产物在下载与分类之间被杀软/回收清掉）是**这一趟没给出可用产物**，
+                # 不是"两条路都死了" —— 原样穿透会绕过页面播放直链兜底，而兜底恰恰是
+                # 抖音这条路唯一走得通的那条（与上面 LookupError 同一条纪律；
+                # 2026-09-24 review P0-3：这条 raise 曾从 `download()` 的 try 外面
+                # 穿出去，`download_media` 的"两条路都失败才抛"名存实亡）。
+                return None, str(exc)
         return None, _ytdlp_failure_reason(result)
 
     async def _artifact_from_ytdlp(

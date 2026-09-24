@@ -84,7 +84,12 @@ export function Preflight(): JSX.Element {
         </HardShadowCard>
       )}
 
-      {probe.data && <Report report={probe.data} at={probe.dataUpdatedAt} />}
+      {/* `!probe.isError` 与上面两档互斥（本文件头部自己定的纪律）：react-query
+          出错时 `data` 原样保留，"重新探测"失败会同时渲染红色错误与上一次的绿灯
+          结论 —— 2026-09-24 review P1。 */}
+      {!probe.isPaused && !probe.isError && probe.data && (
+        <Report report={probe.data} at={probe.dataUpdatedAt} />
+      )}
     </PageShell>
   );
 }

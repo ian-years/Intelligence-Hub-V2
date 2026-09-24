@@ -210,6 +210,15 @@ async def run_subprocess(
             err.text(),
             proc.returncode,
         ) from exc
+    except BaseException:
+        # **取消也要先杀进程**（review P1-1）。`CancelledError` 是 `BaseException`
+        # 不是 `Exception`，走不到上面的分支；只靠 finally 的 `await proc.wait()`
+        # 会一直等到子进程**自然结束**为止（yt-dlp 是 7200s 的量级）——
+        # 收尸挂住，取消语义整个失效。真实触发：runner 的任务级 `wait_for`
+        # 超时、uvicorn 关停、scheduler 的硬取消，都会把 CancelledError 注入到这里。
+        # `_kill` 幂等，重复调用安全。变异验证：去掉这行，上一条用例挂满 30s 才红。
+        await _kill(proc)
+        raise
     finally:
         # 一定收尸。异常路径（含被取消）下不 wait 就是僵尸进程。
         with contextlib.suppress(Exception):

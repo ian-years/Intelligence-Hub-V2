@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from tests.unit.tasks.conftest import (
@@ -168,6 +169,53 @@ async def test_handler_exception_is_recorded_and_reraised(storage, files) -> Non
     assert any(e.type is EventType.TASK_FAILED for e in bus.events)
 
 
+async def test_build_context_failure_still_writes_terminal_state(storage, files) -> None:
+    """`_build_context` 在 `manifest_writer` **里面**跑（review P0-4）。
+
+    旧实现里它在清单机制之外：DepsFactory / tmp_dir 一抛 = 库里留一条**永不终结的
+    `running` 行** + 零清单 + 没有任何终态事件。最恶劣的触发路径正是本用例这个：
+    `preflight` 的 `platforms=()` + 所有平台都被关掉（`default()` 抛 `TaskRejected`）
+    —— 环境已经坏了，用来检查环境的那件事本身也坏了，还留下一个永远转不完的进度条。"""
+    bus = FakeBus()
+
+    class BrokenDepsFactory:
+        """装配漏了一环的 `DepsFactory`：谁都拿不到 deps。"""
+
+        def __call__(self, platform: str) -> Any:
+            raise TaskRejected(f"平台 {platform!r} 注册了但没有配置对象")
+
+        def default(self) -> Any:
+            raise TaskRejected("没有任何已配置的平台 —— DepsFactory.default() 无从构造")
+
+    broken_runner = TaskRunner(
+        storage=storage,
+        events=bus,  # type: ignore[arg-type]
+        files=files,
+        registry=FakeRegistry({}, {}),  # type: ignore[arg-type]
+        deps_factory=BrokenDepsFactory(),  # type: ignore[arg-type]
+        app_config=AppConfig(),
+        logger=FakeLogger(),  # type: ignore[arg-type]
+    )
+    definition = make_definition(_result_runner(TaskResult(status="success")))
+
+    with pytest.raises(TaskRejected, match="没有任何已配置的平台"):
+        await _execute(broken_runner, definition)
+
+    # ① 库里的行落了 failed 终态，不再是 running 僵尸
+    record = await storage.task_runs.get_or_raise("t-1")
+    assert record.status == "failed"
+    assert record.ended_at is not None
+    assert "没有任何已配置的平台" in (record.error_text or "")
+    # ② 清单（权威源）照样落盘并登记
+    assert record.manifest_path is not None
+    assert files.abs(record.manifest_path).is_file()
+    # ③ 终态事件发了，SSE 订阅者等得到收尾
+    types = [e.type for e in bus.events]
+    assert types == [EventType.MANIFEST_WRITTEN, EventType.TASK_FAILED]
+    # ④ 失败发生在建目录之前（_build_context 先解析依赖），没有 workdir 残留
+    assert not files.tmp_dir("t-1").exists()
+
+
 async def test_cooperative_cancel_settles_cancelled_not_failed(storage, files) -> None:
     bus = FakeBus()
     runner = _runner(storage, files, bus, FakeRegistry({}, {}))
@@ -269,6 +317,18 @@ async def test_scheduler_submit_returns_id_and_completes_on_shutdown(storage, fi
 async def test_scheduler_cancel_unknown_returns_false(storage, files) -> None:
     sched = _scheduler(storage, files)
     assert sched.cancel("does-not-exist") is False
+
+
+async def test_scheduler_cancel_after_finish_returns_false_not_true(storage, files) -> None:
+    """review P1-7：跑完后 token 没从表里摘掉，cancel 对**已结束**的任务也回 True
+    —— 用户点了取消、界面提示"已取消"，实际什么都没发生。终态之后必须 False。"""
+    sched = _scheduler(storage, files)
+    task_id = sched.submit("preflight", {})
+    await sched.shutdown()
+
+    record = await storage.task_runs.get_or_raise(task_id)
+    assert record.is_terminal
+    assert sched.cancel(task_id) is False
 
 
 async def test_reap_orphans_marks_running_rows_failed(storage, files) -> None:

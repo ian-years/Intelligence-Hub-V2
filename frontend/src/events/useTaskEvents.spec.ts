@@ -115,6 +115,63 @@ describe("useTaskEvents", () => {
     vi.useRealTimers();
   });
 
+  it("全局流（无 taskId）重连不发 since —— 后端只有 task_id 分支才回放，发了是死参数", () => {
+    renderHook(() =>
+      useTaskEvents({ source: FakeEventSource as unknown as typeof EventSource }),
+    );
+    const first = FakeEventSource.instances[0];
+    act(() =>
+      first?.emit("task.log", event({ type: "task.log", timestamp: "2026-09-23T11:22:33+00:00" })),
+    );
+    vi.useFakeTimers();
+    act(() => {
+      first?.onerror?.();
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    const second = FakeEventSource.instances[1];
+    expect(second?.url).not.toContain("since");
+    vi.useRealTimers();
+  });
+
+  it("全局流断过线必须说出事件缺失（gap），带 taskId 的流不置位（回放补齐）", () => {
+    const global_ = renderHook(() =>
+      useTaskEvents({ source: FakeEventSource as unknown as typeof EventSource }),
+    );
+    const task = renderHook(() =>
+      useTaskEvents({ taskId: "t1", source: FakeEventSource as unknown as typeof EventSource }),
+    );
+    expect(global_.result.current.gap).toBe(false);
+    expect(task.result.current.gap).toBe(false);
+
+    // 两条流各自断一次
+    act(() => {
+      FakeEventSource.instances[0]?.onerror?.();
+      FakeEventSource.instances[1]?.onerror?.();
+    });
+    // 全局流的断线窗口没有回放兜底，事件丢了就是丢了 —— 必须说出来。
+    expect(global_.result.current.gap).toBe(true);
+    // 任务流由 since 回放补齐，不算缺口。
+    expect(task.result.current.gap).toBe(false);
+  });
+
+  it("重连成功后撤掉上一轮的断线文案，gap 不随之消失", () => {
+    const { result } = renderHook(() =>
+      useTaskEvents({ source: FakeEventSource as unknown as typeof EventSource }),
+    );
+    const first = FakeEventSource.instances[0];
+    act(() => {
+      first?.onerror?.();
+    });
+    expect(result.current.error).toContain("事件流断开");
+    act(() => {
+      first?.onopen?.();
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.gap).toBe(true);
+  });
+
   it("没有 EventSource 的环境：明确 offline + 一句人话，而不是静默没有数据", () => {
     const saved = globalThis.EventSource;
     // @ts-expect-error 故意拿掉

@@ -91,6 +91,7 @@ class ManifestBuilder:
         self._failures: list[FailureRecord] = []
         self._artifacts: list[ArtifactRef] = []
         self._error: str | None = None
+        self._finalized: Manifest | None = None
 
     @property
     def started_at(self) -> datetime:
@@ -173,11 +174,19 @@ class ManifestBuilder:
         没调过 succeed/partial/fail/timeout/cancel 就自动记 `failed` ——
         这是 V1 §2 契约二「清单必须写终态」的结构性保证：
         停在"没有 status"的初稿会被下游的计数兜底猜成绿灯（全 0 = 成功）。
+
+        **幂等到同一个对象**（review P1-6）：此前每次调用都取新的
+        `datetime.now(UTC)`，`_write_manifest` 落盘那次与 runner 发事件那次是
+        两个 `ended_at` —— 事件里的 `duration_seconds` 与库里落盘的 `ended_at`
+        对不上，同一份审计凭据出现两个"结束时刻"。现在第二次调用返回第一次
+        造出的**同一个** Manifest（冻结的 Pydantic 模型，共享是安全的）。
         """
+        if self._finalized is not None:
+            return self._finalized
         if self._status is None:
             self._status = "failed"
             self._error = self._error or "manifest finalized without explicit status"
-        return Manifest(
+        self._finalized = Manifest(
             task_name=self._task_name,
             task_id=self._task_id,
             kind=self._kind,
@@ -191,6 +200,7 @@ class ManifestBuilder:
             config_snapshot=self._config_snapshot,
             error=self._error,
         )
+        return self._finalized
 
 
 class ManifestRecord(BaseModel):

@@ -160,6 +160,24 @@ describe("Settings 页", () => {
     expect(typeof sent.videos_per_creator).toBe("number");
   });
 
+  it("保存成功后草稿清空：不再同时挂着「已写盘」和「有 N 处未保存的改动」", async () => {
+    // review P1：useUpdatePlatformConfig 的 onSuccess 只 invalidate 了查询，
+    // 组件的 draft 从未清空 —— 保存成功后按钮仍可点、提示仍在。
+    // 替身的 PUT 回的是旧配置（30），所以 invalidate 重取后表单显示 30：
+    // 草稿若没清，这里会顶着 45 并继续说"有 1 处未保存的改动"。
+    serve(ok);
+    renderPage();
+    await screen.findByDisplayValue("抖音");
+    const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
+    await userEvent.clear(input);
+    await userEvent.type(input, "45");
+    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    expect(await screen.findByText(/已写盘并热加载/)).toBeTruthy();
+    expect(await screen.findByText("没有改动")).toBeTruthy();
+    expect(screen.queryByText(/未保存的改动/)).toBeNull();
+    expect(((await screen.findByDisplayValue("30")) as HTMLInputElement).value).toBe("30");
+  });
+
   it("后端拒绝时显示原因，不清空表单", async () => {
     serve(putFails);
     renderPage();

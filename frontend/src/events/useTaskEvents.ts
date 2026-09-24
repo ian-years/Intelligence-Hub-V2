@@ -30,6 +30,11 @@ export interface TaskEvents {
   /** 最近一次连接问题的原文。**页面要把它显示出来** ——
    * "看起来在跑但其实断流"是这个仓库的老问题（V1 §1.3 / §7.20）。 */
   error: string | null;
+  /** 全局流（无 `taskId`）断过线：**断线窗口里的事件永久缺失**。
+   * 后端只对 `task_id` 分支做回放（全局事件不落库，`event-schema.md §4`），
+   * `since` 补不了这个口子 —— 所以这里只能如实说出来，不能装作没断过。
+   * 页面必须把它显示出来；带 `taskId` 时回放补齐，不会置位。 */
+  gap: boolean;
 }
 
 /**
@@ -40,7 +45,11 @@ export interface TaskEvents {
  *    交给 `onmessage` —— 所以必须逐类型 `addEventListener`，一次 `onmessage` 都不会触发
  *    （`event-schema.md §7` 原来那段样例正是这么写的，因此是错的）。
  * 2. 服务端不发 `id:` 字段，浏览器自带的 `Last-Event-ID` 重连拿不到回放位置；
- *    断线后由这里带 `since=<最后一条事件的 timestamp>` 重开（§7 说的就是这一条）。
+ *    任务流（带 `taskId`）断线后由这里带 `since=<最后一条事件的 timestamp>` 重开
+ *    （§7 说的就是这一条）。**全局流不发 `since`**：后端只有 `task_id` 分支才回放
+ *    （全局事件不落库），发了是死参数 —— 2026-09-24 review P0：此前全局流的重连
+ *    一直带着这个没人读的参数，断线窗口里的事件静默丢失且界面毫无痕迹，现在的
+ *    处置是 `gap` 状态把这件事说出来。
  * 3. 重连退避并封顶：后端重启时，无退避的重连等于对着刚起来的进程 DDoS。
  */
 export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
@@ -48,6 +57,7 @@ export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [gap, setGap] = useState(false);
 
   const typesKey = types?.join(",") ?? "";
   const lastTimestamp = useRef<string | null>(null);
@@ -69,9 +79,16 @@ export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
       if (taskId) params.set("task_id", taskId);
       if (typesKey) params.set("types", typesKey);
       // `since` 只在重连时带：首连带它会把刚刚发生的那一段切掉。
-      if (attempt > 0 && lastTimestamp.current) params.set("since", lastTimestamp.current);
+      // 且只在任务流上有意义 —— 全局事件不落库，后端无从回放（见文件头第 2 条）。
+      if (taskId && attempt > 0 && lastTimestamp.current) {
+        params.set("since", lastTimestamp.current);
+      }
 
       es = new Ctor(`/api/events?${params.toString()}`);
+      // 换连接参数（taskId / types）= 一条新流：旧流上"断过线"的事实不再成立。
+      // `attempt === 0` 只在首连成立 —— onerror 重连前必然 ++ 过，不会误清 gap。
+      // 放这里而非 effect 体（react-hooks/set-state-in-effect 拒后者）。
+      if (attempt === 0) setGap(false);
       setStatus(attempt === 0 ? "connecting" : "reconnecting");
 
       const remember = (raw: MessageEvent): void => {
@@ -99,7 +116,13 @@ export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
       const listen: readonly string[] = typesKey ? typesKey.split(",") : EVENT_TYPES;
       for (const type of listen) es?.addEventListener(type, remember);
 
-      es.onopen = () => setStatus("open");
+      es.onopen = () => {
+        setStatus("open");
+        // 重连成功就撤掉上一轮"断开，N ms 后重连"—— 连接现在是好的，
+        // 过期文案留着会让人以为还断着（review P1-3）。断线的"事实"
+        // 由 `gap` 承载，它不随重连消失（清 gap 只在新流首连，见 open()）。
+        setError(null);
+      };
       es.onerror = () => {
         if (closed) return;
         es?.close();
@@ -107,6 +130,8 @@ export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
         attempt += 1;
         setStatus("reconnecting");
         setError(`事件流断开，${String(wait)}ms 后重连（第 ${String(attempt)} 次）`);
+        // 全局流的断线窗口没有回放兜底，事件丢了就是丢了 —— 必须说出来。
+        if (!taskId) setGap(true);
         timer = setTimeout(open, wait);
       };
     };
@@ -124,5 +149,6 @@ export function useTaskEvents(options: UseTaskEventsOptions = {}): TaskEvents {
     events,
     status: unsupported ? "offline" : status,
     error: unsupported ? NO_EVENT_SOURCE : error,
+    gap: unsupported ? false : gap,
   };
 }

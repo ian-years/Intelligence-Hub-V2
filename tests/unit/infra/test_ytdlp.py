@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from intelligence_hub_v2.infra.ytdlp import (
     looks_like_cookie_failure,
     plan_cookie_variants,
 )
+from intelligence_hub_v2.platforms.bilibili import listing
 
 
 def _result(
@@ -286,7 +288,12 @@ async def test_flat_playlist_also_carries_the_cookie_rung(
     await YtDlpRunner().flat_playlist("https://space.bilibili.com/1/video", variants=ladder)
 
     argv = recorder.calls[0]
-    assert "--flat-playlist" in argv and "-J" in argv
+    assert "--flat-playlist" in argv
+    # 命令行 flag 与解析器共用同一份契约常量（2026-09-24 review P0-1：
+    # 这里曾经写死 `-J`，与 `parse_dump_json_lines` 吃的逐行形状对不上，B站 枚举恒空，
+    # 而 FakeYtDlpRunner 喂的 fixture 恰好是 `-j` 形状，测试全绿但真机必挂）。
+    assert ytdlp_module.FLAT_PLAYLIST_DUMP_FLAG in argv
+    assert "-J" not in argv
     assert "--cookies" in argv
 
 
@@ -320,9 +327,86 @@ def test_artifacts_are_taken_from_yt_dlp_reported_paths_only(tmp_path: Path) -> 
     assert all(p.parent == tmp_path for p in found)
 
 
+def test_merged_output_is_recognized_not_judged_empty(tmp_path: Path) -> None:
+    """合并成功的常规路径（review P0-2）：`-f bv*+ba/b --merge-output-format mp4` 下
+    stdout 只有两个**已被删除的**分片 `Destination:` 行 + 一行
+    `[Merger] Merging formats into "media.mp4"`。认不到 Merger 行的话，
+    `classify_artifacts` 只见两个读不到的路径 → `empty` → 媒体明明躺在磁盘上
+    却被抛"没有产出可读的文件"（B站 100% 判失败、抖音关掉兜底）。"""
+    media = tmp_path / "media.mp4"
+    media.write_bytes(b"merged!")
+    stdout = (
+        "[download] Destination: media.f30064.mp4\n"
+        "[download] Destination: media.f30280.m4a\n"
+        '[Merger] Merging formats into "media.mp4"\n'
+    )
+    found = ytdlp_module._artifacts_from(stdout, tmp_path)
+    parts = ytdlp_module.classify_artifacts(found)
+    assert parts.kind == "single"
+    assert parts.main == media
+
+
+def test_merge_line_with_spaces_in_filename(tmp_path: Path) -> None:
+    """文件名含空格：用引号定界而不是按空白切。"""
+    stdout = '[Merger] Merging formats into "my video final.mp4"\n'
+    found = ytdlp_module._artifacts_from(stdout, tmp_path)
+    assert [p.name for p in found] == ["my video final.mp4"]
+
+
+def test_merge_line_with_trailing_junk_is_rejected(tmp_path: Path) -> None:
+    """不认长得像但尾巴有东西的行 —— 宁可漏认也不要把垃圾当路径。"""
+    stdout = '[Merger] Merging formats into "x.mp4" and then some\n'
+    assert ytdlp_module._artifacts_from(stdout, tmp_path) == ()
+
+
 def test_a_result_without_attempts_says_so_instead_of_looking_clean() -> None:
     assert (
         YtDlpResult(ok=False, variant=None, stdout="", stderr="", returncode=1)
         .attempts_note()
         .startswith("yt-dlp 没有产生任何尝试记录")
     )
+
+
+# ---------------------------------------------------------------------------
+# 同一份契约：命令行 flag ↔ 解析器 ↔ fixture（2026-09-24 review P0-1 的教训）
+# ---------------------------------------------------------------------------
+
+
+def test_flat_playlist_flag_and_parser_agree_on_the_same_contract() -> None:
+    """argv 构造（`infra/ytdlp.py`）与 stdout 解析器（`bilibili/listing.py`）
+    必须认**同一个** dump 形状。
+
+    P0-1 的形状：两处各写各的 —— 命令行 `-J`（单对象）、解析器与 fixture `-j`（逐行），
+    `FakeYtDlpRunner` 从不执行真子进程，于是 1301 全绿而真机枚举恒空。
+    这条用例把三件事钉在一起：flag 常量、`-J` 不在 argv、以及 **`-J` 的真实输出形状
+    喂给解析器必须一条都抽不出来**（真对象形状与逐行解析互斥，谁漂谁红）。
+    """
+    # 1) flag 常量就是逐行档
+    assert ytdlp_module.FLAT_PLAYLIST_DUMP_FLAG == "-j"
+
+    # 2) `-J` 的真实形状（整个 playlist 一个对象、一行，见 yt-dlp YoutubeDL.to_stdout）
+    #    走完**与 adapter.py 相同的调用链**必须一条卡片都抽不出来 —— playlist 本体
+    #    会被当"一条 entry"解析（它以 `{` 开头），但它的 `id` 是 mid（纯数字），
+    #    `entry_to_card` 认不出 BV → 空。这就是 P0-1 真机上的症状，钉在这里。
+    single_json = json.dumps(
+        {
+            "_type": "playlist",
+            "id": "486906719",  # playlist 本体的 id 是 mid（纯数字），不是 BV
+            "entries": [
+                {
+                    "id": "BV1GJ411x7h7",
+                    "title": "第一条",
+                    "url": "https://www.bilibili.com/video/BV1GJ411x7h7/",
+                }
+            ],
+        }
+    )
+    cards_from_single = listing.entries_to_cards(
+        listing.parse_dump_json_lines(single_json), limit=5
+    )
+    assert cards_from_single == []  # 单对象形状 ≠ 逐行形状，逐行解析器救不了它
+
+    # 3) 逐行形状（真 fixture 的形状）能抽出 entry —— 解析器没有被改坏
+    fixture_line = json.dumps({"id": "BV1GJ411x7h7", "title": "第一条"})
+    cards = listing.entries_to_cards(listing.parse_dump_json_lines(fixture_line), limit=5)
+    assert [c.bvid for c in cards] == ["BV1GJ411x7h7"]

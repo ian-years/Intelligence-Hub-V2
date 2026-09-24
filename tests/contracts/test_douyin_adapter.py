@@ -1070,16 +1070,25 @@ class TestTheOutsideWorldMisbehaves:
     async def test_yt_dlp_reporting_paths_that_are_not_there(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """yt-dlp 回 0 但报出来的文件一个都读不到（被杀、写错盘）。
+        """yt-dlp 回 0 但报出来的文件一个都读不到（被杀、写错盘）→ **退兜底**。
 
-        不许兜底成"当它成功了"：`media_path` 进库指着一个不存在的文件，
-        症状是过几天转写时报"文件找不到"，而没人会想到是采集那轮的退出码在骗人。
+        旧版钉的是"raise，而不是把幽灵路径当成功"—— 那是修
+        "media_path 进库指着一个不存在的文件、过几天转写才炸"时的中间态。
+        2026-09-24 review P0-3 之后正确行为是第三种：yt-dlp 这一趟判失败
+        （原文留在 `yt_dlp_error`），页面播放直链**重新下载真实字节**，
+        幽灵路径不进库；`fallback_to_page_play_url=False` 时才真正抛错。
         """
-        ghost = tmp_path / "media" / "media.mp4"
+        ghost = tmp_path / "ghost" / "media.mp4"  # 从未落盘，且不在兜底的目标目录里
         runner = FakeYtDlpRunner(result=ytdlp_ok(artifacts=[ghost]))
         harness = media_harness(tmp_path, monkeypatch=monkeypatch, runner=runner)
-        with pytest.raises(MediaDownloadError, match="一个都读不到"):
-            await harness.adapter.download_media(make_video(), tmp_path / "media")
+
+        artifact = await harness.adapter.download_media(make_video(), tmp_path / "media")
+
+        assert artifact.media_source == "page_play_url"
+        assert "一个都读不到" in (artifact.yt_dlp_error or ""), "yt-dlp 那一趟的原文要留着"
+        assert harness.requested, "兜底那一路真的去问了直链"
+        assert not ghost.exists(), "幽灵路径不该被当成品落进库"
+        assert (tmp_path / "media" / "media.mp4").is_file(), "落盘的是兜底刚下的真实字节"
 
     async def test_a_non_numeric_video_id_never_reaches_the_page(
         self, tmp_path: Path, monkeypatch

@@ -83,7 +83,10 @@ repos:
           - types-python-dateutil
         args: [--config-file=pyproject.toml]
         pass_filenames: false
-        entry: bash -c 'uv run mypy src'
+        # 含 tools/，与 CI（ci.yml `mypy src tools`）和 Makefile lint-python 同一范围。
+        # 曾只写 src：tools/ 那 400 行只在 CI 被类型检查，本地 commit 门禁看不到
+        # —— 修复处记在 ci.yml 的注释里，这里当时没同步（review P1-8）。
+        entry: bash -c 'uv run mypy src tools'
 
   # ---------------------------------------------------------------------
   # uv lockfile 同步
