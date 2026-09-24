@@ -51,6 +51,12 @@ class CollectParams(BaseModel):
     limit: int | None = Field(
         default=None, ge=1, description="每位博主最多收几条；留空 = 平台配置的 videos_per_creator"
     )
+    metrics_only: bool = Field(
+        default=False,
+        description="只登记读数、不下媒体（V1 `--collection-strategy 仅采集数据`）。"
+        "真的是跳过 `download_media`：库里那一行 `media_path` 留 NULL，"
+        "转写那一步会因为没音频而自然跳过，不是假装成功",
+    )
 
 
 class SingleLinkParams(BaseModel):

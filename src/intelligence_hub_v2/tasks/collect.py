@@ -89,6 +89,7 @@ async def _collect(ctx: TaskContext, params: CollectParams, platform: str) -> Ta
             platform=platform,
             limit=limit,
             since=params.since,
+            metrics_only=params.metrics_only,
             progress_base=index,
             progress_total=total_creators,
         )
@@ -113,6 +114,7 @@ async def _collect_one_creator(
     platform: str,
     limit: int,
     since: datetime | None,
+    metrics_only: bool,
     progress_base: int,
     progress_total: int,
 ) -> None:
@@ -123,7 +125,9 @@ async def _collect_one_creator(
         async for meta in adapter.list_creator_videos(ref, since=since, limit=limit):
             ctx.check_cancelled()
             seen += 1
-            await _collect_one_video(ctx, tally, adapter=adapter, meta=meta, creator=creator)
+            await _collect_one_video(
+                ctx, tally, adapter=adapter, meta=meta, creator=creator, metrics_only=metrics_only
+            )
             frac = min(0.95, seen / max(1, limit))
             await ctx.progress((progress_base + frac) / progress_total, stage="collect")
     except TaskCancelled:
@@ -139,12 +143,17 @@ async def _collect_one_video(
     adapter: PlatformAdapter,
     meta: VideoMeta,
     creator: Creator,
+    metrics_only: bool = False,
 ) -> None:
     """一条作品：查重 → 下载 → 入库。查重命中直接 `skipped`（记账 ③）。
 
     查重与入库各自包住（review P1-5）：库写不进去不是"这位博主枚举失败"，
     记 `stage="store"`；漏包的话这些异常会落进 `_collect_one_creator` 的
     list 兜底，排查方向被带偏，且已下载成功的媒体不进 `artifacts`。
+
+    `metrics_only` 那条分支**连媒体目录都不建**：V1 的"仅采集数据"要的就是"不动下载配额、
+    不占磁盘，先把读数与历史立起来"。建一个空目录会留下一个"下载失败了"的形状，
+    而这里根本没有发生过一次下载尝试 —— 两件事必须能在磁盘上被区分开。
     """
     try:
         existing = await ctx.storage.videos.find_by_platform_id(
@@ -159,15 +168,17 @@ async def _collect_one_video(
         tally.skipped += 1
         return
 
-    dest = ctx.files.media_dir(meta.platform, creator.name, meta.platform_video_id, meta.title)
-    await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)
-    try:
-        artifact = await adapter.download_media(meta, dest)
-    except TaskCancelled:
-        raise
-    except Exception as exc:  # noqa: BLE001 - 单条下载失败：留原文进 failures，继续下一条
-        tally.record_download_failure(platform=meta.platform, meta=meta, error=str(exc))
-        return
+    artifact: MediaArtifact | None = None
+    if not metrics_only:
+        dest = ctx.files.media_dir(meta.platform, creator.name, meta.platform_video_id, meta.title)
+        await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)
+        try:
+            artifact = await adapter.download_media(meta, dest)
+        except TaskCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 单条下载失败：留原文进 failures，继续下一条
+            tally.record_download_failure(platform=meta.platform, meta=meta, error=str(exc))
+            return
 
     try:
         draft = build_video_draft(meta, creator_id=creator.id, artifact=artifact, ctx=ctx)
@@ -181,9 +192,14 @@ async def _collect_one_video(
         tally.skipped += 1  # 与并发的另一轮抢到了同一条
         return
 
-    tally.record_success(
-        artifact=artifact, meta=meta, row_id=row.id, media_rel=draft.media_path or ""
-    )
+    if artifact is None:
+        # 判据看的是"有没有字节"，不是那个开关：开关与产物对不上时（将来多一条
+        # "下得来但不落盘"的路），跟着事实走才不会往清单里塞一个不存在的路径。
+        tally.record_registered()
+    else:
+        tally.record_success(
+            artifact=artifact, meta=meta, row_id=row.id, media_rel=draft.media_path or ""
+        )
     await ctx.publish(
         EventType.VIDEO_ADDED,
         {
@@ -213,13 +229,23 @@ def _to_ref(creator: Creator) -> CreatorRef:
 
 
 def build_video_draft(
-    meta: VideoMeta, *, creator_id: int | None, artifact: MediaArtifact, ctx: TaskContext
+    meta: VideoMeta,
+    *,
+    creator_id: int | None,
+    artifact: MediaArtifact | None,
+    ctx: TaskContext,
 ) -> VideoDraft:
     """把 `VideoMeta` + `MediaArtifact` 拼成入库草稿（collect 与 single_link 共用）。
 
     路径归一化（绝对 → 相对 `data/`）**在这里做**，不在适配器里：`AdapterDeps` 没有
     `FileStorage`，只有 handler 知道这条作品最终归在谁名下（`platform-adapter.md §2.4` 修订）。
+
+    `artifact=None` = 这一条只登记读数（`CollectParams.metrics_only`）。媒体三列留 NULL，
+    `metadata_json` 里写明 `media_downloaded: false` —— 下游（postprocess / ASR）据此
+    跳过，而不是"读不出音频所以失败"。
     """
+    if artifact is None:
+        return _metrics_only_draft(meta, creator_id=creator_id)
     main_rel, aux_paths, source, size, duration, rung, ytdlp_err = _artifact_fields(artifact, ctx)
     meta_json = json.dumps(
         {
@@ -248,6 +274,36 @@ def build_video_draft(
         media_source=source,
         media_aux_paths_json=json.dumps(aux_paths, ensure_ascii=False),
         metadata_json=meta_json,
+    )
+
+
+def _metrics_only_draft(meta: VideoMeta, *, creator_id: int | None) -> VideoDraft:
+    """只登记读数的草稿。
+
+    `has_audio: False` 与 `media_downloaded: False` 都要写：前者让后处理那一步
+    干净地跳过（ADR-0019 定的那个闸），后者让"这一条从来没有过媒体"在库里可读 ——
+    只留 NULL 的话，它与"下载失败但没记上原因"完全同形。
+    """
+    return VideoDraft(
+        platform=meta.platform,
+        platform_video_id=meta.platform_video_id,
+        creator_id=creator_id,
+        title=meta.title,
+        description=meta.description,
+        published_at=meta.published_at,
+        duration_seconds=meta.duration_seconds,
+        view_count=meta.view_count,
+        like_count=meta.like_count,
+        comment_count=meta.comment_count,
+        share_count=meta.share_count,
+        media_path=None,
+        media_source=None,
+        media_aux_paths_json="[]",
+        metadata_json=json.dumps(
+            {"media_downloaded": False, "media_source": None, "has_audio": False},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
     )
 
 
@@ -303,11 +359,22 @@ class _Tally:
 
     def __init__(self) -> None:
         self.downloaded = 0
+        self.registered = 0
         self.skipped = 0
         self.failed = 0
         self.rungs: dict[str, int] = {}
         self.failures: list[FailureRecord] = []
         self.artifacts: list[ArtifactRef] = []
+
+    def record_registered(self) -> None:
+        """只登记了读数（`metrics_only`）：**不产 ArtifactRef**。
+
+        清单里挂一个不存在的路径，等于让"产物核验"那一步去 stat 一个空目录 ——
+        那一栏会红，而红的原因（这一条压根没打算下载）是假的。
+        哪几条进来了库里查得到（`media_path IS NULL` 配上 `metadata_json` 里那个
+        `media_downloaded: false`），所以这里只需要一个数。
+        """
+        self.registered += 1
 
     def record_success(
         self, *, artifact: MediaArtifact, meta: VideoMeta, row_id: int, media_rel: str
@@ -368,7 +435,7 @@ class _Tally:
 
     def to_result(self, platform: str) -> TaskResult:
         status: Literal["success", "partial", "failed"]
-        if self.downloaded == 0 and self.failed > 0:
+        if self.downloaded + self.registered == 0 and self.failed > 0:
             status = "failed"
         elif self.failed > 0:
             status = "partial"
@@ -377,6 +444,9 @@ class _Tally:
         summary: dict[str, int | str] = {
             "platform": platform,
             "downloaded": self.downloaded,
+            # 与 `downloaded` 分栏：一轮"只采指标"里两条计数不会互相冒充，
+            # 而 `downloaded=0` 在 metrics_only 那一站是**预期**，不是失败。
+            "registered_metrics_only": self.registered,
             "skipped_existing": self.skipped,
             "failed": self.failed,
             # 记账 ④：把档位分布抬进清单，"这批为什么糊"才有地方可查。
