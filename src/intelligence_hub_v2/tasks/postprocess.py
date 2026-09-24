@@ -2,10 +2,11 @@
 
 对每条"有媒体、没口播稿"的作品：
 
-1. 平台声明 `supports_subtitles=True`（B站 / 未来的 YouTube）→ 走 `fetch_subtitles`。
-   拿到轨就写稿；`None`（契约里的"确实没有轨"）记 `no_subtitle`。
-   **没轨要不要回落到听音频是 T1.3**，不混进这一格。
-2. 其余（抖音/小红书，或不支持字幕的平台）→ `extract_audio` 抽 16k 单声道 WAV →
+1. 平台声明 `supports_subtitles=True`（B站 / 未来的 YouTube）→ 先问字幕。
+   拿到轨就写字幕稿；`None`（契约里的"确实没有轨"）记一笔 `subtitle_missed`
+   并**回落到本地 ASR**（T1.3 —— V1 的 B站 后处理就是这个顺序）；抛出来的才是失败，
+   失败时不回落（下一轮还会挑到它）。
+2. 其余（抖音/小红书，或没有字幕轨的作品）→ `extract_audio` 抽 16k 单声道 WAV →
    `asr.transcribe_wav` → `normalize_transcript` → 落 `speech-clean.txt` +
    `segments.json` + `reference.md` → 写 `transcripts` 行 + 发 `TRANSCRIPT_READY`。
 
@@ -17,7 +18,7 @@
 分开了，这里只负责让任务不绿（AGENTS §1.3）。
 
 `fetch_subtitles` 的契约（`platforms/base.py`）：**"确实没有"返回 None，"没问到"抛**。
-所以 `None` 记成 `no_subtitle` 而不是 `failed`；抛出来才进 `failures[]`。
+所以 `None` 是"回落"的信号，抛出来才进 `failures[]`。
 
 与 `single_link` 一样用 `canonical_video_url` 从 `platform_video_id` 反推 `webpage_url`
 （库行不存原始分享链，那是会过期的）。
@@ -88,23 +89,22 @@ async def _process_one(
         tally.no_media += 1
         return
 
-    if not ctx.adapters.capabilities(video.platform).supports_subtitles:
-        await _transcribe_with_asr(ctx, tally, video=video, engine=engine)
-        return
+    if ctx.adapters.capabilities(video.platform).supports_subtitles:
+        try:
+            transcript = await ctx.adapters.get(video.platform).fetch_subtitles(_video_meta(video))
+        except Exception as exc:  # noqa: BLE001 - "没问到"是异常，必须留原文进 failures（V1 §1.3）
+            # 问到失败（412、网络）就不去跑 ffmpeg：这条下一轮还会被挑出来。
+            tally.record_failure(video=video, error=str(exc), kind="Subtitle")
+            return
+        if transcript is not None:
+            await _store(ctx, video=video, transcript=transcript, reference=None)
+            tally.transcribed += 1
+            return
+        # `None` = 契约里的"确实没有轨"。没有轨不等于这条转不了：回落到听音频，
+        # V1 的 B站 后处理本来就是这个顺序（T1.3）。
+        tally.subtitle_missed += 1
 
-    meta = _video_meta(video)
-    try:
-        transcript = await ctx.adapters.get(video.platform).fetch_subtitles(meta)
-    except Exception as exc:  # noqa: BLE001 - "没问到"是异常，必须留原文进 failures（V1 §1.3）
-        tally.record_failure(video=video, error=str(exc), kind="Subtitle")
-        return
-
-    if transcript is None:
-        tally.no_subtitle += 1
-        return
-
-    await _store(ctx, video=video, transcript=transcript, reference=None)
-    tally.transcribed += 1
+    await _transcribe_with_asr(ctx, tally, video=video, engine=engine)
 
 
 # --------------------------------------------------------------------------- #
@@ -285,14 +285,14 @@ class _TranscribeTally:
     """一趟后处理的计数器 + 失败明细。
 
     七个计数各回答一个问题，别合并：`transcribed` 是"有稿子"，`no_speech` 是"听过音频但
-    没口播"，`no_audio` 是"这条媒体压根没有音频轨"，`no_subtitle` 是"问了字幕平台说没有"，
-    `asr_blocked` 是"这轮根本没法转（引擎缺位）"。合成一个"跳过"就把四种完全不同的修法
-    说成了同一句话。
+    没口播"，`no_audio` 是"这条媒体压根没有音频轨"，`subtitle_missed` 是"字幕那边说没有轨，
+    已经回落到听音频"，`asr_blocked` 是"这轮根本没法转（引擎缺位）"。
+    合成一个"跳过"就把五种完全不同的修法说成了同一句话。
     """
 
     def __init__(self) -> None:
         self.transcribed = 0
-        self.no_subtitle = 0
+        self.subtitle_missed = 0
         self.no_speech = 0
         self.no_audio = 0
         self.no_media = 0
@@ -344,7 +344,7 @@ class _TranscribeTally:
             status = "success"
         summary: dict[str, int | str] = {
             "transcribed": self.transcribed,
-            "no_subtitle": self.no_subtitle,
+            "subtitle_missed": self.subtitle_missed,
             "no_speech": self.no_speech,
             "no_audio": self.no_audio,
             "no_media": self.no_media,

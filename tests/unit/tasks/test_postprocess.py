@@ -152,19 +152,10 @@ async def test_subtitle_writes_file_and_attaches(storage, files) -> None:
     assert adapter.subtitle_calls == ["BV1"]
 
 
-async def test_missing_subtitle_track_counts_as_no_subtitle(storage, files) -> None:
-    """`fetch_subtitles` 返回 None = "确实没有轨"，不是失败（契约：没问到才抛）。"""
-    vid = await _seed_video(
-        storage, platform="bilibili", vid="BV1", media_path="media/bilibili/x/BV1/media.mp4"
-    )
-    adapter = FakeAdapter("bilibili", subtitles=None, capabilities=_SUB_CAPS)
-    reg = FakeRegistry({"bilibili": adapter}, {"bilibili": FakeConfig()})
-    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
-
-    result = await run_postprocess(ctx, PostprocessParams(video_ids=[vid]))
-
-    assert result.summary["no_subtitle"] == 1
-    assert await storage.transcripts.get_for_video(vid) is None
+# 「没有字幕轨」那一支在 T1.3 之后不再停在 no_subtitle：它会回落到本地 ASR。
+# 那一条路的判据（有轨不跑 ffmpeg / 没轨回落 / 问失败不回落）在
+# tests/integration/test_bili_subtitle_preferred.py —— 那里接缝被显式换掉，
+# 不会因为跑的人本机装没装权重而给出不同答案。
 
 
 async def test_platform_without_subtitle_support_goes_through_local_asr(

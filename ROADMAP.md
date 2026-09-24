@@ -156,8 +156,13 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   产物三份，V1 的 `speech-raw.txt` 不落（与 clean 只差空白折叠）。
   **拆出一条**：摘要/要点这两样今天只在磁盘上，进 DB 要改 `data-model.md` → 见
   `docs/plans/v2.1-migration-plan.md` 的 T1.2b（含"V1 那两列迁移时会静默丢掉"这条账）。
-- [ ] 字幕优先路径（B站 / YouTube）
-  —— B站 那条"问了字幕说没有轨 → 回落到听音频"是 T1.3，还没做（现在记 `no_subtitle`）。
+- [x] 字幕优先路径（B站 / YouTube）
+  —— 2026-09-24（T1.3）：`postprocess` 现在的顺序是"先问字幕 → 拿到就用；确实没有轨
+  就回落到本地 ASR；问失败了（412 这类）记失败、**不**去起 ffmpeg"。
+  计数从 `no_subtitle`（V2.0 记一笔就过去，那条作品永远不会有稿子）改成
+  `subtitle_missed`（含"已回落"这半件事）。用例：
+  `tests/integration/test_bili_subtitle_preferred.py` 三条。
+  真 B站 视频 + 真字幕 API 那一跑仍欠在 T3.2（要网络与登录 cookie）。
 - [ ] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）
   —— V2.0 已有最小版（`pages/VideoDetail.tsx`：metadata + 口播稿全文，**无播放器**，
   页面上写明了）。这一条要的是播放器与时间戳跳转，别从零再建一遍。
