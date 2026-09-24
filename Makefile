@@ -213,6 +213,19 @@ bridge-cookies:  ## 从桥导出 Netscape cookie 到 data/cookies/（凭证，�
 	$(PYTHON) -X utf8 tools/refresh_bridge_cookies.py
 
 # ---------------------------------------------------------------------------
+# 报告生成（T5.4）
+# ---------------------------------------------------------------------------
+.PHONY: reports
+reports:  ## 把一次报告生成转交给 ported/reports/ 的 V1 脚本（成败按产物判，不看退出码）
+# 薄壳自己 in 门禁（tools/** ≥90%），搬进来的三份脚本不在（ADR-0018）。
+# 三个子命令：prepare（输入包）/ render（HTML 报告）/ dashboard（洞察看板）。
+# 输入是 **V1 那座独立镜像库**，V2 今天没有它 —— 缺了就如实红，不伪造产物。
+#   make reports ARGS="dashboard --db /e/…/feishu-base.sqlite3 --days 7"
+#   make reports ARGS="prepare --window daily --db … --manifest-dir …"
+# 没装 make 时照 recipe 那一行直接跑（AGENTS.md §4）。
+	$(PYTHON) -X utf8 tools/render_reports.py $(ARGS)
+
+# ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
 .PHONY: gen-api clean help
