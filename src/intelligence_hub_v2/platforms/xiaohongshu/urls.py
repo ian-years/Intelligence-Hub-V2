@@ -28,10 +28,23 @@ __all__ = [
     "build_profile_url",
     "extract_note_id",
     "extract_user_id",
+    "is_share_link",
     "note_id_from_timestamp",
     "parse_publish_time",
     "published_at_from_note_id",
 ]
+
+_SHARE_LINK_HOSTS: tuple[str, ...] = ("xhslink.com", "xhslink.cn")
+"""小红书分享短链的域名。
+
+**V1 没有这一条**（`extract_user_id` 直接吃长链接），所以这不是"移植来的行为"，
+而是 V2 补的一个门：短链里没有任何身份信息，拿它当 `platform_id` 入库就是 V1 §7.1
+在抖音那一侧踩过的同一个坑（"回写命中 1 条但其实只刷了 updated_at"，博主资料永远落不上去，
+而且不报错）。适配器用它决定"要不要先跟一次 302"。
+
+域名表放在这里而不是正则里散着：这一族 host 会加（`.cn` 就是后加的），
+散着写的下场是"有一条路没认出来，症状是把短链原样存进库"。
+"""
 
 NOTE_ID_PATTERN = re.compile(r"[0-9a-zA-Z]{18,}")
 """笔记 ID 的形状：**至少** 18 位字母数字（V1 同一条）。
@@ -106,6 +119,16 @@ def extract_note_id(value: object) -> str:
         if NOTE_ID_PATTERN.fullmatch(candidate):
             return str(candidate)
     return ""
+
+
+def is_share_link(value: object) -> bool:
+    """这串像不像一条**分享短链**（`xhslink.com/<码>`）。
+
+    只判 host，不判"码"长什么样：短码的形状是平台的私产，猜它会得到一个"看着不像短链
+    于是没跟 302"的静默失败 —— 那正是 §7.1 那一族的成因。认不准宁可多跟一次跳转。
+    """
+    text = str(value or "").strip().lower()
+    return any(host in text for host in _SHARE_LINK_HOSTS)
 
 
 def extract_user_id(value: object) -> str:

@@ -151,8 +151,8 @@ TASKS: dict[str, TaskDefinition] = {
         requires=("cdp_bridge",),
         timeout_seconds=1800,
         cancellable=True,
-        runner=_not_implemented("xiaohongshu_collect"),
-        implemented=False,
+        runner=make_collect_handler("xiaohongshu"),
+        implemented=True,
     ),
     "youtube_collect": TaskDefinition(
         name="youtube_collect",

@@ -23,6 +23,7 @@ __all__ = ["PLATFORM_HOST_SUFFIXES", "canonical_video_url", "detect_platform"]
 
 PLATFORM_HOST_SUFFIXES: dict[str, tuple[str, ...]] = {
     "douyin": ("douyin.com", "iesdouyin.com"),
+    "xiaohongshu": ("xiaohongshu.com", "xhslink.com"),
     "bilibili": ("bilibili.com", "b23.tv"),
 }
 """平台 → 允许的主机名后缀。与 `config/platforms.yaml` 的 key、注册表 name 同一批名字。
@@ -34,6 +35,7 @@ V2.0 只有这两个（`ADR-0010`）。小红书 / YouTube 进来时在这里加
 _VIDEO_URL_TEMPLATE: dict[str, str] = {
     "bilibili": "https://www.bilibili.com/video/{id}",
     "douyin": "https://www.douyin.com/video/{id}",
+    "xiaohongshu": "https://www.xiaohongshu.com/explore/{id}",
 }
 
 

@@ -32,6 +32,7 @@ from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.media import SingleFileArtifact, VideoAudioPairArtifact
 from intelligence_hub_v2.models.video import VideoMeta
+from intelligence_hub_v2.platforms import PLATFORM_CONFIG_SCHEMAS
 from intelligence_hub_v2.platforms.base import AdapterDeps, PlatformAdapter
 from intelligence_hub_v2.platforms.bilibili import listing, subtitles
 from intelligence_hub_v2.platforms.bilibili import media as bili_media
@@ -1075,7 +1076,12 @@ def make_douyin_without_ytdlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 class TestContractShape:
     def test_registered_under_the_platform_name(self) -> None:
         assert PLATFORMS["bilibili"] is BilibiliAdapter
-        assert set(PLATFORMS) == {"douyin", "bilibili"}
+        # **关系**而不是名单：适配器表的 key 必须与配置 schema 表的 key 一模一样。
+        # 原来这里写死 `{"douyin", "bilibili"}`，于是它同时承担两件事 —— 既查"两边一致"
+        # 又当"今天有哪几家的快照"。结果每注册一个平台都要来改一次这个**B站文件**，
+        # 而漏改的红长得像"B站 的测试坏了"。名单快照那份留在
+        # `tests/unit/platforms/test_registry.py`（那才是它该在的地方），这里只留判据。
+        assert set(PLATFORMS) == set(PLATFORM_CONFIG_SCHEMAS)
 
     def test_satisfies_the_protocol(self, tmp_path: Path) -> None:
         adapter: PlatformAdapter = make_adapter(tmp_path)

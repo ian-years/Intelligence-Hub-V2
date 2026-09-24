@@ -15,6 +15,7 @@ import pytest
 from intelligence_hub_v2.core import config as config_module
 from intelligence_hub_v2.core.config import AppConfig, ConfigManager, load_app_config
 from intelligence_hub_v2.errors import ConfigError
+from intelligence_hub_v2.platforms import PLATFORM_CONFIG_SCHEMAS
 from intelligence_hub_v2.platforms.base import Capabilities, PlatformConfig, RateLimitConfig
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
 from intelligence_hub_v2.platforms.douyin.config import DouyinConfig
@@ -544,9 +545,11 @@ def test_shipped_config_files_load() -> None:
     assert cfg.data.dir == Path("data")
     assert cfg.scheduler.task_timeout_seconds["preflight"] == 30
 
-    # V2.0 只注册抖音 + B站
-    assert mgr.platform_names() == ["douyin", "bilibili"]
-    assert mgr.enabled_platforms() == ["douyin", "bilibili"]
+    # 注册顺序 = `PLATFORM_CONFIG_SCHEMAS` 的顺序 = `/api/platforms` 给前端的顺序。
+    # 这一串是**发货配置的快照**：加平台必须同时改这里，红是设计出来的（不是脆），
+    # 因为它挡的是"改了代码忘了改仓库里那份 config/platforms.yaml"（或反过来）。
+    assert mgr.platform_names() == ["douyin", "bilibili", "xiaohongshu"]
+    assert mgr.enabled_platforms() == ["douyin", "bilibili", "xiaohongshu"]
     # 发货的 YAML 里不许再躺着一个没人读的键（extra="forbid" 会当场红，
     # 但这条断言的红比 ConfigError 好读得多）
     raw = (Path("config/platforms.yaml")).read_text(encoding="utf-8")
@@ -564,19 +567,30 @@ def test_shipped_config_files_load() -> None:
     assert bili.prefer_subtitles is True
 
 
-def test_shipped_config_has_no_unregistered_platform_sections() -> None:
-    """小红书 / YouTube 在 V2.1 才注册，它们的段必须是**注释掉的**，不是被静默忽略。
+def test_only_the_still_unregistered_platform_stays_commented_out() -> None:
+    """`platforms.yaml` 里"活着的段"必须**正好**等于注册表里的平台，一家不多一家不少。
 
-    配置层对未注册平台名是硬失败，所以这条与上一条一起构成"新克隆能起服务"的保证。
+    两个方向都要挡，因为后果不同：
+    - 段活着而代码没注册 → 配置层硬失败（`ConfigError`），新克隆的仓库起不来；
+    - 代码注册了而段还是注释 → 这个平台在 `/api/platforms` 里存在却读不到配置，
+      装配时炸在"注册了但没有配置对象"那句上（`PlatformRegistry.get` 的 P1-4 那条红）。
+      小红书在 T2.1 落地时踩的就是第二种：注册表放开了、yaml 忘了放开。
+
+    判据取"有效行的集合 == `PLATFORM_CONFIG_SCHEMAS`"，不是一张手写名单 ——
+    手写名单每加一个平台都要改两处，早晚会与代码分叉。youtube 仍注释着（T2.2）。
     """
     raw = (SHIPPED_CONFIG_DIR / "platforms.yaml").read_text(encoding="utf-8")
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#") or not stripped:
-            continue
-        if stripped.startswith("xiaohongshu:") or stripped.startswith("youtube:"):
-            msg = f"V2.0 未注册的平台出现在 platforms.yaml 的有效行里: {stripped}"
-            raise AssertionError(msg)
+    live = {
+        line.rstrip()[:-1]
+        for line in raw.splitlines()
+        # 只数**顶格**那一层的键：`advanced:` / `rate_limit:` 同样是"以冒号结尾的非注释行"，
+        # 把嵌套键算进来会让这条永远对不上，而报出来的差异看着像"平台表错了"。
+        if line[:1] not in ("", "#", " ", "\t") and line.rstrip().endswith(":")
+    }
+    assert live == set(PLATFORM_CONFIG_SCHEMAS), (
+        f"yaml 里活着的段 {sorted(live)} 与注册表 {sorted(PLATFORM_CONFIG_SCHEMAS)} 不一致"
+    )
+    assert "youtube" not in live
 
 
 def test_shipped_platforms_yaml_survives_write_roundtrip(tmp_path: Path) -> None:

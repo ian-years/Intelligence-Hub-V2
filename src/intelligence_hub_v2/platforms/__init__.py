@@ -6,9 +6,8 @@ V2 的纪律：**显式注册表**，不搞 import 时自动发现的魔法（AD
 2. `config/platforms.yaml` 的顶层 key
 3. 前端平台开关的 id
 
-V2.0 只注册 douyin + bilibili。xiaohongshu / youtube 在 V2.1 进来
-（ADR-0010 ROADMAP），目录已经建好但**不注册** —— 注册了却没有实现
-等于对前端撒谎。
+V2.1 注册了 douyin + bilibili + xiaohongshu；youtube 仍未注册 ——
+注册了却没有实现等于对前端撒谎（`platforms/youtube/` 目录已经在那儿了）。
 """
 
 from __future__ import annotations
@@ -25,10 +24,16 @@ from intelligence_hub_v2.platforms.base import (
 )
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliAdvanced, BilibiliConfig
 from intelligence_hub_v2.platforms.douyin.config import DouyinAdvanced, DouyinConfig
+from intelligence_hub_v2.platforms.xiaohongshu.config import (
+    XiaohongshuAdvanced,
+    XiaohongshuConfig,
+)
 
 PLATFORM_CONFIG_SCHEMAS: dict[str, type[PlatformConfig]] = {
     "douyin": DouyinConfig,
     "bilibili": BilibiliConfig,
+    # V2.1 T2.1。顺序 = 注册顺序 = `/api/platforms` 与 `supported_platforms()` 的顺序。
+    "xiaohongshu": XiaohongshuConfig,
 }
 """平台名 → 配置模型类。`/api/platforms/{name}/schema` 就是查这张表。"""
 
@@ -78,6 +83,9 @@ __all__ = [
     "MediaStrategy",
     "PlatformConfig",
     "RateLimitConfig",
+    "XiaohongshuAdapter",
+    "XiaohongshuAdvanced",
+    "XiaohongshuConfig",
     "config_schema_for",
     "default_display_name",
     "platform_defaults",
@@ -101,3 +109,6 @@ __all__ = [
 #
 from intelligence_hub_v2.platforms.bilibili.adapter import BilibiliAdapter  # noqa: E402
 from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter  # noqa: E402
+from intelligence_hub_v2.platforms.xiaohongshu.adapter import (  # noqa: E402
+    XiaohongshuAdapter,
+)

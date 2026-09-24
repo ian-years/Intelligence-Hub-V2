@@ -51,9 +51,14 @@ from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
 from intelligence_hub_v2.infra.cookies import CookieManager
 from intelligence_hub_v2.platforms.bilibili.urls import BILI_COOKIE_DOMAIN
 from intelligence_hub_v2.platforms.douyin.media import DOUYIN_COOKIE_DOMAIN
+from intelligence_hub_v2.platforms.xiaohongshu.media import XHS_COOKIE_DOMAIN
 from intelligence_hub_v2.storage.files import FileStorage
 
-DEFAULT_DOMAINS: tuple[str, ...] = (DOUYIN_COOKIE_DOMAIN, BILI_COOKIE_DOMAIN)
+DEFAULT_DOMAINS: tuple[str, ...] = (
+    DOUYIN_COOKIE_DOMAIN,
+    BILI_COOKIE_DOMAIN,
+    XHS_COOKIE_DOMAIN,
+)
 """V2 今天**有适配器在读**的那些 cookie 域。加平台时改这里一处，别在调用方各写一份。"""
 
 __all__ = ["DEFAULT_DOMAINS", "main", "refresh_domains"]

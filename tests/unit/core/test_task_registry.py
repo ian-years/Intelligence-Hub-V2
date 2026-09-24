@@ -22,17 +22,18 @@ from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
 from intelligence_hub_v2.platforms.douyin.config import DouyinConfig
 from intelligence_hub_v2.platforms.registry import PlatformRegistry
 
-V2_IMPLEMENTED = {
+IMPLEMENTED_NOW = {
     "preflight",
     "douyin_collect",
     "bilibili_collect",
+    "xiaohongshu_collect",
     "single_link",
     "add_creator",
     "postprocess",
 }
 
 
-def test_twelve_registered_six_implemented() -> None:
+def test_twelve_registered_seven_implemented() -> None:
     assert set(TASKS) == {
         "preflight",
         "douyin_collect",
@@ -48,7 +49,7 @@ def test_twelve_registered_six_implemented() -> None:
         "migrate_from_v1",
     }
     implemented = {name for name, d in TASKS.items() if d.implemented}
-    assert implemented == V2_IMPLEMENTED
+    assert implemented == IMPLEMENTED_NOW
 
 
 def test_registry_name_matches_definition_name() -> None:

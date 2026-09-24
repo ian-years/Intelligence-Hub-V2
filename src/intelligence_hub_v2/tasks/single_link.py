@@ -25,6 +25,7 @@ from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.event import EventType
 from intelligence_hub_v2.models.task import TaskResult
 from intelligence_hub_v2.models.video import VideoMeta
+from intelligence_hub_v2.platforms.xiaohongshu.urls import extract_note_id
 from intelligence_hub_v2.tasks.collect import build_video_draft
 from intelligence_hub_v2.tasks.dispatch import canonical_video_url, detect_platform
 from intelligence_hub_v2.tasks.params import SingleLinkParams
@@ -123,6 +124,12 @@ def _extract_video_id(platform: str, url: str) -> str:
         match = _BVID.search(url)
         if match is not None:
             return match.group(1)
+    elif platform == "xiaohongshu":
+        # **不在这里再抄一份 note_id 的形状**：`{18,}` 那条规则住在
+        # `platforms/xiaohongshu/urls.py`，两处各写一遍迟早会漂成"任务认得出而适配器认不出"。
+        found = extract_note_id(url)
+        if found:
+            return found
     elif platform == "douyin":
         match = _AWEME.search(url)
         if match is not None:

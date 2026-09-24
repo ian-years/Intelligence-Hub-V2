@@ -55,5 +55,8 @@ def test_canonical_video_url_roundtrips() -> None:
 
 
 def test_canonical_video_url_unknown_platform_raises() -> None:
+    # 样本必须是**真的没注册**的平台。T2.1 之前用 xiaohongshu 是随手挑的一个"还不认识的名字"，
+    # 小红书注册进来之后它就成了合法值 —— 这条会退化成"测了个不存在的情况却仍然绿"。
+    # 换成 youtube：它是下一个要落地的（T2.2），到时候这一格还得再翻一次，那是设计好的红。
     with pytest.raises(PlatformError):
-        canonical_video_url("xiaohongshu", "abc")
+        canonical_video_url("youtube", "abc")

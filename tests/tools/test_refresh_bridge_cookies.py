@@ -40,7 +40,8 @@ from intelligence_hub_v2.bridge.server import BridgeHandler  # noqa: E402
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient  # noqa: E402
 from intelligence_hub_v2.infra.cookies import COOKIE_FILE_HEADER, CookieManager  # noqa: E402
 from intelligence_hub_v2.platforms.bilibili.urls import BILI_COOKIE_DOMAIN  # noqa: E402
-from intelligence_hub_v2.platforms.douyin.media import DOUYIN_COOKIE_DOMAIN  # noqa: E402
+from intelligence_hub_v2.platforms.douyin.media import DOUYIN_COOKIE_DOMAIN
+from intelligence_hub_v2.platforms.xiaohongshu.media import XHS_COOKIE_DOMAIN  # noqa: E402
 from intelligence_hub_v2.storage.files import FileStorage  # noqa: E402
 from refresh_bridge_cookies import (  # noqa: E402 - 上面那行 sys.path 是这条路必需的形状
     DEFAULT_DOMAINS,
@@ -100,7 +101,15 @@ def test_the_default_domains_are_the_platforms_own_constants() -> None:
         for match in _DOMAIN_CONST.findall(path.read_text(encoding="utf-8"))
     }
     assert declared, "一个 `*_COOKIE_DOMAIN` 都没扫到 —— 那是这条判据坏了，不是工具坏了"
-    assert set(DEFAULT_DOMAINS) == declared == {DOUYIN_COOKIE_DOMAIN, BILI_COOKIE_DOMAIN}
+    assert (
+        set(DEFAULT_DOMAINS)
+        == declared
+        == {
+            DOUYIN_COOKIE_DOMAIN,
+            BILI_COOKIE_DOMAIN,
+            XHS_COOKIE_DOMAIN,
+        }
+    )
 
 
 def test_the_default_domain_files_are_what_the_ladder_looks_for(tmp_path: Path) -> None:
@@ -108,6 +117,7 @@ def test_the_default_domain_files_are_what_the_ladder_looks_for(tmp_path: Path) 
     assert {files.cookies_path(domain).name for domain in DEFAULT_DOMAINS} == {
         "douyin.com.txt",
         "bilibili.com.txt",
+        "xiaohongshu.com.txt",
     }
 
 

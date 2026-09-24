@@ -15,11 +15,19 @@ from intelligence_hub_v2.api.deps import AppState
 pytestmark = pytest.mark.integration
 
 
-async def test_list_platforms(client: httpx.AsyncClient) -> None:
+async def test_list_platforms(client: httpx.AsyncClient, app_state: AppState) -> None:
+    """端点列的平台 = 这份 fixture 配置里的平台，一家不多不少。
+
+    判据从 **state 的配置**推，不是写死名单：写死的那份每注册一个平台就要来改一次，
+    而漏改的红长得像"端点坏了"，实际是名单过期。这里比的是"接口说的"与
+    "配置层认为自己装了哪些"是不是同一件事 —— 那才是这条要看的东西。
+    """
     resp = await client.get("/api/platforms")
     assert resp.status_code == 200
-    names = {p["name"] for p in resp.json()["platforms"]}
-    assert names == {"douyin", "bilibili"}
+    body = resp.json()["platforms"]
+    assert {p["name"] for p in body} == set(app_state.config_manager.platform_names())
+    # 每一项都要能回答"实没实现"：前端靠这一位决定要不要给"跑一次"按钮。
+    assert all({"name", "display_name", "enabled", "implemented"} <= set(p) for p in body)
 
 
 async def test_platform_schema_is_json_schema(client: httpx.AsyncClient) -> None:
@@ -31,8 +39,10 @@ async def test_platform_schema_is_json_schema(client: httpx.AsyncClient) -> None
 
 
 async def test_unknown_platform_404(client: httpx.AsyncClient) -> None:
-    assert (await client.get("/api/platforms/xiaohongshu/schema")).status_code == 404
-    assert (await client.get("/api/platforms/xiaohongshu/config")).status_code == 404
+    # 样本要挑**真的还没注册**的那家。T2.1 之前 xiaohongshu 是"未注册"的现成例子，
+    # 注册进来之后它就成了合法值 —— 这条如果继续用它就会悄悄退化成"什么都没测"。
+    assert (await client.get("/api/platforms/youtube/schema")).status_code == 404
+    assert (await client.get("/api/platforms/youtube/config")).status_code == 404
 
 
 async def test_get_platform_config_with_health(client, app_state: AppState) -> None:

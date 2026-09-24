@@ -115,23 +115,30 @@ bilibili:
 # 这两段**故意注释掉**：配置层对未注册的平台名是硬失败（ConfigError），
 # 留着不注释 = 新克隆的仓库起不来。V2.1 注册适配器时把注释放开即可。
 #
-# xiaohongshu:
-#   enabled: true
-#   display_name: "小红书"
-#   cookies_file: "data/cookies/xiaohongshu.com.txt"
-#   use_cdp_bridge: true                        # 列表枚举与详情都走桥
-#   media_strategy: "yt_dlp"
-#   list_strategy: "browser_scroll"
-#   videos_per_creator: 30
-#   rate_limit:
-#     per_minute: 20
-#     per_creator_seconds: 3
-#   advanced:
-#     retry_max: 3
-#     retry_backoff_seconds: 2
-#     request_timeout_seconds: 30
-#     include_image_notes: true                 # 是否收图文笔记
-#
+xiaohongshu:
+  enabled: true
+  display_name: "小红书"
+  # Netscape cookie 文件，由 tools/refresh_bridge_cookies.py 从桥导出。
+  # 文件不在不是错误：导出档被跳过，桥里那份登录态照样能用（docs/adr/0011）。
+  cookies_file: "data/cookies/xiaohongshu.com.txt"
+  # 列表枚举、笔记详情、按名搜主页都走桥的页面上下文 —— 站外接口拿不到。
+  use_cdp_bridge: true
+  # 与抖音同一形状：yt-dlp 先试，失败退页面给的 masterUrl / 原图直链。
+  # 视频笔记上 yt-dlp 经常产不出东西，所以"退直链"是常态而不是故障。
+  media_strategy: "yt_dlp_with_fallback"
+  list_strategy: "browser_scroll"
+  videos_per_creator: 30
+  # 小红书的主页是异步水合的，比抖音更容易撞风控墙：节奏比抖音慢一档是有意的。
+  # 阶梯顺序**不在这里**，见 XiaohongshuAdapter.capabilities.cookie_variants。
+  ytdlp_cookies_from_browser: null
+  fallback_to_page_play_url: true
+  rate_limit:
+    per_minute: 20
+    per_creator_seconds: 3
+  advanced:
+    include_image_notes: true
+    sort_notes_by: "page_order"
+    max_images_per_note: 9
 # youtube:
 #   enabled: false                              # 默认关：V1 §6 实测本机网络不可达
 #   display_name: "YouTube"

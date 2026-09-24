@@ -16,12 +16,16 @@ async def test_list_tasks_shows_v2_implemented(client: httpx.AsyncClient) -> Non
         "preflight",
         "douyin_collect",
         "bilibili_collect",
+        "xiaohongshu_collect",
         "single_link",
         "add_creator",
         "postprocess",
     } <= names
-    # 未实现 / 未移植平台的任务不该出现在列表里（不撒谎原则）
-    assert "xiaohongshu_collect" not in names
+    # 未实现 / 未移植平台的任务不该出现在列表里（不撒谎原则）。
+    # `xiaohongshu_collect` 在 T2.1 之前是这一条的现成样本，现在它有真 handler 了 ——
+    # 继续拿它当"不该出现"的例子就会悄悄变成零断言。样本换成 youtube_collect：
+    # 它是下一个要落地的（T2.2），届时这一格还得再翻，那是设计出来的红。
+    assert "youtube_collect" not in names
     assert "all_platforms" not in names
 
 
