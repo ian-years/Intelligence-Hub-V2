@@ -30,6 +30,70 @@
         "title": "AddCreatorRequest",
         "type": "object"
       },
+      "BenchmarkAnalysis": {
+        "description": "一条口播稿的完整拆解结果（纯函数产物，V2 不落库）。",
+        "properties": {
+          "creator": {
+            "title": "Creator",
+            "type": "string"
+          },
+          "dos_and_donts": {
+            "$ref": "#/components/schemas/DosAndDonts"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "handoff": {
+            "$ref": "#/components/schemas/CreationHandoff"
+          },
+          "hook": {
+            "$ref": "#/components/schemas/HookBreakdown"
+          },
+          "line_by_line": {
+            "items": {
+              "$ref": "#/components/schemas/LineBreakdown"
+            },
+            "title": "Line By Line",
+            "type": "array"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "structure_progression": {
+            "$ref": "#/components/schemas/StructureProgression"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "total_chars": {
+            "description": "所有有效行的字符总数（不含换行）。V1 误名为 totalWords。",
+            "title": "Total Chars",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "title",
+          "creator",
+          "platform",
+          "duration_seconds",
+          "total_chars",
+          "hook",
+          "line_by_line",
+          "structure_progression",
+          "dos_and_donts",
+          "handoff"
+        ],
+        "title": "BenchmarkAnalysis",
+        "type": "object"
+      },
       "CancelResponse": {
         "properties": {
           "cancelled": {
@@ -110,6 +174,56 @@
         "title": "ConfigUpdateResponse",
         "type": "object"
       },
+      "CreationHandoff": {
+        "description": "交给下游二创的交接包。",
+        "properties": {
+          "core_contradiction": {
+            "description": "= hook.promise。",
+            "title": "Core Contradiction",
+            "type": "string"
+          },
+          "creator": {
+            "title": "Creator",
+            "type": "string"
+          },
+          "key_takeaways": {
+            "description": "前 3 条被评成『可复用』的原句。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Key Takeaways",
+            "type": "array"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "recommended_mode": {
+            "description": "SHORT / LONG。",
+            "title": "Recommended Mode",
+            "type": "string"
+          },
+          "recommended_template": {
+            "title": "Recommended Template",
+            "type": "string"
+          },
+          "source_title": {
+            "title": "Source Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_title",
+          "creator",
+          "platform",
+          "recommended_mode",
+          "recommended_template",
+          "core_contradiction",
+          "key_takeaways"
+        ],
+        "title": "CreationHandoff",
+        "type": "object"
+      },
       "Creator": {
         "description": "DB 行（creators 表的 Pydantic 映射）。\n\nV1 §7.24 看护：is_tracking 必须真布尔，DB 层有 CHECK (is_tracking IN (0, 1))。",
         "properties": {
@@ -188,6 +302,339 @@
         "title": "Creator",
         "type": "object"
       },
+      "DosAndDonts": {
+        "properties": {
+          "avoid": {
+            "description": "避坑清单（规范常量，每条视频相同）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoid",
+            "type": "array"
+          },
+          "borrow": {
+            "description": "可借鉴清单（规范常量，每条视频相同）。",
+            "items": {
+              "type": "string"
+            },
+            "title": "Borrow",
+            "type": "array"
+          }
+        },
+        "required": [
+          "borrow",
+          "avoid"
+        ],
+        "title": "DosAndDonts",
+        "type": "object"
+      },
+      "DraftCreate": {
+        "properties": {
+          "content": {
+            "description": "整篇正文，入库而不是落文件",
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "source_video_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "来源作品；删作品时这一列变 NULL，草稿不跟着删",
+            "title": "Source Video Id"
+          },
+          "status": {
+            "default": "draft",
+            "description": "draft / published / archived",
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "description": "草稿标题",
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "title": "DraftCreate",
+        "type": "object"
+      },
+      "DraftRecord": {
+        "description": "`drafts` 的 DB 行。",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "source_video_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Video Id"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "content",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DraftRecord",
+        "type": "object"
+      },
+      "DraftScript": {
+        "description": "一份二创脚本。字段是 V1 的形状（键名换成 snake_case）。",
+        "properties": {
+          "beats": {
+            "items": {
+              "$ref": "#/components/schemas/ScriptBeat"
+            },
+            "title": "Beats",
+            "type": "array"
+          },
+          "beats_template_key": {
+            "description": "**实际用了哪张分镜表**。`tool_demo` 没有自己的表，它的产出与 `tutorial_save_loop` 一字不差 —— 这个字段就是让那次降级看得见。",
+            "title": "Beats Template Key",
+            "type": "string"
+          },
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/ScriptCard"
+            },
+            "title": "Cards",
+            "type": "array"
+          },
+          "estimated_duration_seconds": {
+            "description": "总口播字数 / 4.0 取整，是换算不是测量。",
+            "title": "Estimated Duration Seconds",
+            "type": "integer"
+          },
+          "film_job": {
+            "title": "Film Job",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "script_markdown": {
+            "description": "完整的 script.md（V1 落盘的就是这一段）。",
+            "title": "Script Markdown",
+            "type": "string"
+          },
+          "teleprompter_text": {
+            "description": "纯提词器正文：`Sxx｜口播`，句间空行。",
+            "title": "Teleprompter Text",
+            "type": "string"
+          },
+          "template_key": {
+            "title": "Template Key",
+            "type": "string"
+          },
+          "template_name": {
+            "title": "Template Name",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "total_beats": {
+            "title": "Total Beats",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "title",
+          "mode",
+          "template_key",
+          "template_name",
+          "film_job",
+          "beats_template_key",
+          "total_beats",
+          "estimated_duration_seconds",
+          "beats",
+          "cards",
+          "teleprompter_text",
+          "script_markdown"
+        ],
+        "title": "DraftScript",
+        "type": "object"
+      },
+      "DraftScriptRequest": {
+        "description": "`POST /api/generate-draft-script` 的 body。",
+        "properties": {
+          "custom_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "V1 有这个字段但从未生效。今天非空即 422，不装。",
+            "title": "Custom Instructions"
+          },
+          "mode": {
+            "default": "SHORT",
+            "description": "回执字段，不改变分镜数量；要更短的本子请换 `short_fast`。",
+            "enum": [
+              "SHORT",
+              "LONG"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "template_key": {
+            "default": "tutorial_save_loop",
+            "description": "四张模板之一：tutorial_save_loop、judgment_first、tool_demo、short_fast。",
+            "enum": [
+              "tutorial_save_loop",
+              "judgment_first",
+              "tool_demo",
+              "short_fast"
+            ],
+            "title": "Template Key",
+            "type": "string"
+          },
+          "topic": {
+            "default": "",
+            "description": "要写的主题。空则取 `video_id` 那条作品的标题。",
+            "maxLength": 200,
+            "title": "Topic",
+            "type": "string"
+          },
+          "video_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "只为拿标题而存在；这个端点不读那条作品的口播稿（见模块 docstring）。",
+            "title": "Video Id"
+          }
+        },
+        "title": "DraftScriptRequest",
+        "type": "object"
+      },
+      "DraftUpdate": {
+        "description": "部分更新。**没带的字段不动**，所以四个键都默认 `None` = \"我没说要改这个\"。\n\n`content=None` 与 `content=\"\"` 是两回事：前者是\"不改正文\"，后者过不了这里的\n`min_length=1`（422），再往下也过不了 `DraftInput` 的空白判 —— 想清空正文\n今天没有入口，那是\"删掉这篇稿子\"而不是\"把它写成空的\"。",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "source_video_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "换一篇来源作品；不传＝不动这一列（解除关联要删了重建）",
+            "title": "Source Video Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "draft",
+                  "published",
+                  "archived"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "draft / published / archived",
+            "title": "Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "DraftUpdate",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -236,6 +683,103 @@
           "reason"
         ],
         "title": "HideRequest",
+        "type": "object"
+      },
+      "HookBreakdown": {
+        "description": "开篇黄金钩子的剖析。",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "promise": {
+            "description": "核心承诺：首句超过 6 个字时就是首句本身（去掉句末标点）。",
+            "title": "Promise",
+            "type": "string"
+          },
+          "punch_score": {
+            "description": "92（首句 ≤35 字）或 85（更长），空稿兜底 60。规则常数，不是测量。",
+            "title": "Punch Score",
+            "type": "integer"
+          },
+          "sentence": {
+            "description": "稿子的第一行（钩子本体）。",
+            "title": "Sentence",
+            "type": "string"
+          },
+          "type": {
+            "description": "命中的钩子模式名；5 条都不中时是『悬念吸引型』。",
+            "title": "Type",
+            "type": "string"
+          },
+          "visible_evidence": {
+            "description": "开场建议配的视觉素材（按标题关键词二选一）。",
+            "title": "Visible Evidence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentence",
+          "type",
+          "description",
+          "promise",
+          "visible_evidence",
+          "punch_score"
+        ],
+        "title": "HookBreakdown",
+        "type": "object"
+      },
+      "LineBreakdown": {
+        "description": "一行口播的职能拆解。",
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "reusable": {
+            "title": "Reusable",
+            "type": "string"
+          },
+          "role": {
+            "description": "职能说明文案，V1 的 `role` 字段（它给的就是这句文案）。",
+            "title": "Role",
+            "type": "string"
+          },
+          "role_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "职能表里的键（hook/problem/…）；走进度兜底时没有键，为 null。",
+            "title": "Role Key"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "推算的 mm:ss 起点，按语速累计，不是稿子里的时间戳。",
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "visual": {
+            "title": "Visual",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "timestamp",
+          "sentence",
+          "role",
+          "visual",
+          "reusable"
+        ],
+        "title": "LineBreakdown",
         "type": "object"
       },
       "ManifestRecord": {
@@ -365,6 +909,40 @@
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
+          },
+          "health_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Checked At"
+          },
+          "health_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Detail"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
           },
           "implemented": {
             "title": "Implemented",
@@ -611,6 +1189,65 @@
         "title": "ScheduleUpdateResponse",
         "type": "object"
       },
+      "ScriptBeat": {
+        "properties": {
+          "channel": {
+            "description": "三通道之一：真人出镜＋动效 / 真实录屏 / 全屏AI视频。",
+            "title": "Channel",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "speech": {
+            "description": "这一句的口播原文 —— 它一定来自分镜表，不来自模型。",
+            "title": "Speech",
+            "type": "string"
+          },
+          "visual_cue": {
+            "description": "内联画面指示，V1 的 `visualCue`（【画面：…】）。",
+            "title": "Visual Cue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel",
+          "visual_cue",
+          "speech"
+        ],
+        "title": "ScriptBeat",
+        "type": "object"
+      },
+      "ScriptCard": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "type",
+          "content"
+        ],
+        "title": "ScriptCard",
+        "type": "object"
+      },
       "SingleLinkParams": {
         "description": "收一条作品（`single_link`）：解析链接 → 判平台 → 走对应适配器。",
         "properties": {
@@ -624,6 +1261,61 @@
           "url"
         ],
         "title": "SingleLinkParams",
+        "type": "object"
+      },
+      "StructureBeat": {
+        "properties": {
+          "core_job": {
+            "title": "Core Job",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "time_range": {
+            "description": "V1 的硬编码时间轴 —— 与这条视频的实际时长无关。",
+            "title": "Time Range",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "time_range",
+          "core_job"
+        ],
+        "title": "StructureBeat",
+        "type": "object"
+      },
+      "StructureProgression": {
+        "properties": {
+          "beats": {
+            "items": {
+              "$ref": "#/components/schemas/StructureBeat"
+            },
+            "title": "Beats",
+            "type": "array"
+          },
+          "density": {
+            "title": "Density",
+            "type": "string"
+          },
+          "proof_moment": {
+            "title": "Proof Moment",
+            "type": "string"
+          },
+          "reward_cadence": {
+            "title": "Reward Cadence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "beats",
+          "density",
+          "reward_cadence",
+          "proof_moment"
+        ],
+        "title": "StructureProgression",
         "type": "object"
       },
       "TaskAccepted": {
@@ -793,6 +1485,87 @@
           "started_at"
         ],
         "title": "TaskRunRecord",
+        "type": "object"
+      },
+      "Topic": {
+        "description": "`topics` 的 DB 行。",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "title": "Topic",
+        "type": "object"
+      },
+      "TopicCreate": {
+        "description": "新建选题的入参。`name` 的空判在 `TopicDraft` 里，不在这里重复一遍。",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "description": "选题名，全库唯一",
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TopicCreate",
+        "type": "object"
+      },
+      "TopicUpdate": {
+        "description": "改选题。只有 `description` 可改，理由见 `TopicUpdatableFields`。\n\n这里**不区分**\"没传\"与\"传了 null\"：只有一个可改字段，`update_fields()` 又一定被调用，\n所以清空描述就是 PATCH 一个 null。草稿那张表要区分（四列里挑一列改），\n两处的形状不同是字段数不同，不是各写各的。",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "title": "TopicUpdate",
         "type": "object"
       },
       "TrackingRequest": {
@@ -1057,6 +1830,52 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/benchmark-analysis": {
+      "get": {
+        "description": "拆解一条作品。纯本地计算：不联网、不调模型、不写库。",
+        "operationId": "benchmark_analysis_api_benchmark_analysis_get",
+        "parameters": [
+          {
+            "description": "`videos.id`（整数主键，不是平台作品 ID）",
+            "in": "query",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "description": "`videos.id`（整数主键，不是平台作品 ID）",
+              "minimum": 1,
+              "title": "Video Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkAnalysis"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Benchmark Analysis",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/api/creators": {
       "get": {
         "operationId": "list_creators_api_creators_get",
@@ -1242,6 +2061,253 @@
         "summary": "Set Tracking",
         "tags": [
           "creators"
+        ]
+      }
+    },
+    "/api/drafts": {
+      "get": {
+        "description": "列表。`?status=` 不传就是全部；传了非法值由 FastAPI 的 `Literal` 校验挡成 422，\n不是一条悄悄返回空列表的查询。",
+        "operationId": "list_drafts_api_drafts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "draft",
+                    "published",
+                    "archived"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DraftRecord"
+                  },
+                  "title": "Response List Drafts Api Drafts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Drafts",
+        "tags": [
+          "drafts"
+        ]
+      },
+      "post": {
+        "operationId": "create_draft_api_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Draft",
+        "tags": [
+          "drafts"
+        ]
+      }
+    },
+    "/api/drafts/{draft_id}": {
+      "delete": {
+        "description": "真删草稿。这是**唯一**会销毁人写出来的文字的路径，所以只挂在显式 DELETE 上。",
+        "operationId": "delete_draft_api_drafts__draft_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Draft",
+        "tags": [
+          "drafts"
+        ]
+      },
+      "get": {
+        "operationId": "get_draft_api_drafts__draft_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Draft",
+        "tags": [
+          "drafts"
+        ]
+      },
+      "patch": {
+        "operationId": "update_draft_api_drafts__draft_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Draft",
+        "tags": [
+          "drafts"
         ]
       }
     },
@@ -1433,6 +2499,48 @@
         "summary": "Export Table",
         "tags": [
           "export"
+        ]
+      }
+    },
+    "/api/generate-draft-script": {
+      "post": {
+        "description": "按模板拼一份脚本。**纯本地拼装**：不联网、不调模型、不写库、不写文件。",
+        "operationId": "create_draft_script_api_generate_draft_script_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftScriptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftScript"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Draft Script",
+        "tags": [
+          "analysis"
         ]
       }
     },
@@ -2189,8 +3297,242 @@
         ]
       }
     },
+    "/api/topics": {
+      "get": {
+        "operationId": "list_topics_api_topics_get",
+        "parameters": [
+          {
+            "description": "按名字模糊匹配",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按名字模糊匹配",
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Topic"
+                  },
+                  "title": "Response List Topics Api Topics Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Topics",
+        "tags": [
+          "topics"
+        ]
+      },
+      "post": {
+        "description": "建一条选题。\n\n空白的 `name` 在 `TopicDraft` 里被拒（那里才是规则的唯一出处：库里那一半是\nUNIQUE 而不是 CHECK，空串合法，所以规则必须有人守）。这里只是把那句人话\n翻成 422，**不在 `TopicCreate` 上再抄一遍校验规则** —— 两处清单迟早漂开。",
+        "operationId": "create_topic_api_topics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Topic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Topic",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
+    "/api/topics/{topic_id}": {
+      "delete": {
+        "description": "真删。今天没有任何表引用 `topics.id`（`video_topics` 未落地，ADR-0021），\n所以删掉就是一行少一行 —— 那条前提变了要回来看 `TopicRepository.delete()`。",
+        "operationId": "delete_topic_api_topics__topic_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Topic",
+        "tags": [
+          "topics"
+        ]
+      },
+      "get": {
+        "operationId": "get_topic_api_topics__topic_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Topic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Topic",
+        "tags": [
+          "topics"
+        ]
+      },
+      "patch": {
+        "operationId": "update_topic_api_topics__topic_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopicUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Topic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Topic",
+        "tags": [
+          "topics"
+        ]
+      }
+    },
     "/api/videos": {
       "get": {
+        "description": "分页列作品。`sort=benchmark` 是\"按点赞数从大到小\"（T6.6 的爆款回溯入口用）。\n\n为什么是一个 `sort` 值而不是 `min_likes` 阈值参数：入口要回答的是\"这个人历史上\n水花最大的几条\"，而\"多少算爆款\"各家平台差一个数量级（抖音十万赞是日常，\nB 站一千算爆款）—— 阈值放进筛选器会伪装成一个平台无关的常量。排序 + `size`\n就是\"取前 N 条\"，要收紧就在界面上少列几条。",
         "operationId": "list_videos_api_videos_get",
         "parameters": [
           {
@@ -2270,6 +3612,20 @@
                 "all"
               ],
               "title": "Hidden",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "recent",
+              "enum": [
+                "recent",
+                "benchmark"
+              ],
+              "title": "Sort",
               "type": "string"
             }
           },
@@ -2458,6 +3814,63 @@
         "summary": "Hide Video",
         "tags": [
           "videos"
+        ]
+      }
+    },
+    "/api/videos/{video_id}/media": {
+      "get": {
+        "description": "播放这条作品的本地媒体（支持 Range）。",
+        "operationId": "stream_video_media_api_videos__video_id__media_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Video Media",
+        "tags": [
+          "media"
         ]
       }
     },

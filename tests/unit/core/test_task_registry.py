@@ -27,13 +27,14 @@ IMPLEMENTED_NOW = {
     "douyin_collect",
     "bilibili_collect",
     "xiaohongshu_collect",
+    "youtube_collect",
     "single_link",
     "add_creator",
     "postprocess",
 }
 
 
-def test_twelve_registered_seven_implemented() -> None:
+def test_twelve_registered_eight_implemented() -> None:
     assert set(TASKS) == {
         "preflight",
         "douyin_collect",

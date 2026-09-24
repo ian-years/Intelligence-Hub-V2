@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/benchmark-analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Benchmark Analysis
+         * @description 拆解一条作品。纯本地计算：不联网、不调模型、不写库。
+         */
+        get: operations["benchmark_analysis_api_benchmark_analysis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/creators": {
         parameters: {
             query?: never;
@@ -65,6 +85,50 @@ export interface paths {
         patch: operations["set_tracking_api_creators__creator_id__tracking_patch"];
         trace?: never;
     };
+    "/api/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Drafts
+         * @description 列表。`?status=` 不传就是全部；传了非法值由 FastAPI 的 `Literal` 校验挡成 422，
+         *     不是一条悄悄返回空列表的查询。
+         */
+        get: operations["list_drafts_api_drafts_get"];
+        put?: never;
+        /** Create Draft */
+        post: operations["create_draft_api_drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Draft */
+        get: operations["get_draft_api_drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Draft
+         * @description 真删草稿。这是**唯一**会销毁人写出来的文字的路径，所以只挂在显式 DELETE 上。
+         */
+        delete: operations["delete_draft_api_drafts__draft_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Draft */
+        patch: operations["update_draft_api_drafts__draft_id__patch"];
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -97,6 +161,26 @@ export interface paths {
         get: operations["export_table_api_export_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/generate-draft-script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Draft Script
+         * @description 按模板拼一份脚本。**纯本地拼装**：不联网、不调模型、不写库、不写文件。
+         */
+        post: operations["create_draft_script_api_generate_draft_script_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -429,6 +513,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Topics */
+        get: operations["list_topics_api_topics_get"];
+        put?: never;
+        /**
+         * Create Topic
+         * @description 建一条选题。
+         *
+         *     空白的 `name` 在 `TopicDraft` 里被拒（那里才是规则的唯一出处：库里那一半是
+         *     UNIQUE 而不是 CHECK，空串合法，所以规则必须有人守）。这里只是把那句人话
+         *     翻成 422，**不在 `TopicCreate` 上再抄一遍校验规则** —— 两处清单迟早漂开。
+         */
+        post: operations["create_topic_api_topics_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/topics/{topic_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Topic */
+        get: operations["get_topic_api_topics__topic_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Topic
+         * @description 真删。今天没有任何表引用 `topics.id`（`video_topics` 未落地，ADR-0021），
+         *     所以删掉就是一行少一行 —— 那条前提变了要回来看 `TopicRepository.delete()`。
+         */
+        delete: operations["delete_topic_api_topics__topic_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Topic */
+        patch: operations["update_topic_api_topics__topic_id__patch"];
+        trace?: never;
+    };
     "/api/videos": {
         parameters: {
             query?: never;
@@ -436,7 +568,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Videos */
+        /**
+         * List Videos
+         * @description 分页列作品。`sort=benchmark` 是"按点赞数从大到小"（T6.6 的爆款回溯入口用）。
+         *
+         *     为什么是一个 `sort` 值而不是 `min_likes` 阈值参数：入口要回答的是"这个人历史上
+         *     水花最大的几条"，而"多少算爆款"各家平台差一个数量级（抖音十万赞是日常，
+         *     B 站一千算爆款）—— 阈值放进筛选器会伪装成一个平台无关的常量。排序 + `size`
+         *     就是"取前 N 条"，要收紧就在界面上少列几条。
+         */
         get: operations["list_videos_api_videos_get"];
         put?: never;
         post?: never;
@@ -500,6 +640,26 @@ export interface paths {
         patch: operations["hide_video_api_videos__video_id__hide_patch"];
         trace?: never;
     };
+    "/api/videos/{video_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Video Media
+         * @description 播放这条作品的本地媒体（支持 Range）。
+         */
+        get: operations["stream_video_media_api_videos__video_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/videos/{video_id}/transcript": {
         parameters: {
             query?: never;
@@ -550,6 +710,33 @@ export interface components {
             /** Url */
             url: string;
         };
+        /**
+         * BenchmarkAnalysis
+         * @description 一条口播稿的完整拆解结果（纯函数产物，V2 不落库）。
+         */
+        BenchmarkAnalysis: {
+            /** Creator */
+            creator: string;
+            dos_and_donts: components["schemas"]["DosAndDonts"];
+            /** Duration Seconds */
+            duration_seconds: number;
+            handoff: components["schemas"]["CreationHandoff"];
+            hook: components["schemas"]["HookBreakdown"];
+            /** Line By Line */
+            line_by_line: components["schemas"]["LineBreakdown"][];
+            /** Platform */
+            platform: string;
+            structure_progression: components["schemas"]["StructureProgression"];
+            /** Title */
+            title: string;
+            /**
+             * Total Chars
+             * @description 所有有效行的字符总数（不含换行）。V1 误名为 totalWords。
+             */
+            total_chars: number;
+            /** Version */
+            version: string;
+        };
         /** CancelResponse */
         CancelResponse: {
             /** Cancelled */
@@ -584,6 +771,35 @@ export interface components {
              * @default false
              */
             requires_restart: boolean;
+        };
+        /**
+         * CreationHandoff
+         * @description 交给下游二创的交接包。
+         */
+        CreationHandoff: {
+            /**
+             * Core Contradiction
+             * @description = hook.promise。
+             */
+            core_contradiction: string;
+            /** Creator */
+            creator: string;
+            /**
+             * Key Takeaways
+             * @description 前 3 条被评成『可复用』的原句。
+             */
+            key_takeaways: string[];
+            /** Platform */
+            platform: string;
+            /**
+             * Recommended Mode
+             * @description SHORT / LONG。
+             */
+            recommended_mode: string;
+            /** Recommended Template */
+            recommended_template: string;
+            /** Source Title */
+            source_title: string;
         };
         /**
          * Creator
@@ -621,6 +837,177 @@ export interface components {
              */
             updated_at: string;
         };
+        /** DosAndDonts */
+        DosAndDonts: {
+            /**
+             * Avoid
+             * @description 避坑清单（规范常量，每条视频相同）。
+             */
+            avoid: string[];
+            /**
+             * Borrow
+             * @description 可借鉴清单（规范常量，每条视频相同）。
+             */
+            borrow: string[];
+        };
+        /** DraftCreate */
+        DraftCreate: {
+            /**
+             * Content
+             * @description 整篇正文，入库而不是落文件
+             */
+            content: string;
+            /**
+             * Source Video Id
+             * @description 来源作品；删作品时这一列变 NULL，草稿不跟着删
+             */
+            source_video_id?: number | null;
+            /**
+             * Status
+             * @description draft / published / archived
+             * @default draft
+             * @enum {string}
+             */
+            status: "draft" | "published" | "archived";
+            /**
+             * Title
+             * @description 草稿标题
+             */
+            title: string;
+        };
+        /**
+         * DraftRecord
+         * @description `drafts` 的 DB 行。
+         */
+        DraftRecord: {
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Source Video Id */
+            source_video_id?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "published" | "archived";
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * DraftScript
+         * @description 一份二创脚本。字段是 V1 的形状（键名换成 snake_case）。
+         */
+        DraftScript: {
+            /** Beats */
+            beats: components["schemas"]["ScriptBeat"][];
+            /**
+             * Beats Template Key
+             * @description **实际用了哪张分镜表**。`tool_demo` 没有自己的表，它的产出与 `tutorial_save_loop` 一字不差 —— 这个字段就是让那次降级看得见。
+             */
+            beats_template_key: string;
+            /** Cards */
+            cards: components["schemas"]["ScriptCard"][];
+            /**
+             * Estimated Duration Seconds
+             * @description 总口播字数 / 4.0 取整，是换算不是测量。
+             */
+            estimated_duration_seconds: number;
+            /** Film Job */
+            film_job: string;
+            /** Mode */
+            mode: string;
+            /**
+             * Script Markdown
+             * @description 完整的 script.md（V1 落盘的就是这一段）。
+             */
+            script_markdown: string;
+            /**
+             * Teleprompter Text
+             * @description 纯提词器正文：`Sxx｜口播`，句间空行。
+             */
+            teleprompter_text: string;
+            /** Template Key */
+            template_key: string;
+            /** Template Name */
+            template_name: string;
+            /** Title */
+            title: string;
+            /** Total Beats */
+            total_beats: number;
+            /** Version */
+            version: string;
+        };
+        /**
+         * DraftScriptRequest
+         * @description `POST /api/generate-draft-script` 的 body。
+         */
+        DraftScriptRequest: {
+            /**
+             * Custom Instructions
+             * @description V1 有这个字段但从未生效。今天非空即 422，不装。
+             */
+            custom_instructions?: string | null;
+            /**
+             * Mode
+             * @description 回执字段，不改变分镜数量；要更短的本子请换 `short_fast`。
+             * @default SHORT
+             * @enum {string}
+             */
+            mode: "SHORT" | "LONG";
+            /**
+             * Template Key
+             * @description 四张模板之一：tutorial_save_loop、judgment_first、tool_demo、short_fast。
+             * @default tutorial_save_loop
+             * @enum {string}
+             */
+            template_key: "tutorial_save_loop" | "judgment_first" | "tool_demo" | "short_fast";
+            /**
+             * Topic
+             * @description 要写的主题。空则取 `video_id` 那条作品的标题。
+             * @default
+             */
+            topic: string;
+            /**
+             * Video Id
+             * @description 只为拿标题而存在；这个端点不读那条作品的口播稿（见模块 docstring）。
+             */
+            video_id?: number | null;
+        };
+        /**
+         * DraftUpdate
+         * @description 部分更新。**没带的字段不动**，所以四个键都默认 `None` = "我没说要改这个"。
+         *
+         *     `content=None` 与 `content=""` 是两回事：前者是"不改正文"，后者过不了这里的
+         *     `min_length=1`（422），再往下也过不了 `DraftInput` 的空白判 —— 想清空正文
+         *     今天没有入口，那是"删掉这篇稿子"而不是"把它写成空的"。
+         */
+        DraftUpdate: {
+            /** Content */
+            content?: string | null;
+            /**
+             * Source Video Id
+             * @description 换一篇来源作品；不传＝不动这一列（解除关联要删了重建）
+             */
+            source_video_id?: number | null;
+            /**
+             * Status
+             * @description draft / published / archived
+             */
+            status?: ("draft" | "published" | "archived") | null;
+            /** Title */
+            title?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -642,6 +1029,68 @@ export interface components {
         HideRequest: {
             /** Reason */
             reason: string;
+        };
+        /**
+         * HookBreakdown
+         * @description 开篇黄金钩子的剖析。
+         */
+        HookBreakdown: {
+            /** Description */
+            description: string;
+            /**
+             * Promise
+             * @description 核心承诺：首句超过 6 个字时就是首句本身（去掉句末标点）。
+             */
+            promise: string;
+            /**
+             * Punch Score
+             * @description 92（首句 ≤35 字）或 85（更长），空稿兜底 60。规则常数，不是测量。
+             */
+            punch_score: number;
+            /**
+             * Sentence
+             * @description 稿子的第一行（钩子本体）。
+             */
+            sentence: string;
+            /**
+             * Type
+             * @description 命中的钩子模式名；5 条都不中时是『悬念吸引型』。
+             */
+            type: string;
+            /**
+             * Visible Evidence
+             * @description 开场建议配的视觉素材（按标题关键词二选一）。
+             */
+            visible_evidence: string;
+        };
+        /**
+         * LineBreakdown
+         * @description 一行口播的职能拆解。
+         */
+        LineBreakdown: {
+            /** Index */
+            index: number;
+            /** Reusable */
+            reusable: string;
+            /**
+             * Role
+             * @description 职能说明文案，V1 的 `role` 字段（它给的就是这句文案）。
+             */
+            role: string;
+            /**
+             * Role Key
+             * @description 职能表里的键（hook/problem/…）；走进度兜底时没有键，为 null。
+             */
+            role_key?: string | null;
+            /** Sentence */
+            sentence: string;
+            /**
+             * Timestamp
+             * @description 推算的 mm:ss 起点，按语速累计，不是稿子里的时间戳。
+             */
+            timestamp: string;
+            /** Visual */
+            visual: string;
         };
         /**
          * ManifestRecord
@@ -708,6 +1157,12 @@ export interface components {
             display_name: string;
             /** Enabled */
             enabled: boolean;
+            /** Health Checked At */
+            health_checked_at?: string | null;
+            /** Health Detail */
+            health_detail?: string | null;
+            /** Health Status */
+            health_status?: string | null;
             /** Implemented */
             implemented: boolean;
             /** Name */
@@ -798,6 +1253,37 @@ export interface components {
             requires_restart: boolean;
             schedule: components["schemas"]["ScheduleStatus"];
         };
+        /** ScriptBeat */
+        ScriptBeat: {
+            /**
+             * Channel
+             * @description 三通道之一：真人出镜＋动效 / 真实录屏 / 全屏AI视频。
+             */
+            channel: string;
+            /** Id */
+            id: string;
+            /**
+             * Speech
+             * @description 这一句的口播原文 —— 它一定来自分镜表，不来自模型。
+             */
+            speech: string;
+            /**
+             * Visual Cue
+             * @description 内联画面指示，V1 的 `visualCue`（【画面：…】）。
+             */
+            visual_cue: string;
+        };
+        /** ScriptCard */
+        ScriptCard: {
+            /** Content */
+            content: string;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
+        };
         /**
          * SingleLinkParams
          * @description 收一条作品（`single_link`）：解析链接 → 判平台 → 走对应适配器。
@@ -808,6 +1294,29 @@ export interface components {
              * @description 作品链接（分享短链也可以）
              */
             url: string;
+        };
+        /** StructureBeat */
+        StructureBeat: {
+            /** Core Job */
+            core_job: string;
+            /** Phase */
+            phase: string;
+            /**
+             * Time Range
+             * @description V1 的硬编码时间轴 —— 与这条视频的实际时长无关。
+             */
+            time_range: string;
+        };
+        /** StructureProgression */
+        StructureProgression: {
+            /** Beats */
+            beats: components["schemas"]["StructureBeat"][];
+            /** Density */
+            density: string;
+            /** Proof Moment */
+            proof_moment: string;
+            /** Reward Cadence */
+            reward_cadence: string;
         };
         /** TaskAccepted */
         TaskAccepted: {
@@ -884,6 +1393,48 @@ export interface components {
             summary_json?: string | null;
             /** Task Name */
             task_name: string;
+        };
+        /**
+         * Topic
+         * @description `topics` 的 DB 行。
+         */
+        Topic: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Description */
+            description?: string | null;
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+        };
+        /**
+         * TopicCreate
+         * @description 新建选题的入参。`name` 的空判在 `TopicDraft` 里，不在这里重复一遍。
+         */
+        TopicCreate: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Name
+             * @description 选题名，全库唯一
+             */
+            name: string;
+        };
+        /**
+         * TopicUpdate
+         * @description 改选题。只有 `description` 可改，理由见 `TopicUpdatableFields`。
+         *
+         *     这里**不区分**"没传"与"传了 null"：只有一个可改字段，`update_fields()` 又一定被调用，
+         *     所以清空描述就是 PATCH 一个 null。草稿那张表要区分（四列里挑一列改），
+         *     两处的形状不同是字段数不同，不是各写各的。
+         */
+        TopicUpdate: {
+            /** Description */
+            description?: string | null;
         };
         /** TrackingRequest */
         TrackingRequest: {
@@ -979,6 +1530,38 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    benchmark_analysis_api_benchmark_analysis_get: {
+        parameters: {
+            query: {
+                /** @description `videos.id`（整数主键，不是平台作品 ID） */
+                video_id: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkAnalysis"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_creators_api_creators_get: {
         parameters: {
             query?: {
@@ -1109,6 +1692,167 @@ export interface operations {
             };
         };
     };
+    list_drafts_api_drafts_get: {
+        parameters: {
+            query?: {
+                status?: ("draft" | "published" | "archived") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_draft_api_drafts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_api_drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_draft_api_drafts__draft_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_draft_api_drafts__draft_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     global_events_api_events_get: {
         parameters: {
             query?: {
@@ -1166,6 +1910,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_draft_script_api_generate_draft_script_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftScript"];
                 };
             };
             /** @description Validation Error */
@@ -1710,6 +2487,167 @@ export interface operations {
             };
         };
     };
+    list_topics_api_topics_get: {
+        parameters: {
+            query?: {
+                /** @description 按名字模糊匹配 */
+                search?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Topic"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_topic_api_topics_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopicCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Topic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_topic_api_topics__topic_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Topic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_topic_api_topics__topic_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_topic_api_topics__topic_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                topic_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopicUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Topic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_videos_api_videos_get: {
         parameters: {
             query?: {
@@ -1718,6 +2656,7 @@ export interface operations {
                 since?: string | null;
                 search?: string | null;
                 hidden?: "visible" | "hidden" | "all";
+                sort?: "recent" | "benchmark";
                 page?: number;
                 size?: number;
             };
@@ -1833,6 +2772,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Video"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_video_media_api_videos__video_id__media_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                Range?: string | null;
+            };
+            path: {
+                video_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
