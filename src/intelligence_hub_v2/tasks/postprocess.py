@@ -132,10 +132,12 @@ async def _transcribe_with_asr(
     media_path = ctx.files.abs(str(video.media_path))
     media_dir = media_path.parent
     source = _audio_source(ctx, video=video)
-    if not await has_audio_stream(source):
-        # 纯视频轨（DASH 未合并却没存音频 aux）：这条**没有可转写的声音**，不是失败。
-        # 记成 no_audio 而不是硬跑 ffmpeg —— 那句 `Output file does not contain any stream`
-        # 的字面意思会把人引向"ffmpeg 没装"（V1 §7.21）。
+    if source is None or not await has_audio_stream(source):
+        # 这条**没有可转写的声音**，不是失败（V1 §7.21）。两种来源分开看都成立：
+        # DASH 未合并却没存下音频 aux，以及图文笔记（`media_path` 是一张 jpg，
+        # aux 是第 2~N 张原图 —— ADR-0019 之后那一列里躺着的不一定是音频）。
+        # 记成 no_audio 而不是硬跑 ffmpeg：那句 `Output file does not contain any stream`
+        # 的字面意思会把人引向"ffmpeg 没装"。
         tally.no_audio += 1
         return
 
@@ -182,14 +184,22 @@ def _reference_for(video: Video, text: str) -> ReferenceMaterial | None:
     )
 
 
-def _audio_source(ctx: TaskContext, *, video: Video) -> Path:
-    """要喂给 ffmpeg 的那个文件。
+def _audio_source(ctx: TaskContext, *, video: Video) -> Path | None:
+    """要喂给 ffmpeg 的那个文件；None = 这条压根没有可转写的声音。
 
-    `media_aux_paths_json` 非空 = 采集时拿到的是未合并的 DASH 分片，那条 aux 就是**纯音频轨**
-    （V1 §7.21：主文件 `.f137.mp4` 没有音频，直接喂 ffmpeg 得到的报错长得像"没装 ffmpeg"）。
-    判据与 `models.media.audio_path_of()` 同一个，只是那边拿到的是适配器产物、
-    这边拿到的是库行 —— 两处都不是"看一眼文件名猜"。
+    **判据是 `metadata_json.has_audio`，不是"`media_aux_paths_json` 非空"**。
+    这一列在 ADR-0019 之后装的是"同一条作品的其他产物文件"：DASH 分片在这儿放音频轨，
+    小红书图文在这儿放第 2~N 张原图。只看"非空"就把一张 jpg 送进 ffmpeg ——
+    那正好是 V1 §7.21 那一族"报错的字面意思把人引向错误的方向"。
+
+    `has_audio` 是采集那一刻由 `models.media.audio_path_of()` 判过并落库的
+    （`collect._has_audio`），所以这里与它是同一个答案的两个时间点，不是第二套判据。
+    键缺失（早于这一版的行、或别的写入方）按"不知道"处理：交回主文件让 ffprobe 去问，
+    不替它猜一个 False —— 猜错的代价是白丢一篇稿子，而丢稿子在看板上看不见。
     """
+    meta = _metadata_of(video)
+    if meta.get("has_audio") is False:
+        return None
     raw = video.media_aux_paths_json or "[]"
     try:
         aux = json.loads(raw)
@@ -197,6 +207,15 @@ def _audio_source(ctx: TaskContext, *, video: Video) -> Path:
         aux = []
     first = aux[0] if isinstance(aux, list) and aux else None
     return ctx.files.abs(str(first or video.media_path))
+
+
+def _metadata_of(video: Video) -> dict[str, object]:
+    """`videos.metadata_json` 收成 dict；不是 JSON 对象就当没有。"""
+    try:
+        loaded = json.loads(video.metadata_json or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _video_meta(video: Video) -> VideoMeta:

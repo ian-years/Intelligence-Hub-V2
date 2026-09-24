@@ -41,6 +41,10 @@ class SingleFileArtifact(BaseModel):
     """
 
     size_bytes: int = Field(ge=0)
+    """磁盘上这条产物占的字节数。**有 `extra_paths` 时是"主文件 + 其余"之和**，
+    不是主文件单独那一个（`total_size_bytes()` 直接返回它，不做二次相加）。
+    生产方必须按这个口径填，否则"清单里 200 KB / 盘上 6 MB"这种分叉就会出现。"""
+
     media_source: MediaSource
     yt_dlp_error: str | None = None
     """兜底成功时 yt-dlp 的**失败原文**。
@@ -70,6 +74,22 @@ class SingleFileArtifact(BaseModel):
     duration_seconds: float | None = None
     has_audio: bool = True
     has_video: bool = True
+    """`False` = 这个"媒体文件"根本不可播放。**判据在消费方，不在文件名后缀**：
+    小红书图文笔记的原图就是 `has_video=False` 的单文件（ADR-0019），而它确实是一个
+    躺在 `media_path` 上的真文件、有真体积。前端播放器（T6.5）与任何"`media_path` 非空
+    就能播"的假设都会被这一位挡住 —— 拿 `.jpg` 喂 `<video>` 只会得到一块黑屏，
+    而黑屏不报错。"""
+
+    extra_paths: tuple[Path, ...] = ()
+    """同一趟采集带回来的**其他**产物文件（ADR-0019）。
+
+    今天唯一的使用者是小红书图文笔记的原图：主文件是第一张，其余按页面上的顺序进这里。
+    **这个字段不许被当成"音频轨"读** —— 转写那条链只经 `audio_path_of()`，
+    而它看的是 `has_audio`，与这一列无关（看护见
+    `test_audio_source_never_comes_from_the_aux_list_of_an_image_note`）。
+    入库时它落进 `videos.media_aux_paths_json`，那一列的语义因此从"DASH 音频轨"
+    扩成"同一条作品的其他产物文件"，见 `docs/specs/data-model.md §2.3`。
+    """
 
 
 class VideoAudioPairArtifact(BaseModel):

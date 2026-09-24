@@ -246,6 +246,26 @@ class SingleFileArtifact(BaseModel):
     duration_seconds: float | None = None
     has_audio: bool = True
     has_video: bool = True
+    extra_paths: tuple[Path, ...] = ()
+
+> **修订（2026-09-24，ADR-0019）—— `extra_paths` 与 `has_video`**：小红书有图文笔记
+> （一条笔记 = 最多 18 张原图，没有视频轨），而这一族产物在今天**没有表达方式**。
+> 契约只给了两个选项，都不诚实，所以扩了字段而不是新加一种 `kind`：
+>
+> - `extra_paths` —— 同一趟采集带回来的其他文件。图文笔记的主文件是第一张图，
+>   第 2~N 张进这里；入库后落在 `videos.media_aux_paths_json`，**那一列的语义因此从
+>   "DASH 音频轨"变成"同一条作品的其他产物文件"**（见 `data-model.md §2.3`）。
+> - `has_video=False` —— 这个"媒体文件"根本不可播放。判据必须在字段上，不能靠后缀：
+>   一张 3 MB 的 jpg 是真的躺在 `media_path` 里，喂给 `<video>` 只会得到一块**不报错的黑屏**
+>   （T6.5 播放器因此先问这一位，再问 `media_path` 在不在）。
+> - `size_bytes` 的口径同时变成"主文件 + `extra_paths` 之和"（生产方负责），
+>   所以 `total_size_bytes()` 对单文件直接返回它、不做二次相加。
+>
+> 转写链不受这个扩张影响，靠的是 `has_audio` 而不是"aux 非空"：
+> `audio_path_of()` 在 `has_audio=False` 时**抛**，`postprocess._audio_source()` 认
+> `metadata_json.has_audio`。看护：`tests/unit/test_media_artifact_kinds.py`
+> （联合成员从 `get_args(MediaArtifact)` 取，新加一种产物而不补入库分支 → 红）与
+> `tests/unit/tasks/test_image_note_artifact_contract.py`。
 
 > **修订（2026-09-22，Task 6）—— `path` 归谁算**：本 `path` 原写作"相对 `data/` 的路径"，
 > 实施时**不成立**：`AdapterDeps` 里没有 `FileStorage`（`storage/` 在依赖图最底层，

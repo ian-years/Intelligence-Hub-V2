@@ -254,9 +254,14 @@ def build_video_draft(
 def _artifact_fields(
     artifact: MediaArtifact, ctx: TaskContext
 ) -> tuple[str, list[str], str, int, float | None, str | None, str | None]:
-    """把 single_file 与 dash_split 两种产物摊平成同一组入库字段。
+    """把三种产物形状摊平成同一组入库字段。
 
-    返回：主路径rel / 辅助轨rel / 来源 / 体积 / 时长 / 档位 / 兜底原文。
+    返回：主路径rel / 其他产物rel / 来源 / 体积 / 时长 / 档位 / 兜底原文。
+
+    `media_aux_paths_json` 那一列装的是"**同一条作品的其他产物文件**"（ADR-0019）：
+    DASH 分片在那儿放音频轨，小红书图文在那儿放第 2~N 张原图。
+    **读的一侧不许按"那一定是音频"解释它** —— 转写走 `audio_path_of()`，
+    那里由 `has_audio` 把关（`_has_audio` 就是这条边界的落点）。
     """
     if isinstance(artifact, VideoAudioPairArtifact):
         return (
@@ -270,7 +275,7 @@ def _artifact_fields(
         )
     return (
         ctx.files.rel(artifact.path),
-        [],
+        [ctx.files.rel(path) for path in artifact.extra_paths],
         artifact.media_source,
         artifact.size_bytes,
         artifact.duration_seconds,

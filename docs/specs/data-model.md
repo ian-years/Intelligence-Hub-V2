@@ -122,7 +122,7 @@ CREATE TABLE videos (
     share_count          INTEGER,
     media_path           TEXT,                    -- 主文件相对路径
     media_source         TEXT,                    -- 'yt_dlp'/'page_play_url'/'dash_merged'/'dash_split'
-    media_aux_paths_json TEXT NOT NULL DEFAULT '[]',  -- DASH 分片等辅助文件（JSON 数组）
+    media_aux_paths_json TEXT NOT NULL DEFAULT '[]',  -- 同一条作品的**其他**产物文件（JSON 数组）
     cover_path           TEXT,
     metadata_json        TEXT NOT NULL DEFAULT '{}',
     is_hidden            BOOLEAN NOT NULL DEFAULT FALSE,
@@ -141,6 +141,14 @@ CREATE INDEX idx_videos_created ON videos(created_at DESC);
 ```
 
 **墓碑内化为列**（V1 §7.25 解决）：`is_hidden` + `hidden_at` + `hidden_reason`，废 `hidden-videos.json`。所有查询走 `list_visible()`，自动过滤。
+
+**`media_aux_paths_json` 的语义是"同一条作品的其他产物文件"，不是"音频轨"**（2026-09-24，ADR-0019）。
+它今天有两种内容物：DASH 未合并分片的音频轨（`[audio]`），以及小红书图文笔记的第 2~N 张原图
+（主文件 `media_path` 是第一张）。读它的一侧因此**不许按"非空 = 有音频轨"解释** ——
+转写链的判据是 `metadata_json.has_audio`（采集时由 `models.media.audio_path_of()` 判过并落库），
+看护 `tests/unit/tasks/test_image_note_artifact_contract.py`。
+这条口径的存在理由是：图文笔记的 `media_path` 指向一张 jpg，而它是一个**真的、有体积的**
+文件 —— 任何"这一列非空就说明有另一条轨"的推断都会把图片喂给 ffmpeg。
 
 **`creator_id` 用 `ON DELETE SET NULL`**：删博主不删视频，视频变成"孤儿"但仍可查（`creator_id IS NULL`）。
 
