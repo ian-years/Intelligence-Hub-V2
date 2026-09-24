@@ -2013,6 +2013,93 @@ intelligence_hub_v2.bridge.server --headless`，`/navigate` 一页成功，然�
 
 ---
 
+#### 经验 50 · "注册表里有、`which` 说没有"不是没装：PATH 的真相要向注册表要一次（T6.1，§7.19）
+
+**现象**：预检报 `ffmpeg_missing`，`shutil.which("ffmpeg")` 返回 `None`，而系统里**确实装了**
+（`Gyan.FFmpeg` 在 WinGet 包目录下）。第一反应是"这台机器没 ffmpeg"，然后就会去重装、
+或者把 ASR / 媒体下载那条线判成"环境不支持" —— 方向完全错。
+
+**根因**：子进程继承的是**启动方那份环境快照**。装工具改的是注册表
+（`HKLM\...\Session Manager\Environment` 的 `Path` + `HKCU\Environment` 的 `Path`），
+不重开启动方（Git Bash / IDE / 服务宿主）就永远看不见。V1 §7.19 记过一次，
+但 V1 里承诺的 `prepare_runtime_environment()` **从未实现** —— 所以它长期停在
+"说得出名字但没看护"那一栏（见 `AGENTS.md` §5）。
+
+**解法**：`core/runtime_env.py`。常驻服务启动时自己去要一次真相，比要求使用者记得重开宿主可靠。
+三条规矩（V1 搬过来）：**只追加不重排**（进程 PATH 是启动方刻意设的那份，注册表不能盖过它）、
+**只增不删**、**读不到注册表就当没补上**（`winreg` 抛 / 被组策略挡 / 非 Windows → 返回空列表，
+不让服务起不来）。注册表里的目录还要过一道 `Path(...).is_dir()`：注册表写着早已被删掉的路径是常态。
+
+**四个只在踩过之后才会写下来的点**：
+
+1. **`config.paths.*` 是一组死配置**。YAML 里能写、Pydantic 里有字段、**没有任何消费方** ——
+   配了也不生效。这一族在 V1 §7.11 有名字（写了配置以为在用）。T6.1 给它接上读者：
+   显式路径**赢**，做法是把那个文件所在目录插到 PATH 最前面，而不是在每个调用点加一支
+   "如果配了就用它"的分支（同一件事写四遍）。指的文件不存在 → 记 `problems` 原文，
+   **不静默回落 PATH**：配了路径却悄悄用了别人的二进制，是最难查的那种"成功"。
+2. **动 `os.environ` 的层只能有一处**。所以拆成两个函数：`apply_runtime_environment(config, env)`
+   纯操作传进来的 dict 并返回 `RuntimeEnvReport`，`prepare_runtime_environment(config)` 是唯一
+   写进程环境的那一位。测试因此能问"补了哪些"而不搞坏整个会话的 PATH；
+   预检也能跑一次而不改运行时。混在一个函数里 → 用例只能各测一半，还互相污染。
+3. **探针清单与 PATH  Knob 必须是同一个源头**。`TOOL_COMMANDS`（`PathsSection` 字段名 → 命令名）
+   同时喂给 `explicit_path_dirs` 和 `tasks/preflight.py::_TOOLS`，
+   由 `test_the_path_knobs_are_the_tools_we_probe` 钉住。否则"配置文件里能填 ffprobe，
+   预检却从不探它"这种半截契约又会自己长出来（同 [[经验 44]] 那一族：提供方与消费方各写一半）。
+4. **`shutil.which` 交回的是 `ffmpeg.EXE`**（大写扩展名）。文件系统大小写不敏感，
+   字符串比较敏感 —— 断言写成 `== "...\\ffmpeg.exe"` 会红，而且红的理由毫无信息量。
+   `_path_key()`（`casefold` + 斜杠归一 + 去结尾分隔符）是给目录项做同一件事。
+
+**判据 / 实测数字**（本机 2026-09-24，命令与输出贴在 `docs/progress/2026-09-24.md` 主题七）：
+补之前 `which("ffmpeg") -> None`；注册表里查得到 WinGet 那份 →
+`added=['C:\\Users\\junlan\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_...\\bin']`；
+补之后 `resolved` 一次给出 ffmpeg / ffprobe / node / yt-dlp 四条路径。**没重开任何宿主。**
+
+**连带效果**：T1.2/T3.x 那些"要 ffmpeg"的真机跑，卡在环境上的理由少了一条。
+
+**看护**：`tests/unit/core/test_runtime_env.py`（16 条：追加不重排 / 只增不删 / 不存在的注册表项跳过 /
+大小写与斜杠归一 / 显式路径前置 / 指错文件记 `problems` / **只改传进来的 env** /
+`prepare_*` 确实写 `os.environ`，那条用真 tmp 目录量）。
+§7.19 已从 `AGENTS.md` §5 的"没看护"栏升进"契约测试看护"栏，三处同步：
+`tests/contracts/test_contract_guard_index.py`、`docs/specs/contract-tests.md` §3、
+`AGENTS.md` §5。**现在未看护只剩 §7.22（按位扫描，V2.1 Backfill）。**
+
+---
+
+#### 经验 51 · 带着 `-X utf8` 跑出来的一条绿，守不住任何东西（T6.1 收尾时两条用例现的原形）
+
+**现象**：T6.1 收尾时全量重跑，两条 postprocess 用例红了 —— 而我记下"1450 passed"的那一跑是绿的。
+红在 `clean.read_text()`（`UnicodeDecodeError: 'gbk' codec can't decode byte 0xac`），
+读的是中文口播稿。**代码一行没改，改的是我这次没带那个开关。**
+
+**根因**：这台机器 `locale.getpreferredencoding()` = `cp936`，`PYTHONUTF8=1` 才翻成 `utf-8`
+（当场量过：同一句 `uv run python -c ...`，plain → `cp936 / utf8_mode=0`，
+`PYTHONUTF8=1` → `utf-8 / utf8_mode=1`）。`AGENTS.md` §4 让"Python 命令都要 `-X utf8`"，
+于是**只要习惯性带上那个开关，读写文本不写 encoding 的用例就永远绿** ——
+这类用例的"绿"描述的是我上一次怎么敲的命令，不是被测代码的行为。
+与 T1.3 里删掉的那条"看本机装没装权重"同属一类：结果取决于环境而测试没把环境钉住。
+
+**解法**：两处补 `encoding="utf-8"`（本来就该写）。**不**把 `-X utf8` 写进 pytest 配置里糊过去 ——
+那只会让下一处同样的漏码继续潜伏。
+
+**判据**：全仓文本读写必须显式编码。→ `tests/unit/test_encoding_discipline.py`：AST 扫
+`src/ tools/ tests/`，报出所有 `read_text/write_text/read_lines` 与内建 `open()` 里没给
+`encoding=` 的调用（`encoding=None` 也算没给；`open(..., "rb")` 与 `wave.open()` 这类模块函数放行）。
+两条自证：每个被扫的目录（`src` / `tools` / `tests`）都必须**真的扫到文件**
+（目录名写错时主断言会永远绿；我第一版写死 `scanned > 200`，本机实际 155 个文件，
+它以自己的方式把这个坑演示了一遍），以及 `test_the_guard_itself_catches_a_bare_read_text`
+钉住"违规样本真的会被报出来、且只报违规那两条"。
+
+**为什么不是开一条 ruff 规则**：`PLW1514 unspecified-encoding` 正是这条规矩，但它在 preview 里，
+要用只能全局 `--preview`，一次性引入一批未稳定规则 —— 为了两条漏码不值得。
+
+**顺带一条**：写这个扫描时我先按"接收者是路径表达式才扫"实现，差点放过真红掉的那条
+（`clean.read_text()`，`clean` 是个局部变量）。**先拿真实事故当样本喂一遍看护**，
+它没抓到就说明看护本身是假的 —— 这条已经在本仓库付过几次学费了（见"'断言写成关系 + 防空转前置'"）。
+
+**看护**：`tests/unit/test_encoding_discipline.py`（2 条）+ `AGENTS.md` §4 那段"读文件一律显式编码"。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

@@ -236,8 +236,11 @@ cd E:/08-Codework/Intelligence-Hub-V2
 （`yt-dlp -J <BV…>` 拿到 15 条 formats、`--flat-playlist` 拿到那句真 412），
 `curl_cffi` / `zhconv` / `sherpa_onnx` / `numpy` / `playwright` `find_spec` 命中但未使用。
 装法留在这里备用：`.venv/Scripts/python.exe -m pip install -e ".[media,asr,bridge]"`。
-**仍然缺的是 PATH 上的 `ffmpeg` / `ffprobe`**（V1 §7.19 那个"注册表里有、进程快照过期"
-的现象在这个 shell 里照样成立）—— Task 8 之前要走工作台的 PATH 补齐或重开宿主。
+**仍然缺的是 PATH 上的 `ffmpeg` / `ffprobe`** —— 2026-09-24 由 T6.1 解掉：
+`core/runtime_env.py` 在服务启动与每轮 preflight 时向注册表要一次真相（V1 §7.19 那条
+「注册表里有 ≠ 进程拿得到」）。本机实测：补之前 `shutil.which('ffmpeg') → None`、
+补之后 ffmpeg/ffprobe/node/yt-dlp 四个全部解析到。`config.paths.*` 那一组从此有读者
+（显式路径 = 把它的目录插到 PATH 最前面，指的文件不存在就如实记问题）。
 `has_audio_stream()` 已经改成"缺二进制算问不出来"（坑 18），所以缺 ffprobe 不会再
 把一次成功的下载判成采集失败。
 

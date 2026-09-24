@@ -106,6 +106,10 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 ```
 
 **Windows 上 Python 命令都要 `-X utf8` 或确保控制台 UTF-8**（GBK 会把中文打崩）。
+**但代码里读文件一律显式 `encoding="utf-8"`**，不许依赖默认编码：本机
+`locale.getpreferredencoding()` 是 `cp936`，"带着 `-X utf8` 跑出来的一条绿"守不住任何东西
+（2026-09-24 有两条用例就是这样，换一跑就红）。看护 `tests/unit/test_encoding_discipline.py`，
+见 `docs/lessons.md` 经验 51。
 **`make` 不是自带的**：本机 Git for Windows 里没有 `make.exe`（Makefile 头注释那句"Git Bash 自带"
 2026-09-23 实测不成立）。没装 make 时照 `ci-local` 的 recipe 逐条直接跑，
 并且**自己打退出码** —— `make ci-local 2>&1 | tail -60` 报的是 `tail` 的 0。
@@ -119,8 +123,8 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 V1 那 25 条陷阱（`Intelligence-Hub/AGENTS.md` §7）在 V2 的状态分三类：
 
 - **结构性消除**（V2 设计让它不可能再发生）：§7.4 整行覆盖、§7.6 LocalCreatorStore 参数、§7.7 双源、§7.10 路由靠记忆、§7.11 三种命名、§7.12 预检主库错位、§7.17 head 接常驻服务、§7.23 用时抖动门禁、§7.25 墓碑散落
-- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.9 SenseVoice 按静音切句补标点、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.18 桥重建沿用同一个 profile、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
-- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，只有 preflight 报 `tools_missing`）、§7.22 按位扫描（V2.1 的 Backfill）
+- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.9 SenseVoice 按静音切句补标点、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.18 桥重建沿用同一个 profile、§7.19 进程 PATH 与注册表一致（`core/runtime_env.py`）、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
+- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.22 按位扫描（V2.1 的 Backfill，即 T4.x 补录那一族）
 
 > 这三栏由 `tests/contracts/test_contract_guard_index.py` 逐条核：§7.1–§7.25 每条必须有归属、
 > 表里点名的用例必须真的存在且真的会跑、本节的"结构性消除"那一行必须与测试里的分桶一致。

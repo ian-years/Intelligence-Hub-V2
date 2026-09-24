@@ -46,6 +46,7 @@ _PLATFORMS_REPO = f"{_UNIT_STORAGE}/test_platforms_repo.py"
 _FILES = f"{_UNIT_STORAGE}/test_files.py"
 _BRIDGE_SERVER = "tests/unit/test_bridge_server.py"
 _BRIDGE_HTTP = "tests/integration/test_bridge_health.py"
+_RUNTIME_ENV = "tests/unit/core/test_runtime_env.py"
 
 #: 每条 V2.0 契约看护的代表用例，`(文件, 用例名)`。**文件限定**是重点（见模块 docstring）。
 #: 一条陷阱可以点多个文件 —— §7.4 同时护 creators 与 videos。
@@ -93,6 +94,10 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
         (_BRIDGE_HTTP, "test_a_dead_browser_is_503_not_bridge_down"),
     ),
     "§7.20 测不到≠正常": ((_PLATFORMS_REPO, "test_is_healthy_only_trusts_an_explicit_ok"),),
+    "§7.19 进程 PATH 与注册表一致（三处同源 + 只追加不覆盖）": (
+        (_RUNTIME_ENV, "test_the_path_knobs_are_the_tools_we_probe"),
+        (_RUNTIME_ENV, "test_applying_to_a_given_env_never_touches_the_process_environment"),
+    ),
     "§7.21 DASH 认音频轨": (
         (_BILI_HELPERS, "test_a_pair_artifact_points_the_transcriber_at_the_audio_track"),
     ),
@@ -108,11 +113,7 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
 
 #: 现在**没有看护**的几条，逐条写清为什么。列出来是为了不把它们当成"已经守住了" ——
 #: 漏掉和漏实现看起来一样，所以它们也必须进 §7 编号的完整覆盖检查。
-NOT_YET_GUARDED: tuple[str, ...] = (
-    "§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，今天只有"
-    " preflight 的 `shutil.which`；`contract-tests.md §3` 那一行点名的用例也不存在）",
-    "§7.22 按位抓取不退化全库扫描（V2.1）",
-)
+NOT_YET_GUARDED: tuple[str, ...] = ("§7.22 按位抓取不退化全库扫描（V2.1）",)
 
 #: 与 `AGENTS.md §5` 的"结构性消除"那一栏一一对应（V2 的设计让它不可能再发生）。
 STRUCTURALLY_ELIMINATED: tuple[str, ...] = (

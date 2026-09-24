@@ -26,6 +26,7 @@ from intelligence_hub_v2.api.deps import AppState
 from intelligence_hub_v2.api.v1.router import api_router
 from intelligence_hub_v2.core.config import ConfigManager
 from intelligence_hub_v2.core.event_bus import InProcessEventBus
+from intelligence_hub_v2.core.runtime_env import prepare_runtime_environment
 from intelligence_hub_v2.core.task_registry import DepsFactory
 from intelligence_hub_v2.core.task_runner import TaskRunner, TaskScheduler
 from intelligence_hub_v2.errors import (
@@ -128,6 +129,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         rotate_max_bytes=state.config.logging.rotate_max_bytes,
         rotate_backup_count=state.config.logging.rotate_backup_count,
     )
+    # 注册表里装了、进程 PATH 里没有（V1 §7.19）：启动时向注册表要一次真相，
+    # 之后 `shutil.which`（预检）与子进程继承的那份 PATH 才会一致。
+    prepare_runtime_environment(state.config)
     await state.storage.initialize()
     state.files.ensure_dirs()
     await _sync_platform_mirror(state)

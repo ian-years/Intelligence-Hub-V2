@@ -208,7 +208,8 @@ async def test_the_whole_chain_from_media_to_three_files_and_one_db_row(
     # 3) 库里那一行 + 事件
     record = await storage.transcripts.get_for_video(vid)
     assert record is not None and record.engine == "sherpa_sense_voice"
-    assert record.sentence_count == len(lines) and record.char_count == len(clean.read_text()) - 1
+    text = clean.read_text(encoding="utf-8")
+    assert record.sentence_count == len(lines) and record.char_count == len(text) - 1
     assert record.text_path.endswith("transcript/speech-clean.txt")
     assert not Path(record.text_path).is_absolute(), "库里存绝对路径 = 换机器就废"
     assert json.loads(str(record.segments_json))[0]["text"] == lines[0]

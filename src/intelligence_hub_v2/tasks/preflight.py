@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 from intelligence_hub_v2.asr import detect as asr_detect
+from intelligence_hub_v2.core.runtime_env import TOOL_COMMANDS, sync_path_from_registry
 from intelligence_hub_v2.models.task import FailureRecord, TaskResult
 from intelligence_hub_v2.platforms.base import HealthReport
 from intelligence_hub_v2.tasks.params import PreflightParams
@@ -25,14 +26,10 @@ if TYPE_CHECKING:
 
 __all__ = ["run_preflight"]
 
-_TOOLS: tuple[tuple[str, str], ...] = (
-    # (给人看的键, PATH 上找的命令名)
-    ("ffmpeg", "ffmpeg"),
-    ("ffprobe", "ffprobe"),
-    ("yt_dlp", "yt-dlp"),
-    ("node", "node"),
-)
-"""外部二进制探针清单。`node` 是 Playwright 那条路要用的（V1 §7.16）。"""
+_TOOLS: tuple[tuple[str, str], ...] = tuple(TOOL_COMMANDS.items())
+"""外部二进制探针清单，直接取 `core/runtime_env.py::TOOL_COMMANDS`（那张表同时是
+`config.paths.*` 的字段名表与 preflight 的探针清单 —— 两处各写一遍早晚会对不上）。
+`node` 是 Playwright 那条路要用的（V1 §7.16）。"""
 
 
 async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult:
@@ -94,6 +91,9 @@ async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult
             )
         )
 
+    # 装完 ffmpeg 不必重启服务：注册表里那些"进程快照过期"的目录在预检这一轮就补上
+    # （V1 §7.19 的正解）。幂等 —— 已在 PATH 里的不会被重复追加，所以每轮跑一次没有代价。
+    path_added = sync_path_from_registry()
     tools = {key: (shutil.which(cmd) is not None) for key, cmd in _TOOLS}
     asr_present = ctx.files.asr_models_dir.is_dir()
     # `asr_model` 答的是"那棵目录树在不在"，`asr_engine` 答的是"到底能不能转写"：
@@ -114,6 +114,7 @@ async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult
         or "（无启用的平台）",
         "tools_present": ", ".join(k for k, v in tools.items() if v) or "（PATH 上一个都没有）",
         "tools_missing": ", ".join(k for k, v in tools.items() if not v) or "（无）",
+        "path_added_from_registry": len(path_added),
     }
     return TaskResult(status=status, summary=summary, failures=failures)
 

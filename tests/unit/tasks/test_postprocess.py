@@ -182,7 +182,8 @@ async def test_platform_without_subtitle_support_goes_through_local_asr(
     assert (transcript_dir / "speech-clean.txt").read_text(encoding="utf-8") == "\n".join(
         lines
     ) + "\n"
-    assert [s["text"] for s in json.loads((transcript_dir / "segments.json").read_text())] == lines
+    segments = json.loads((transcript_dir / "segments.json").read_text(encoding="utf-8"))
+    assert [s["text"] for s in segments] == lines
     reference = (transcript_dir / "reference.md").read_text(encoding="utf-8")
     assert "本文件性质: 本地自动抽取参考" in reference and "候选句" in reference
     assert not (transcript_dir / "speech-raw.txt").exists(), (
