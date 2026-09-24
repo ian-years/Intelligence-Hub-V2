@@ -53,6 +53,10 @@ async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult
     for name in ctx.adapters.enabled_platforms():
         report = await _safe_healthcheck(ctx, name)
         platforms[name] = report.status
+        # ADR-0022：探测的结论写回 `platforms` 镜像，总览页那三盏灯才有东西可画。
+        # 写这一笔的是 handler 而不是 runner 或事件订阅者 —— 健康结论就是这次任务的
+        # 产出之一，与 `collect` 落库在同一层。
+        await _record_health(ctx, name, report)
         if report.status == "ok":
             ok += 1
         elif report.status == "unreachable":
@@ -135,6 +139,30 @@ async def _safe_healthcheck(ctx: TaskContext, name: str) -> HealthReport:
             status="unreachable",
             detail=f"{type(exc).__name__}: {exc}",
             checked_at=datetime.now(UTC),
+        )
+
+
+async def _record_health(ctx: TaskContext, name: str, report: HealthReport) -> None:
+    """把一次探测的结论写进 `platforms` 镜像（ADR-0022）。
+
+    **写不进去不算探测失败**，但必须说出来。镜像里没有这一行 = 装配漏了一步
+    （启动时 `_sync_platform_mirror` 该 upsert 它），那是另一件事 —— 让一个"环境坏了"
+    去改变"这条路探下来是什么颜色"的答案，等于把两个问题混成一条红，
+    而预检页只能显示一条。
+
+    不重试、不补 upsert：一个探测任务顺手往镜像表里插行，
+    会让"这张表反映 config 的当前状态"这句话变成假话（`upsert` 的 docstring 同一条纪律）。
+    """
+    try:
+        await ctx.storage.platforms.set_health(
+            name,
+            report.status,
+            detail=report.detail,
+            checked_at=report.checked_at,
+        )
+    except Exception as exc:  # noqa: BLE001 - 记账失败不许盖掉探测结论
+        ctx.logger.warning(
+            "preflight.health_write_failed", platform=name, error=f"{type(exc).__name__}: {exc}"
         )
 
 

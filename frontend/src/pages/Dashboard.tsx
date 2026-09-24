@@ -25,7 +25,8 @@ const RECENT_RUNS = 8;
  * 刻意**不在这一页探测平台健康**：`/api/preflight` 会真去连桥、真发平台请求，
  * 一个"每次进首页都要跑一遍"的网络探测不是总览，是给自己加风控。
  * 平台卡片显示的是配置里的事实（开没开、V2 有没有这个平台的实现），
- * "现在连不连得上"归预检页 —— 页面上把这句话写明，不让人以为这里绿了就没事。
+ * 外加 preflight **上一次**写回镜像的结论与时刻（ADR-0022）—— 那一行写的是"上次探测
+ * 于几点"，不是"现在没问题"。没有结论就整行不画，不画灰色"未知"。
  *
  * 四个区块各自过 `QueryState`：一个区块读不到不许把别的区块一起拖成空白。
  */
@@ -158,9 +159,42 @@ function PlatformCard({ platform }: { platform: PlatformSummary }): JSX.Element 
       <span className={cn("memphis-border border-ink-black px-3 py-1 text-body-sm", state.tone)}>
         {state.label}
       </span>
+      {/* ADR-0022：灯读的是 `platforms` 镜像里 preflight 上一次写回的结论，
+          这一页**不探测**（探测会真连桥与平台，那是预检页的活）。
+          没有结论就一整行不画 —— 画一个灰色"未知"会被读成"检查过且没问题"，
+          而那正是 §7.20 的形状。有结论就必须连时刻一起画：一个没有时刻的绿灯
+          与一个假绿灯没有区别。 */}
+      <ProbeLine platform={platform} />
     </HardShadowCard>
   );
 }
+
+/** 上次探测的一句话：颜色 + 结论 + 时刻（+ 有原文就把原文带上）。 */
+function ProbeLine({ platform }: { platform: PlatformSummary }): JSX.Element | null {
+  const status = platform.health_status;
+  if (!status || !platform.health_checked_at) return null;
+  const tone = HEALTH_TONES[status] ?? "bg-grey-mist";
+  return (
+    <span className={cn("memphis-border border-ink-black px-3 py-1 text-body-sm", tone)}>
+      上次探测 {formatTime(platform.health_checked_at)}：{HEALTH_LABELS[status] ?? status}
+      {platform.health_detail ? ` —— ${platform.health_detail}` : ""}
+    </span>
+  );
+}
+
+const HEALTH_LABELS: Record<string, string> = {
+  ok: "连得上",
+  degraded: "降级",
+  unreachable: "连不上",
+  unknown: "探了但判不出来",
+};
+
+const HEALTH_TONES: Record<string, string> = {
+  ok: "bg-mint-green",
+  degraded: "bg-lemon-yellow",
+  unreachable: "bg-coral-red",
+  unknown: "bg-lemon-yellow",
+};
 
 /** 三种状态分开给：`enabled` 与 `implemented` 是两件事 ——
  *  配置里开着但 V2 没有实现，症状是"任务列表里没有这个平台的采集"，

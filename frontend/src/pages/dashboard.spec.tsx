@@ -16,10 +16,45 @@ const health = { status: "ok", version: "0.1.0", time: "2026-09-23T00:00:00+00:0
 
 const platforms = {
   platforms: [
-    { name: "douyin", display_name: "抖音", enabled: true, implemented: true },
-    { name: "bilibili", display_name: "B站", enabled: false, implemented: true },
-    { name: "xiaohongshu", display_name: "小红书", enabled: true, implemented: false },
-    { name: "youtube", display_name: "YouTube", enabled: false, implemented: false },
+    // 三家各代表健康行的一种情况：**有结论有时刻** / **从没探测过** /
+    // **有结论但没有时刻**（库里被写成这样就是数据坏了，界面必须选择不画，
+    // 而不是画一个"上次探测 undefined"）。
+    {
+      name: "douyin",
+      display_name: "抖音",
+      enabled: true,
+      implemented: true,
+      health_status: "ok",
+      health_checked_at: "2026-09-24T10:00:00+00:00",
+      health_detail: null,
+    },
+    {
+      name: "bilibili",
+      display_name: "B站",
+      enabled: false,
+      implemented: true,
+      health_status: null,
+      health_checked_at: null,
+      health_detail: null,
+    },
+    {
+      name: "xiaohongshu",
+      display_name: "小红书",
+      enabled: true,
+      implemented: false,
+      health_status: "degraded",
+      health_checked_at: null,
+      health_detail: "桥没起",
+    },
+    {
+      name: "youtube",
+      display_name: "YouTube",
+      enabled: false,
+      implemented: false,
+      health_status: null,
+      health_checked_at: null,
+      health_detail: null,
+    },
   ],
 };
 
@@ -98,6 +133,21 @@ describe("Dashboard 的四个区块", () => {
     for (const platform of platforms.platforms) {
       expect(screen.getByText(platform.name)).toBeTruthy();
     }
+  });
+
+  it("没探测过的平台不画健康行；画出来的那行必须带时刻", async () => {
+    renderPage();
+    await ready();
+    // 判据是"该画的有几家 = 画了几行"，不是"文案长什么样"：
+    // 前者在 fixture 增加一家探测过的平台时会自动跟着要求两行，后者不会。
+    const expected = platforms.platforms.filter(
+      (p) => p.health_status !== null && p.health_checked_at !== null,
+    );
+    const lines = screen.getAllByText(/上次探测/);
+    expect(lines).toHaveLength(expected.length);
+    // xiaohongshu 有 status 但没有时刻 → 那一行不许出现（数据坏了时宁可不画）。
+    expect(lines.some((line) => line.textContent?.includes("降级"))).toBe(false);
+    expect(lines[0]?.textContent).toContain("连得上");
   });
 
   it("三种平台状态分开说：开着但没实现 ≠ 已启用", async () => {

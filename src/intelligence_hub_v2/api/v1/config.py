@@ -32,6 +32,13 @@ class PlatformSummary(BaseModel):
     display_name: str
     enabled: bool
     implemented: bool
+    # ADR-0022：这三列是 preflight 写进镜像的那一份**上次结论**，不是"现在"的探测结果。
+    # 所以它们与 `health_checked_at` 必须成对出现 —— 一个没有时刻的绿灯就是 §7.20
+    # 那个形状的灯。`health_status` 为 None 表示"从没检查过"，前端因此**不画灯**，
+    # 而不是画一个灰色的"未知"（灰会被读成"检查过且没问题"）。
+    health_status: str | None = None
+    health_checked_at: datetime | None = None
+    health_detail: str | None = None
 
 
 class PlatformsResponse(BaseModel):
@@ -48,15 +55,22 @@ class ConfigUpdateResponse(BaseModel):
 @router.get("/platforms", response_model=PlatformsResponse)
 async def list_platforms(state: AppState = Depends(get_state)) -> PlatformsResponse:
     implemented = set(state.registry.implemented_platforms())
+    # 健康读镜像，**不在这里探测**：`/api/platforms` 是总览页与设置页每次进来都要打的端点，
+    # 让它顺手连一次桥等于给首页加风控（Dashboard 的 docstring 同一条纪律）。
+    mirror = {record.name: record for record in await state.storage.platforms.list_all()}
     items = [
         PlatformSummary(
             name=name,
             display_name=cfg.display_name,
             enabled=cfg.enabled,
             implemented=name in implemented,
+            health_status=record.health_status if record else None,
+            health_checked_at=record.health_checked_at if record else None,
+            health_detail=record.health_detail if record else None,
         )
-        for name, cfg in (
-            (n, state.config_manager.get_platform(n)) for n in state.config_manager.platform_names()
+        for name, cfg, record in (
+            (n, state.config_manager.get_platform(n), mirror.get(n))
+            for n in state.config_manager.platform_names()
         )
     ]
     return PlatformsResponse(platforms=items)
