@@ -21,6 +21,14 @@ from intelligence_hub_v2.models.creator import (
     CreatorRef,
     CreatorUpdatableFields,
 )
+from intelligence_hub_v2.models.engagement import (
+    METRIC_CHECKPOINT_VALUES,
+    MetricCheckpoint,
+    MetricSnapshot,
+    MetricSnapshotDraft,
+    VideoComment,
+    VideoCommentDraft,
+)
 from intelligence_hub_v2.models.event import Event, EventType, StoredEvent
 from intelligence_hub_v2.models.manifest import Manifest, ManifestBuilder, ManifestRecord
 from intelligence_hub_v2.models.platform import HEALTH_STATUSES, PlatformRecord
@@ -51,6 +59,7 @@ from intelligence_hub_v2.models.video import (
 
 __all__ = [
     "HEALTH_STATUSES",
+    "METRIC_CHECKPOINT_VALUES",
     "UPDATABLE_CREATOR_FIELDS",
     "UPDATABLE_VIDEO_FIELDS",
     "ArtifactRef",
@@ -65,6 +74,9 @@ __all__ = [
     "Manifest",
     "ManifestBuilder",
     "ManifestRecord",
+    "MetricCheckpoint",
+    "MetricSnapshot",
+    "MetricSnapshotDraft",
     "Page",
     "PagedResult",
     "PlatformRecord",
@@ -78,6 +90,8 @@ __all__ = [
     "TranscriptRecord",
     "TranscriptSegment",
     "Video",
+    "VideoComment",
+    "VideoCommentDraft",
     "VideoDraft",
     "VideoFilters",
     "VideoMeta",

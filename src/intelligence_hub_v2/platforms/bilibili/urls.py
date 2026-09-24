@@ -13,7 +13,7 @@ B站这边有一个抖音没有的便利：**`bvid` 自带校验形状**（`BV` 
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from pydantic import HttpUrl
 
@@ -137,6 +137,20 @@ def view_api_url(bvid: str) -> str:
 def player_api_url(bvid: str, cid: str | int) -> str:
     """播放器信息，含字幕轨列表。"""
     return f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}"
+
+
+def reply_api_url(aid: str | int, *, page_no: int = 1, page_size: int = 20) -> str:
+    """顶层评论分页接口（`x/v2/reply`，`type=1` = 视频）。**实测匿名可访问**。
+
+    `oid` 要的是 **aid（数字 id）而不是 bvid** —— 这是这一格最容易写错的地方：
+    传 bvid 进去 B站 回 `code:-400 请求错误`，而那句报错长得像"接口挂了"，
+    实际是参数身份不对。所以取评论之前必须先过一次 `view` 接口拿 `aid`
+    （V1 也是这么做的，且它在 aid 缺失时直接抛而不是发一个注定失败的请求）。
+    `sort=2`（按点赞序）由调用方给，不在 URL 里写死 —— 默认那档是按时间，
+    "看热评"与"看最新"是两个问题。
+    """
+    query = urlencode({"type": 1, "oid": aid, "pn": page_no, "ps": page_size})
+    return f"https://api.bilibili.com/x/v2/reply?{query}"
 
 
 def card_api_url(mid: str) -> str:

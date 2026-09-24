@@ -37,9 +37,11 @@ from sqlalchemy.pool import StaticPool
 
 from intelligence_hub_v2.errors import MigrationError, StorageError
 from intelligence_hub_v2.logging import get_logger
+from intelligence_hub_v2.storage.repositories.comments import VideoCommentRepository
 from intelligence_hub_v2.storage.repositories.creators import CreatorRepository
 from intelligence_hub_v2.storage.repositories.events import EventRepository
 from intelligence_hub_v2.storage.repositories.manifests import ManifestRepository
+from intelligence_hub_v2.storage.repositories.metrics import MetricSnapshotRepository
 from intelligence_hub_v2.storage.repositories.platforms import PlatformRepository
 from intelligence_hub_v2.storage.repositories.task_runs import TaskRunRepository
 from intelligence_hub_v2.storage.repositories.transcripts import TranscriptRepository
@@ -416,6 +418,14 @@ class SqliteStorage:
         return self._repositories.manifests
 
     @property
+    def video_comments(self) -> VideoCommentRepository:
+        return self._repositories.video_comments
+
+    @property
+    def metrics(self) -> MetricSnapshotRepository:
+        return self._repositories.metrics
+
+    @property
     def sessionmaker(self) -> async_sessionmaker[AsyncSession]:
         """给需要写自定义查询的调用方（分析层、迁移脚本）。"""
         return self._require_sessionmaker()
@@ -459,3 +469,5 @@ class _Repositories:
         self.task_runs = TaskRunRepository(session_factory)
         self.events = EventRepository(session_factory)
         self.manifests = ManifestRepository(session_factory)
+        self.video_comments = VideoCommentRepository(session_factory)
+        self.metrics = MetricSnapshotRepository(session_factory)

@@ -346,6 +346,91 @@ manifests_table = Table(
 
 
 # ---------------------------------------------------------------------------
+# 2.11 video_comments（§2.3 的附属表：评论不是独立实体，它只属于某一条作品）
+# ---------------------------------------------------------------------------
+
+video_comments_table = Table(
+    "video_comments",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    # CASCADE：作品删掉，它下面的评论没有独立存在的意义（与 transcripts 同一口径）。
+    Column(
+        "video_id",
+        Integer,
+        ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("platform", String(32), nullable=False),
+    # 平台原生评论 id。**必填且参与唯一键**：没有它就没法判断"这条是不是上次那条"，
+    # 只能整批重插 —— 那是 V1 的 `video_comments` 表的实际行为，重复率随采集轮数涨。
+    Column("platform_comment_id", String(191), nullable=False),
+    Column("parent_platform_comment_id", String(191), nullable=True),
+    Column("author_platform_id", String(191), nullable=True),
+    # `author_name` 与 `content` 是**外部输入**（V1 §5 的口径）：入库原样存，
+    # 渲染交给 React 的默认转义。这里不做清洗 —— 清洗会改变"用户到底说了什么"。
+    Column("author_name", _Text, nullable=False, server_default=""),
+    Column("content", _Text, nullable=False),
+    Column("like_count", Integer, nullable=True),
+    Column("reply_count", Integer, nullable=True),
+    Column("published_at", UTCDateTime, nullable=True),
+    # 这一列是"我们什么时候抓到的"，不是"平台说的时间"。两件事分开的理由：
+    # 指标快照那条链（§2.6）要算的是"发布后 N 小时多少评论"，拿抓取时间冒充
+    # 评论时间会把楼中楼排到父评论前面。
+    Column("fetched_at", UTCDateTime, nullable=False, default=_now),
+    Column("metadata_json", _JSON, nullable=False, server_default="{}"),
+    Index(
+        "uq_video_comments_video_platform_comment_id",
+        "video_id",
+        "platform",
+        "platform_comment_id",
+        unique=True,
+    ),
+    Index("idx_video_comments_video", "video_id"),
+    Index("idx_video_comments_published", "video_id", "published_at"),
+)
+
+
+# ---------------------------------------------------------------------------
+# 2.12 video_metric_snapshots（同一作品在多个检查点上的指标读数）
+# ---------------------------------------------------------------------------
+
+METRIC_CHECKPOINTS: tuple[str, ...] = ("publish", "24h", "72h", "7d", "manual")
+"""检查点的合法取值。V1 的 `video_metric_snapshots` 用的是同一组语义
+（发布时 / 24h / 72h / 7d），`manual` 是 V2 加的：`enrich` 任务补抓存量视频时
+不属于任何一个固定窗口，硬塞进 `7d` 会让"发布 7 天破千"这类判断被一条三年前的
+视频污染。"""
+
+video_metric_snapshots_table = Table(
+    "video_metric_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "video_id",
+        Integer,
+        ForeignKey("videos.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("checkpoint", String(16), nullable=False),
+    # 四项都可空 —— **可空不等于"抓失败了"**，而是"这个平台今天没有这一项"。
+    # 小红书的公开主页卡片上没有 view_count，把"没有"写成 0 会得到一条
+    # "发布时 0 播放"的快照，而下一轮算增长率时要除以它。
+    Column("view_count", Integer, nullable=True),
+    Column("like_count", Integer, nullable=True),
+    Column("comment_count", Integer, nullable=True),
+    Column("share_count", Integer, nullable=True),
+    # 读数的采集时刻。唯一键含它吗？不含 —— 见下面的 UNIQUE 注释。
+    Column("collected_at", UTCDateTime, nullable=False, default=_now),
+    Column("metadata_json", _JSON, nullable=False, server_default="{}"),
+    _enum_check("checkpoint", "checkpoint_enum", METRIC_CHECKPOINTS, nullable=False),
+    # 唯一键是 (video_id, checkpoint) 而**不是** (video_id, checkpoint, collected_at)：
+    # 后者允许同一个窗口攒出一串读数，而"24h 那条到底算哪个"没有答案，
+    # 增长率曲线会随重跑次数变长。同一窗口重抓 = 覆盖（见 repository 的 upsert）。
+    Index("uq_metric_snapshots_video_checkpoint", "video_id", "checkpoint", unique=True),
+    Index("idx_metric_snapshots_checkpoint", "checkpoint"),
+)
+
+
+# ---------------------------------------------------------------------------
 # 表名 → Table 的映射（给 Alembic 漂移检查与 preflight 用）
 # ---------------------------------------------------------------------------
 
@@ -354,11 +439,18 @@ ALL_TABLES: tuple[Table, ...] = (
     creators_table,
     videos_table,
     transcripts_table,
+    video_comments_table,
+    video_metric_snapshots_table,
     task_runs_table,
     task_events_table,
     manifests_table,
 )
-"""V2.0 的表。V2.2 的 topics / drafts / feishu_sync_state 不在这份清单里，
-它们的迁移和模型一起加（见 data-model.md §2.8-§2.10）。"""
+"""建库与漂移看护读的这份清单。
+
+编号跟着 `data-model.md`：2.8-2.10 是 V2.2 预留的三张（今天没有表），
+所以评论与快照是 §2.11 / §2.12，不是接在 2.7 后面。
+
+V2.2 的 topics / drafts / feishu_sync_state 仍不在里面，它们的迁移和模型一起加
+（`data-model.md §2.8-§2.10`）。"""
 
 TABLE_NAMES: frozenset[str] = frozenset(t.name for t in ALL_TABLES)

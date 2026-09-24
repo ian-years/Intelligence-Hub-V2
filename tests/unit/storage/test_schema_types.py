@@ -238,6 +238,8 @@ EXPECTED_CHECKS: frozenset[str] = frozenset(
         "transcripts_char_count_nonneg",
         "transcripts_sentence_count_nonneg",
         "transcripts_summary_method_enum",
+        # video_metric_snapshots（ADR-0020：随 create_table 下发，autogenerate 看得见）
+        "video_metric_snapshots_checkpoint_enum",
         # task_runs
         "task_runs_status_enum",
         "task_runs_progress_range",

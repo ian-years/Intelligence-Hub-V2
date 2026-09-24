@@ -245,6 +245,60 @@ CREATE INDEX idx_manifests_written ON manifests(written_at DESC);
 
 **双写**（文件 + SQLite）：前端历史列表查 SQLite，详情/审计查文件。
 
+### 2.11 `video_comments`（V2.1 T4.1，ADR-0020）
+
+```sql
+CREATE TABLE video_comments (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id           INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    platform         TEXT NOT NULL,
+    platform_comment_id TEXT NOT NULL,
+    parent_platform_comment_id TEXT,
+    author_platform_id TEXT,
+    author_name        TEXT NOT NULL DEFAULT '',
+    content            TEXT NOT NULL,
+    like_count         INTEGER,
+    reply_count        INTEGER,
+    published_at       TIMESTAMP,
+    fetched_at         TIMESTAMP NOT NULL,
+    metadata_json      TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(video_id, platform, platform_comment_id)
+);
+```
+
+- **`platform_comment_id` 为空在模型层就拒**（`VideoCommentDraft`）。空串在唯一键里是合法值，
+  收下它的后果是"之后所有没 id 的评论撞上同一条"，症状是"这一轮只抓到 1 条"且不报错。
+- `author_name` / `content` 是**外部输入**：原样存，转义交给前端（React 默认转义）。不在库里清洗
+  是因为清洗会改变"用户到底说了什么"，而这个字段的全部价值就是那句话。
+- `fetched_at` ≠ `published_at`：前者是"我们什么时候抓的"。混用会让楼中楼排到父评论前面。
+- 只抓顶层（与 V1 一致）。楼中楼是另一个接口、另一份配额，要它是新的一格。
+
+### 2.12 `video_metric_snapshots`（V2.1 T4.2，ADR-0020）
+
+```sql
+CREATE TABLE video_metric_snapshots (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id      INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    checkpoint    TEXT NOT NULL,
+    view_count    INTEGER,
+    like_count    INTEGER,
+    comment_count INTEGER,
+    share_count   INTEGER,
+    collected_at  TIMESTAMP NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(video_id, checkpoint),
+    CHECK (checkpoint IN ('publish','24h','72h','7d','manual'))
+);
+```
+
+- **唯一键不含 `collected_at`**：含了就会让同一个窗口攒出一串读数，而"24h 那条算哪个数"
+  没有答案，增长率曲线随重跑次数变长。重抓 = 覆盖，被覆盖的那份记在
+  `metadata_json.overwrote` 里。
+- **四项可空，NULL 是"平台没回这个字段"，不是 0**。算增长率的任何一方都必须先跳过 NULL。
+- 四项全空的草稿**被 Repository 拒收**：一条空快照会冒充"这个窗口抓过了"，
+  于是 `video_ids_missing` 永远不再看这条作品 —— 一次失败的抓取换来一个永久盲点。
+- `videos` 那一行从此是"插入那一刻的读数"，历史在这一张表里。
+
 ### 2.8 `topics`（V2.2 实施）
 
 ```sql
