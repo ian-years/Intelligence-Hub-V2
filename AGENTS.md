@@ -61,10 +61,12 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `src/intelligence_hub_v2/asr/` | sherpa-onnx 封装（SenseVoice + 静音切句补标点） |
 | `src/intelligence_hub_v2/bridge/` | CDP 桥服务（`server.py`：Playwright + Chrome 持久化 profile，只绑 `127.0.0.1:3457`；**客户端**在 `infra/cdp_bridge.py`） |
 | `frontend/` | React + Vite + TS 源；`frontend/src/pages/` 七页，`components/memphis/` 自定义组件，`styles/tokens.css` 设计令牌 |
+| `src/intelligence_hub_v2/ported/` | **未适配的 V1 搬运区**（ADR-0018）：`feishu/`、`reports/`、`v1_shared/`。主流程不许 import 它，豁免只有 ruff/mypy/coverage 三处，`git ls-files` 就是债的清单 |
 | `tools/migrate_from_v1.py` | V1 → V2 一次性迁移脚本（只读 V1 SQLite） |
+| `tools/rescan_local.py` / `tools/render_reports.py` | 磁盘重扫恢复（T4.4）与报告薄壳（T5.4，**只走子进程**，不 import `ported/`） |
 | `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie 到 `data/cookies/<域名>.txt`（走 `CookieManager.refresh_from_bridge`，渲染器只有那一处；T0.2，2026-09-24） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
-| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试 |
+| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试。**e2e 默认不入选**（`addopts` 里那条 `-m`；Playwright 与 uvicorn 会碰进程级事件循环 policy），跑它用 `make e2e` |
 | `docs/adr/` | 架构决策记录（0001~0015，背景/选项/决定/后果。**0014 已预留**给 `_check_requires` 那道闸，新决定从 0016 起 —— 编号不复用） |
 | `docs/specs/` | 接口契约文档 |
 | `docs/progress/YYYY-MM-DD.md` | 每日推进日志 |
@@ -97,7 +99,8 @@ make build
 uv run intelligence-hub        # console script = main:cli；`python -m ...main` 没有 __main__，跑了不做事
 
 # 测试
-make test                    # 全跑（不含 real_network）
+make test                    # 全跑（不含 real_network 与 e2e）
+make e2e                     # L6：真 Chromium + 真 uvicorn（适配器与外网全是替身）
 make test-backend            # 仅 pytest
 make test-real               # 真机烟雾（手动跑）
 

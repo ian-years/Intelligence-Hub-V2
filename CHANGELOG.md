@@ -205,6 +205,49 @@
   `Test*` 类当成本模块收集 —— `tests/contracts` 收集数 310 → 289，一条不少。
   纪律由 `test_this_module_binds_no_test_classes` 钉住（`docs/lessons.md` 经验 34）
 
+### Added（V2.1 批量推进 · 2026-09-24 夜 → 2026-09-25）
+
+- **T2.1 第三片** · 小红书契约测试：`tests/contracts/test_xiaohongshu_adapter.py`（191 条）+
+  `TestXiaohongshuContract`（基类 11 条）+ 16 份合成 fixture 与其 README（明写"挡不住什么"）。
+  四个模块覆盖率 23/35/37/33% → 98/100/100/99%
+- **T2.2** · `platforms/youtube/`（urls/config/listing/media/adapter）+ 163 条用例，四平台齐；
+  字幕（`fetch_subtitles`）是 V2 新兑现——V1 的 YouTube 路径没有这条码
+- **ADR-0019** · 图文笔记的产物表示：`MediaArtifact.has_video` + `SingleFileArtifact.extra_paths`
+- **ADR-0020** · `video_comments` 与 `video_metric_snapshots` 两张附属读数表（Alembic 0003）+ B 站评论抓取
+- **ADR-0021** · `topics` 与 `drafts` 按 §2.8/§2.9 的预留契约落表（Alembic 0004）+ 6 个端点 + `pages/Topics.tsx`
+- **ADR-0022** · preflight 把探测结论写回 `platforms` 镜像；`/api/platforms` 带出健康三列；总览画灯
+- **ADR-0023** · 暗色版：`[data-theme="dark"]` 重指派三个中性色令牌的角色 + 新令牌 `--color-on-accent`
+- **T5.2 / T5.3** · `core/analysis/{benchmark,draft}_engine.py`（V1 两张规则表逐字搬，
+  "参数是装饰"的四处实测拆穿并写进 docstring）+ `GET /api/benchmark-analysis` +
+  `POST /api/generate-draft-script`
+- **T5.4** · V1 三份报告脚本搬进 `ported/reports/`（4114→5172 行，AST 比对 `diffcount 0`）+
+  `tools/render_reports.py`：第一例**只走子进程、不 import 搬运区**的薄壳（ADR-0018）
+- **T5.6** · `lib/theme.ts` + `ThemeSwitch`（亮/暗/跟随系统）+ `tokens.spec.ts` 里实现的
+  WCAG 对比度判据（两个主题逐对量）
+- **T5.7** · `tests/e2e/`：真 Chromium + 真 uvicorn 线程 + 假适配器，8 条关键流程。
+  `make e2e` 从"调一个 Python playwright 没有的子命令"改成能跑的那条
+- **T6.3 第二片** · `GET/PUT /api/schedule` + `POST /api/schedule/run-now`，改 cron 当场重排不重启；
+  被环境变量盖住的键由配置层自己算（`scheduler_keys_shadowed_by_env`），接口不编镜像名单
+- **T6.5** · `GET /api/videos/{id}/media`（HTTP Range + 媒体目录包含判定 + 容器白名单）+
+  详情页 `<video>` 与逐句时间轴跳转
+- **T6.6** · `/api/videos?sort=benchmark` 与博主页的「爆款回溯」面板
+- **T6.8** · `CollectParams.metrics_only`（V1"仅采集数据"的真形状）
+
+### Changed（同批）
+
+- `pyproject.toml` 的 `addopts` 加上 `-m "not real_network and not e2e"`：裸跑 `pytest` 不再被
+  e2e 的事件循环副作用污染（实测 1604 errors → 0）。命令行上的 `-m` 覆盖它，`make e2e` 照旧
+- `api/hooks/useTasks.ts`：`useRuns` 在"有 running"时轮询（e2e 发现的缺陷，见 Fixed）
+- 排序与筛选类的用例从"样本式"改写成"关系式"：加一家平台或加一档排序不再需要挨个改用例
+
+### Fixed（同批）
+
+- `tasks/postprocess.py::_audio_source`：图文笔记的 `media_aux_paths_json` 会被当成音频喂给 ffmpeg
+  （ADR-0019 的闸门从"aux 非空"改成认 `metadata_json.has_audio is False`）
+- `platforms/xiaohongshu/media.py`：直链兜底成功时把前面候选的失败原文丢掉（§7.2 断了一半）
+- `useRuns`：只在提交那一刻 invalidate 一次 → 运行历史永远停在"正在跑"，
+  而实时事件在滚（`make e2e` 那一条 `test_a_run_row_leaves_running_without_a_page_reload` 钉住）
+
 ### Changed
 - **`docs/adr/0011`：cookie 阶梯的顺序只有一处真源。**
   `DouyinConfig.ytdlp_cookie_priority` 删除 —— 它与 `DouyinAdapter.capabilities.cookie_variants`

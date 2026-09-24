@@ -145,8 +145,20 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ### V2.1「四平台齐全 + 转写完整」 — 规划中
 
-- [ ] 小红书 Adapter（依赖桥的页面 JS 注入）
-- [ ] YouTube Adapter（纯 yt-dlp，本机网络不可达时如实失败）
+> 2026-09-25（V2.1 批量推进）：**Phase 2 收满、Phase 6 收满、Phase 5 差 T4.7 与 e2e 第二片**。
+> 一次会话落了 T2.1 二片 / T2.2 / T5.2-T5.7 / T6.3 二片 / T6.5-T6.8，加 5 份新 ADR（0019-0023）。
+> 全程数字与逐条归属见 `docs/progress/2026-09-25.md`；**待你点头的 12 件事在它的第 7 节**。
+> 一句话摘要：`pytest` 2335 passed / 覆盖率 94.8%（`platforms+tasks+tools` 95%）、
+> 前端 275 passed、e2e 那一档第一次真的跑起来（8 条，真 Chromium + 真 uvicorn，`make e2e`）。
+
+- [x] 小红书 Adapter（依赖桥的页面 JS 注入）
+  —— 2026-09-24/25（V2.1 T2.1）三片齐：共用纯解析层（ADR-0016）→ 适配器落地并注册 →
+  202 条契约测试 + 16 份合成 fixture（`tests/fixtures/xiaohongshu/README.md` 明写了它挡不住什么）。
+  四个模块覆盖率 23/35/37/33% → 98/100/100/99%。**真采一条仍缺登录态**（T3.3）。
+- [x] YouTube Adapter（纯 yt-dlp，本机网络不可达时如实失败）
+  —— 2026-09-25（T2.2）四平台齐：枚举走共用的 `--flat-playlist -j`，字幕是 V2 新兑现的一条
+  （V1 那 630 行没有字幕码）。`needs_cookies=False` → 配置里那一格不出现 `cookies_file`（ADR-0012 同口径）。
+  V1 的"下载完 glob 第一个 mp4"那个静默交纯视频轨的缺陷没有复刻。**本机到 YouTube 不通，真采未验**。
 - [x] ASR 引擎接入（sherpa-onnx SenseVoice，§7.9 标点注入）
   —— 2026-09-24（V2.1 T1.1）落 `src/intelligence_hub_v2/asr/`：静音切句 + 反幻觉闸 +
   切点补标点（§7.9 已升进契约测试看护）+  recognizer 缓存；引擎交回契约对象 `Transcript`
@@ -176,16 +188,24 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `subtitle_missed`（含"已回落"这半件事）。用例：
   `tests/integration/test_bili_subtitle_preferred.py` 三条。
   真 B站 视频 + 真字幕 API 那一跑仍欠在 T3.2（要网络与登录 cookie）。
-- [ ] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）
+- [x] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）
+  —— 2026-09-25（T6.5）：字节走新的 `GET /api/videos/{id}/media`（HTTP Range + 只认 `data/media/` 底下
+  + 只放视频容器扩展名，两条判据同一个文件里），口播稿有 `segments_json` 就渲染成可点时间轴。
   —— V2.0 已有最小版（`pages/VideoDetail.tsx`：metadata + 口播稿全文，**无播放器**，
   页面上写明了）。这一条要的是播放器与时间戳跳转，别从零再建一遍。
-- [ ] 前端 Creators 页（博主库 + 跟踪开关 + 添加博主 + 爆款回溯入口）
+- [x] 前端 Creators 页（博主库 + 跟踪开关 + 添加博主 + 爆款回溯入口）
+  —— 2026-09-25（T6.6）：「爆款回溯」面板就是 `/api/videos?creator_id=&sort=benchmark`，
+  面板画的顺序等于后端给的顺序（前端不重排）。按的是 `videos.like_count`（最近一次入库读数 =
+  已知最高水位），不是快照峰值 —— 理由写在那条 commit 与代码注释里。
   —— V2.0 已有最小版（列表 + 开关 + 收录表单，真数据下量过 4 张卡）。缺的是爆款回溯入口。
 - [x] 前端 Tasks 页（任务卡片墙 + 运行历史 + 实时事件流 + 取消）
   —— V2.0 的最小版就把这四件做全了（`pages/Tasks.tsx`）：卡片墙的发起判据来自
   `params_schema`，事件流是真 SSE（连上时亮"事件流已连上"），取消只对 `running` 出现。
 - [ ] `BackfillTask` 实现（§7.22 按 URL 直接定位，不退化全库扫描）
 - [ ] 真机烟雾测试：抖音 / B站 / 小红书 三平台各采一条 + 转写
+  —— 2026-09-25：前置全解除（桥 T0.1、cookie 导出 T0.2、三家适配器 T2.x、`--rollback` T6.2），
+  **可粘贴的验证命令已逐条写进 `docs/plans/v2.1-migration-plan.md` 的 Phase 3**（那五条都标了 `[!]`）。
+  缺的只有"人已登录的 Chrome"与"允许往 live `data/` 写"这两件由人点头的事。
 
 ### V2.2「飞书 + 分析层 + 暗色」 — 规划中
 

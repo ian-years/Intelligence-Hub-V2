@@ -2247,6 +2247,110 @@ mock 就把 trigger 解析 / job 注册 / **executor 派发**整段跳过了，�
 
 ---
 
+## V2.1 实施阶段（2026-09-24 夜 → 2026-09-25，一批并行子代理）
+
+### 经验 · 计划表是从 V1 的 `add_argument` 清单抄的，所以它会承诺 V1 没有的功能
+
+**现象**：T6.8 写着"补 `--creator-source`、`--collection-strategy`、`--cross-platform-identity`
+三个参数 + handler 分支"，验收句是"`--creator-source feishu` 真从飞书镜像取博主列表"。
+
+**根因**：读 V1 的 `download_douyin_latest.py` —— `creator_source` 只出现在 `:826` 那个
+写进 manifest 的字典里，取数路径永远是 `list_tracked_creators(Path(args.creators))`；
+`cross_platform_identity` 在**整个脚本里没有任何一处被读**。只有 `collection_strategy` 真做事，
+而它的含义是"某个博主要不要下媒体"（V1 四个中文常量里两个等价），不是"取哪几条作品"。
+计划表按参数名建任务，参数名后面有没有实现它不知道。
+
+**解法**：只实现真有其事的这一个，并按它实际做的事命名（`CollectParams.metrics_only`），
+另两个**不搬**，源码证据写进 commit message 与 `docs/progress/2026-09-25.md` §3.1。
+
+**判据**：搬 V1 的参数之前先 `grep` 它的**读取点**，不是它的声明点。
+一个从没被读过的 `args.x` 不是功能，是残骸；把它实现成活的行为等于替 V1 编一段它没做过的历史。
+
+**看护**：`tests/unit/tasks/test_collect_metrics_only.py`（7 条，含"跳过下载不许改写已有行"那条）。
+
+---
+
+### 经验：e2e 与 pytest-asyncio 抢的是**进程级**事件循环 policy
+
+**现象**：加了 `tests/e2e/` 之后裸跑 `pytest`（不带 `-m`）→ 161 failed + **1604 errors**，
+错误文本是 `RuntimeError: Runner.run() cannot be called from a running event loop` /
+`Cannot run the event loop while another loop is running`，全在 e2e 之后的那些 async 用例上。
+
+**根因**：e2e 里 `sync_playwright()` 与 `uvicorn.Server.run()`（后台线程）都会碰进程级的
+事件循环设置。第一反应是"lifespan 里的 `setup_logging()` 冲掉 caplog handler"——
+补了还原 fixture 之后**照样 382 errors**，说明猜的那条不是主因。真正的问题是
+"同一进程里两种事件循环主人"，它不是靠还原 logging 能修的。
+
+**解法**：把 e2e 从默认档里**摘出去**：`addopts` 里加 `-m` + `"not real_network and not e2e"`
+（两个列表项，不能写成 `'-m "…"'` —— 那会把引号交给 marker 解析器，当场爆炸）。
+命令行上的 `-m` 覆盖 addopts，所以 `make e2e` 照旧跑得动。
+
+**判据**：任何"会起自己的事件循环主人"的测试层（真浏览器、真子进程服务）都必须默认不入选，
+并且**要在混跑里验一次**是否干净 —— 只跑 `make e2e` 单独一档永远看不出污染。
+
+**看护**：本条由两次混跑实测得出（382 errors → 0 deselected 污染）；
+`make e2e` 与 CI 的两个 job 各自带 `-m`。
+
+---
+
+### 经验：e2e serve 的是构建产物，产物过期时红得没有道理
+
+**现象**：改完 `useRuns`（加轮询）之后两条 e2e 红，代码没坏。
+
+**根因**：`dist_dir` fixture 第一版写的是"dist 存在就复用"。FastAPI 挂的是
+`frontend/dist`，那是**上一次构建**的应用。
+
+**解法**：e2e 每次都 `npm run build`（vite 增量，本机一秒级）。
+
+**判据**：任何"测的是构建产物"的用例，产物必须由测试自己保证新鲜；
+"存在就复用"是一个会自我欺骗的优化。
+
+**看护**：`tests/e2e/conftest.py::dist_dir` 的 docstring 写了这件事的来历。
+
+---
+
+### 经验：暗色模式的"全站可读"必须是**算出来的数**，而且要顺手抓出既有违规
+
+**现象**：`tokens.css` 加一组暗色覆盖，验收句写"computed style 量过"，
+而 jsdom 不加载样式表、`getComputedStyle` 里自定义属性与层叠都不算。
+
+**根因**：如果只在 Vitest 里断言"令牌存在/字符串对得上"，那等于没量：
+`text-coral-red` 压在 `paper-cream` 上其实只有 **2.6:1**（这个违规 V2.0 就有，一直没人发现）。
+
+**解法**：两条腿 ——（1）在 `src/styles/tokens.spec.ts` 里实现 WCAG 2.1 相对亮度与对比度，
+把"源码里真被当正文色用的每个色压在页面底上"两版都量一遍；（2）唯一量不到真像素的那一半
+交给 e2e：`test_dark_mode_changes_the_computed_page_background` 读 `getComputedStyle(document.documentElement)`，
+且**来回都切**（只测单向的话，"切换"其实只是"一次性变暗"）。
+顺带把 `main.tsx` 用的是 `HashRouter` 这件事查清 —— 我先给 `StaticFiles` 加了 SPA fallback
+和 4 条用例，发现哈希路由下根本没有服务端深链接，**整块撤掉**（没有问题的预防也是债）。
+
+**判据**：颜色类判据写成"每一对被实际用到的前景/背景组合的对比度 ≥ 阈值"，
+不要写成"暗色令牌数量等于 N"。会扫源码找违规的判据（`text-<色>`）比清单式的好，
+因为它能抓到写的人没想到的那一处。
+
+**看护**：`src/styles/tokens.spec.ts`（§11 那一组，15 条）+ `tests/e2e/test_key_flows.py` 的暗色那条。
+
+---
+
+### 经验：并行子代理会同时做同一件事，"谁拥有哪个目录"要在派活时划清
+
+**现象**：派出去的第二份 T4.6（B 站外部浏览器清单）落地时，`bilibili/adapter.py:320`
+已经接着一份在跑了 —— 同一能力两份实现。
+
+**根因**：任务表按编号派活，而其中一条（T4.6）在前一批里已经被顺带做完并接线了。
+派活的时候没有"这个目录现在归谁"的信息。
+
+**解法**：把后到的那份停在 `.scratch/t46-park/`（不入库、不删，等人裁定），
+并把"派活前列出被派文件的唯一归属"记成流程约束。
+
+**判据**：同一批并行任务里，任何一个"能力"只能有一个目标文件路径；
+发现重复时**停掉后到的**，不要合并成第三份。
+
+**看护**：无（流程约束）。同一批的另一条并发事故：两个 pytest 会话共用
+`--basetemp=.scratch/pytest` → 一方清空目录，另一方 16 failed；换 basetemp 复跑 530 passed。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。
