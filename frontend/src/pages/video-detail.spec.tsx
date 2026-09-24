@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,13 @@ const transcriptBody = {
   summary_method: null,
 };
 
+/** `transcripts.segments_json` 的真形状（`models/transcript.py::TranscriptSegment`）。
+ *  这里的两个起点刻意不是整十：`0:08` 与 `1:05` 同时验 `clockLabel` 的分/秒补零与进位。 */
+const SEGMENTS =
+  '[{"start_seconds":0,"end_seconds":7.4,"text":"口播稿第一句。"},' +
+  '{"start_seconds":8,"end_seconds":21,"text":"口播稿第二句。"},' +
+  '{"start_seconds":65,"end_seconds":80,"text":"口播稿第三句。"}]';
+
 const calls: string[] = [];
 const patches: { url: string; body: string }[] = [];
 
@@ -42,13 +49,30 @@ const patches: { url: string; body: string }[] = [];
  *  重取还回一个"未隐藏"的行，就等于用桩把"墓碑生效了"这件事抹平 ——
  *  那样的用例只能证明按钮被点过。 */
 let hiddenRow = false;
-const row = (): unknown =>
-  hiddenRow
-    ? makeVideo({ id: 7, title: "一条作品", is_hidden: true, hidden_reason: "在作品详情页隐藏" })
-    : video;
+let noMedia = false;
+const row = (): unknown => {
+  if (hiddenRow) {
+    return makeVideo({
+      id: 7,
+      title: "一条作品",
+      is_hidden: true,
+      hidden_reason: "在作品详情页隐藏",
+    });
+  }
+  // 只换那一列：其余字段跟着 `video` 走，否则"没有媒体"这一条会顺带把标题也改掉，
+  // 那一批按标题找元素的用例就查不出自己该查的东西。
+  return noMedia ? makeVideo({ ...video, media_path: null, media_source: null }) : video;
+};
 
-function stub(options: { transcript?: [number, unknown]; creator?: [number, unknown] } = {}): void {
+function stub(
+  options: {
+    transcript?: [number, unknown];
+    creator?: [number, unknown];
+    noMedia?: boolean;
+  } = {},
+): void {
   hiddenRow = false;
+  noMedia = Boolean(options.noMedia);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -94,6 +118,10 @@ function renderAt(path: string): void {
 beforeEach(() => {
   calls.length = 0;
   patches.length = 0;
+  // jsdom 的 `play()` 是一个 "Not implemented" 桩，返回 undefined 而不是 Promise，
+  // 组件里 `play().catch()` 会当场 TypeError。真浏览器一定返回 Promise，
+  // 所以补的是运行环境的缺口，不是给实现擦屁股。
+  HTMLMediaElement.prototype.play = (): Promise<void> => Promise.resolve();
   stub();
 });
 
@@ -108,14 +136,71 @@ describe("VideoDetail", () => {
     expect(calls.filter((call) => call.includes("/api/videos"))).toHaveLength(0);
   });
 
-  it("元数据画出来，并且明说这一版没有播放器", async () => {
+  it("元数据画出来，播放器指向媒体端点而不是磁盘路径", async () => {
     renderAt("/video/7");
     await screen.findByText("一条作品");
     expect(screen.getByText("4:05")).toBeTruthy();
     expect(screen.getByText("12,345")).toBeTruthy();
     expect(screen.getByText(/media\/bilibili\/BV1xx\/video\.mp4/)).toBeTruthy();
     expect(screen.getByText(/yt_dlp/)).toBeTruthy();
-    expect(screen.getByText(/这一版没有内嵌播放器/)).toBeTruthy();
+
+    const player = screen.getByLabelText("播放器");
+    // 断的是**这一个 src**，不是"有个 video 标签"：库里那一列是相对 data/ 的路径，
+    // 前端要是自己拼出 `media/bilibili/…`，开发模式（:5173）下必然 404。
+    expect(player.tagName).toBe("VIDEO");
+    expect(player.getAttribute("src")).toBe("/api/videos/7/media");
+    // 一条几百 MB 的视频不该在"打开详情页"时就整段拉下来
+    expect(player.getAttribute("preload")).toBe("metadata");
+  });
+
+  it("没有落地媒体：不画播放器，说清为什么跳不了", async () => {
+    stub({ noMedia: true });
+    renderAt("/video/7");
+    await screen.findByText(/这一条没有可播的文件/);
+    expect(screen.queryByLabelText("播放器")).toBeNull();
+  });
+
+  it("媒体取不到时说出原因，能播之后把那句话撤掉", async () => {
+    renderAt("/video/7");
+    const player = (await screen.findByLabelText("播放器")) as HTMLVideoElement;
+    // 库里记着路径 ≠ 盘上真有这个文件（被移动过 / 下载失败留在清单里）。
+    // `<video>` 自己只留一块黑，所以这一行是"没媒体"与"媒体读不到"唯一的分界。
+    fireEvent.error(player);
+    expect(await screen.findByText(/媒体取不到/)).toBeTruthy();
+
+    fireEvent.playing(player);
+    expect(screen.queryByText(/媒体取不到/)).toBeNull();
+  });
+
+  it("点时间戳跳到那一秒（播放器与稿子摸的是同一个元素）", async () => {
+    stub({ transcript: [200, { ...transcriptBody, segments_json: SEGMENTS }] });
+    renderAt("/video/7");
+    const stamp = await screen.findByRole("button", { name: "跳到 0:08" });
+    const player = screen.getByLabelText("播放器") as HTMLVideoElement;
+    await userEvent.click(stamp);
+    expect(player.currentTime).toBe(8);
+  });
+
+  it("没有媒体时时间戳还在，但不是按钮", async () => {
+    stub({
+      transcript: [200, { ...transcriptBody, segments_json: SEGMENTS }],
+      noMedia: true,
+    });
+    renderAt("/video/7");
+    await screen.findByText("口播稿第三句。");
+    expect(screen.queryByRole("button", { name: /跳到/ })).toBeNull();
+    // 逐句仍然要能读 —— 句子的价值不只在于跳，V1 搬来的稿子也全都长这样
+    expect(screen.getByText("口播稿第一句。")).toBeTruthy();
+  });
+
+  it("segments_json 读不出结构时退回整段正文，不画半截时间轴", async () => {
+    stub({
+      transcript: [200, { ...transcriptBody, segments_json: '[{"text":"只有这句"}]' }],
+    });
+    renderAt("/video/7");
+    await screen.findByText(/口播稿第一句/);
+    expect(screen.queryByRole("button", { name: /跳到/ })).toBeNull();
+    expect(screen.queryByText("只有这句")).toBeNull();
   });
 
   it("简介保留换行（它是外部输入，靠 React 转义而不是 innerHTML）", async () => {

@@ -1,4 +1,4 @@
-import type { JSX, ReactNode } from "react";
+import { useRef, type JSX, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useCreator } from "@/api/hooks/useCreators";
@@ -8,12 +8,20 @@ import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { PageShell } from "@/components/shared/PageShell";
 import { PlatformBadge } from "@/components/memphis/PlatformBadge";
 import { QueryState } from "@/components/shared/QueryState";
+import { VideoPlayer } from "@/components/shared/VideoPlayer";
+import { clockLabel, parseSegments, type TranscriptSegment } from "@/lib/media";
 import { formatCount, formatDuration, formatTime } from "@/lib/formatters";
 
 /**
- * 作品详情（`/video/:id`）：元数据 + 口播稿。**没有播放器** —— V2.0 不做，
- * 媒体只到"文件在哪个相对路径"。这句要写在页面上：一个空白的播放区会被读成"坏了"，
- * 而实际是"这一版就没做"。
+ * 作品详情（`/video/:id`）：元数据 + 播放器 + 口播稿（T6.5）。
+ *
+ * 播放器只给**有落地媒体**的那一条：库里 `media_path` 为空是常态（只采到元数据、
+ * 或下载失败），画一个黑框会被读成"坏了"。没有媒体时这一栏说的是"没有可播的文件"，
+ * 与库里那一列同源，所以两者不可能各说一套。
+ *
+ * 口播稿有**两种排版**：库里 `segments_json` 有逐句时间戳就渲染成可点的时间轴
+ * （点一句 → 播放器跳到那一秒），没有就退回整段正文。退回不是降级成"少个功能"，
+ * 而是这两类数据本来就不同：字幕轨抓来的与 ASR 出的有句边界，V1 搬来的那份没有。
  *
  * 地址里的 id 不是数字时**不发请求**（`useVideo(undefined)` 那条 `enabled` 挡着），
  * 直接说实话：404 与"这个地址压根不是作品"是两件事，前者该由后端回答。
@@ -22,12 +30,24 @@ export function VideoDetail(): JSX.Element {
   const params = useParams();
   const id = Number(params.id);
   const valid = Number.isInteger(id) && id > 0;
+  const playerRef = useRef<HTMLVideoElement>(null);
 
   const video = useVideo(valid ? id : undefined);
   const transcript = useTranscript(valid ? id : undefined);
   const creator = useCreator(video.data?.creator_id ?? undefined);
   const hide = useHideVideo();
   const unhide = useUnhideVideo();
+
+  /** 跳到某一秒。**没有播放器就没有这一件事**，不假装"跳了"（元素不在，ref 是 null）。 */
+  const seekTo = (seconds: number): void => {
+    const element = playerRef.current;
+    if (!element) return;
+    element.currentTime = seconds;
+    void element.play().catch(() => {
+      // play() 被媒体自身状态拒绝时，`<video>` 的 onError 已经说过一次了；
+      // 这里再叠一句只会把同一个原因讲两遍。
+    });
+  };
 
   if (!valid) {
     return (
@@ -109,11 +129,16 @@ export function VideoDetail(): JSX.Element {
                 <Field label="媒体来源">{data.media_source || "（没记录走了哪条路）"}</Field>
               </dl>
 
-              {/* 计划里 V2.1 才有播放器；V2.0 这一页只有文件路径。写明白，别让人对着空白找播放器。 */}
-              <p className="text-body-sm">
-                这一版没有内嵌播放器：只给媒体文件的相对路径（相对 `data/`）。 播放与字幕时间轴是
-                V2.1 的事。
-              </p>
+              {/* 播放器与"媒体文件"那一栏同一条件：有 media_path 才出图。
+                  没有媒体时那句实话由上面的 Field 说（它显示"（没有落地文件）"），
+                  这里只补一句"所以这一条没有播放与跳转"。 */}
+              {data.media_path ? (
+                <VideoPlayer videoId={data.id} elementRef={playerRef} />
+              ) : (
+                <p className="text-body-sm">
+                  这一条没有可播的文件，所以下面的口播稿也跳不了 —— 采集时只拿到了元数据。
+                </p>
+              )}
 
               {data.description && (
                 <div>
@@ -151,7 +176,12 @@ export function VideoDetail(): JSX.Element {
                           points={body.key_points}
                           method={body.summary_method}
                         />
-                        <p className="whitespace-pre-wrap text-body-md">{body.text}</p>
+                        <TranscriptLines
+                          text={body.text}
+                          segments={parseSegments(body.segments_json)}
+                          seekable={Boolean(data.media_path)}
+                          onSeek={seekTo}
+                        />
                       </HardShadowCard>
                     )}
                   </div>
@@ -162,6 +192,57 @@ export function VideoDetail(): JSX.Element {
         )}
       </QueryState>
     </PageShell>
+  );
+}
+
+/**
+ * 口播稿正文的两种排版（T6.5）。
+ *
+ * 有时间戳 → 逐句一行，每行的时间戳是个跳转按钮；没有 → 整段（`whitespace-pre-wrap`）。
+ * `seekable=false`（这一条没有媒体）时**不画成按钮**：一个点了不动的按钮会被读成
+ * "播放器坏了"，而真正的原因是库里根本没有可播的文件 —— 那句话已经写在播放器那一栏了。
+ *
+ * 逐句那一份来自 `transcripts.segments_json`，与正文是同一趟转写的两个产物
+ * （`asr/engine.py::terminate_sentence` 保证两边的句末标点一致，§7.9）。
+ */
+function TranscriptLines({
+  text,
+  segments,
+  seekable,
+  onSeek,
+}: {
+  text: string;
+  segments: TranscriptSegment[];
+  seekable: boolean;
+  onSeek: (seconds: number) => void;
+}): JSX.Element {
+  if (segments.length === 0) {
+    return <p className="whitespace-pre-wrap text-body-md">{text}</p>;
+  }
+  return (
+    <ol className="flex flex-col gap-1 text-body-md">
+      {segments.map((segment, index) => (
+        <li key={`${String(index)}:${String(segment.start_seconds)}`}>
+          <span className="flex items-baseline gap-2">
+            {seekable ? (
+              <button
+                type="button"
+                onClick={() => onSeek(segment.start_seconds)}
+                className="shrink-0 bg-transparent text-left text-electric-blue underline"
+                aria-label={`跳到 ${clockLabel(segment.start_seconds)}`}
+              >
+                <code className="text-mono-sm">{clockLabel(segment.start_seconds)}</code>
+              </button>
+            ) : (
+              <code className="shrink-0 text-mono-sm opacity-70">
+                {clockLabel(segment.start_seconds)}
+              </code>
+            )}
+            <span className="min-w-0 break-words">{segment.text}</span>
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
