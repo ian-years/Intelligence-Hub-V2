@@ -194,6 +194,9 @@ async def test_platform_without_subtitle_support_goes_through_local_asr(
     assert record is not None
     assert record.engine == "sherpa_sense_voice" and record.sentence_count == 3
     assert record.text_path.endswith("transcript/speech-clean.txt")
+    # ADR-0015：磁盘与库同源同一次写 —— reference.md 写了，那三列就必须有值。
+    assert record.summary_method == "local-extractive"
+    assert record.content_summary and record.key_points.startswith("- ")
     assert fake["transcribe_calls"] == 1
     assert fake["wav_paths"], "没抽音频就直接转写了？"
 
@@ -247,6 +250,9 @@ async def test_a_transcript_below_the_floor_is_recorded_but_not_beautified(
     record = await storage.transcripts.get_for_video(vid)
     assert record is not None and record.char_count > 0
     assert fake["transcribe_calls"] == 1
+    # ADR-0015：没产 reference.md 的那一条，库里那三列也必须全是 NULL ——
+    # "有稿子"与"有可信摘要"是两件事，含糊成一件就会有人在噪声上写摘要。
+    assert (record.content_summary, record.key_points, record.summary_method) == (None, None, None)
 
 
 async def test_a_missing_engine_fails_the_batch_without_fabricating(

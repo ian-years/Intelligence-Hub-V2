@@ -242,6 +242,13 @@ TRANSCRIPT_ENGINES = (
     "manual",
 )
 
+TRANSCRIPT_SUMMARY_METHODS = ("local-extractive", "v1-imported")
+"""摘要的来源。V2 自己产的只有 `local-extractive`（`tasks/reference.py`，≤600 字、
+只搬运原文片段）；`v1-imported` 是从 V1 库搬来的那份（实测 1459~2982 字的整篇改写，
+V1 侧有四个写入口，生产者是模型还是原稿片段已经无从判断）。
+两样东西共用一列而不标来源，看板上就分不出"这条摘要能信到什么程度"（ADR-0015）。
+V2.2 接生成式摘要时要一次迁移来放宽这条 CHECK —— 与 `TRANSCRIPT_ENGINES` 同形。"""
+
 transcripts_table = Table(
     "transcripts",
     metadata,
@@ -253,8 +260,15 @@ transcripts_table = Table(
     # V1 §7.5 看护：路径统一，不再按平台不对称。
     Column("text_path", _Text, nullable=False),
     Column("segments_json", _JSON, nullable=True),
+    # ADR-0015：摘要与要点是**这份稿子**的派生字段，所以与稿子同表 ——
+    # `attach()` 整行删了再插，重跑转写时旧摘要自动跟着走，不需要"记得去清另一张表"。
+    # 可空 = 没做过；不用空串，那是另一种"有值"。
+    Column("content_summary", _Text, nullable=True),
+    Column("key_points", _Text, nullable=True),
+    Column("summary_method", String(32), nullable=True),
     Column("created_at", UTCDateTime, nullable=False, default=_now),
     _enum_check("engine", "engine_enum", TRANSCRIPT_ENGINES, nullable=False),
+    _enum_check("summary_method", "summary_method_enum", TRANSCRIPT_SUMMARY_METHODS, nullable=True),
     CheckConstraint("char_count >= 0", name="char_count_nonneg"),
     CheckConstraint("sentence_count >= 0", name="sentence_count_nonneg"),
 )

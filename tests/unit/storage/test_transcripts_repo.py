@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from intelligence_hub_v2.errors import NotFoundError, StorageError
 from intelligence_hub_v2.models.transcript import TranscriptDraft
@@ -30,6 +31,9 @@ def _draft(
     sentence_count: int = 25,
     language: str | None = "zh",
     segments_json: str | None = None,
+    content_summary: str | None = None,
+    key_points: str | None = None,
+    summary_method: str | None = None,
 ) -> TranscriptDraft:
     return TranscriptDraft(
         engine=engine,
@@ -38,6 +42,9 @@ def _draft(
         sentence_count=sentence_count,
         text_path=text_path,
         segments_json=segments_json,
+        content_summary=content_summary,
+        key_points=key_points,
+        summary_method=summary_method,
     )
 
 
@@ -83,13 +90,22 @@ async def test_reattach_replaces_rather_than_duplicates(
 
 
 async def test_reattach_clears_stale_columns(storage: SqliteStorage, video_row: Video) -> None:
-    """替换是**整行**替换：上一轮的 `language` / `segments_json` 不能残留。
+    """替换是**整行**替换：上一轮的 `language` / `segments_json` / 摘要三列都不能残留。
 
     残留会造出"引擎换了、语言还是旧的"这种半新半旧的行 ——
-    前端按 language 挑渲染分支时会走错。
+    前端按 language 挑渲染分支时会走错。摘要那三列同族，而且更贵：
+    **库里留着一份指向另一份稿子的摘要**是 ADR-0015 不放 `videos` 的全部理由，
+    这里把它钉成行为而不是靠 handler 记得清。
     """
     await storage.transcripts.attach(
-        video_row.id, _draft(language="zh", segments_json='[{"start_seconds": 0}]')
+        video_row.id,
+        _draft(
+            language="zh",
+            segments_json='[{"start_seconds": 0}]',
+            content_summary="上一份稿子的摘要",
+            key_points="- 上一份稿子的要点",
+            summary_method="v1-imported",
+        ),
     )
     replaced = await storage.transcripts.attach(
         video_row.id, _draft(language=None, segments_json=None)
@@ -97,6 +113,11 @@ async def test_reattach_clears_stale_columns(storage: SqliteStorage, video_row: 
 
     assert replaced.language is None
     assert replaced.segments_json is None
+    assert (replaced.content_summary, replaced.key_points, replaced.summary_method) == (
+        None,
+        None,
+        None,
+    )
 
 
 async def test_segments_json_roundtrips_unicode(storage: SqliteStorage, video_row: Video) -> None:
@@ -232,6 +253,30 @@ async def test_unknown_engine_is_rejected(storage: SqliteStorage, video_row: Vid
     """DB 的 CHECK 枚举。加引擎要同时改 schema 与 models.transcript.Transcript。"""
     with pytest.raises(StorageError):
         await storage.transcripts.attach(video_row.id, _draft(engine="whisper_large_v3"))
+
+
+async def test_unknown_summary_method_is_rejected(storage: SqliteStorage, video_row: Video) -> None:
+    """DB 那侧的 CHECK 枚举（ADR-0015）：V2.2 加生成式摘要时要同时改 schema 与迁移。"""
+    with pytest.raises(StorageError):
+        await storage.transcripts.attach(
+            video_row.id, _draft(content_summary="摘要", summary_method="gpt-4o")
+        )
+
+
+def test_a_summary_without_provenance_is_refused() -> None:
+    """Python 这侧的闸：有摘要却没写来源，草稿就组不出来。
+
+    `summary_method` 不是元数据是凭据 —— 本地抽取式（≤600 字原文片段）与 V1 搬来的
+    那份（实测最长 2982 字整篇改写）长得一模一样，不标来源就分不出该信哪条。
+    """
+    with pytest.raises(ValidationError, match="summary_method"):
+        TranscriptDraft(
+            engine="manual",
+            char_count=1,
+            sentence_count=1,
+            text_path="media/douyin/x/1/transcript/speech-clean.txt",
+            content_summary="一句摘要",
+        )
 
 
 async def test_negative_counts_are_rejected(storage: SqliteStorage, video_row: Video) -> None:

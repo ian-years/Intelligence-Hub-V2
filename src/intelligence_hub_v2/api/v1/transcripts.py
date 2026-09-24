@@ -43,4 +43,10 @@ async def get_transcript(video_id: int, state: AppState = Depends(get_state)) ->
         "sentence_count": record.sentence_count,
         "text": text,
         "segments_json": record.segments_json,
+        # ADR-0015：摘要与要点跟着稿子走，所以也跟着这一次请求一起交出。
+        # `summary_method` 不是装饰 —— 本地抽取式（≤600 字片段）与 V1 搬来的整篇改写
+        # 长得一样，不标来源前端就分不出该把哪一条当"参考"、哪一条当"结论"。
+        "content_summary": record.content_summary,
+        "key_points": record.key_points,
+        "summary_method": record.summary_method,
     }

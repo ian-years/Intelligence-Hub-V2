@@ -23,9 +23,12 @@ data/                                  # 由 INTELLIGENCE_HUB_DATA_DIR 控制，
       media.f137.mp4 + media.f140.m4a  # 或 DASH 未合并分片（B站）
       cover.jpg
       metadata.json                    # 平台原始 metadata（审计用）
+      audio/
+        speech-16k.wav                 # ASR 的中间产物（单声道 16k，重跑时幂等跳过）
       transcript/
         speech-clean.txt
         segments.json
+        reference.md                   # 本地抽取式参考材料（库里的两列是它的同源子集）
     bilibili/...
     xiaohongshu/...
     youtube/...
@@ -152,11 +155,28 @@ CREATE TABLE transcripts (
     sentence_count  INTEGER NOT NULL,
     text_path       TEXT NOT NULL,                -- 相对 data/，统一 'media/.../transcript/speech-clean.txt'
     segments_json   TEXT,                         -- JSON 数组 [{start_seconds, end_seconds, text}, ...]
-    created_at      TIMESTAMP NOT NULL
+    content_summary TEXT,                         -- 摘要正文；NULL = 没做过（不用空串撒谎）
+    key_points      TEXT,                         -- 逐行 "- 句子"，与 V1 同格式
+    summary_method  TEXT,                         -- 'local-extractive'/'v1-imported'，见 ADR-0015
+    created_at      TIMESTAMP NOT NULL,
+    CHECK (engine IN ('sherpa_sense_voice','bilibili_subtitle','youtube_subtitle','manual')),
+    CHECK (char_count >= 0),
+    CHECK (sentence_count >= 0),
+    CHECK (summary_method IS NULL OR summary_method IN ('local-extractive','v1-imported'))
 );
 ```
 
 **`text_path` 统一**（V1 §7.5 解决）：废"按平台不对称"的转写目录。
+
+**摘要与要点在 `transcripts` 而不是 `videos`**（ADR-0015，2026-09-24）：它们是**一份稿子的两个
+派生字段**，与 `char_count` / `segments_json` 同类。承重的那条不变量是 `attach()` 整行删了再插 ——
+重跑转写时旧摘要自动跟着走，不需要"记得去清另一张表"。V1 放在 `videos` 只因为 V1 是一张扁平表。
+`summary_method` 是凭据不是元数据：V1 搬来的 `content_summary` 实测是 1459~2982 字的整篇改写，
+V2 自己产的是 ≤600 字的抽取式片段，两者不标来源就没法分"这条摘要能信到什么程度"。
+
+**这里没有 `user_pain_points` / `expandable_topics` / `representative_comments`**：
+本机 V1 库实测三者都是 **0/21 非空**，它们是 V2.2 分析层的输出（爆款拆解）与 T4.1 评论域的东西。
+预建空列等于给前端两个永远为空的字段，并把"这列由谁写"永久含糊掉（V1 §1.3）。
 
 ### 2.5 `task_runs`
 
@@ -272,10 +292,14 @@ CREATE TABLE feishu_sync_state (
 > `test_the_migrated_db_has_exactly_the_checks_we_wrote` 守着；**spec 与代码之间没有守卫**，
 > 这一条就是去补那一处漂移（AGENTS §6：「动的是 SQLAlchemy schema？→ spec 同步了吗」）。
 >
-> 1. **§2.4 `transcripts` 实有三条 CHECK，§2 一条都没写**：`ck_transcripts_engine_enum`
->    （engine ∈ `TRANSCRIPT_ENGINES`）、`ck_transcripts_char_count_nonneg`、
->    `ck_transcripts_sentence_count_nonneg`。engine 那条是 V1→V2 迁移脚本撞出来的：
->    provenance 只能走自由格式的 `metadata_json`，**不许占用枚举列**（§6 的映射因此而定型）。
+> 1. **§2.4 `transcripts` 实有四条 CHECK**。前三条（`ck_transcripts_engine_enum`、
+>    `ck_transcripts_char_count_nonneg`、`ck_transcripts_sentence_count_nonneg`）本来 §2 一条没写，
+>    2026-09-24 起 §2.4 的 SQL 块已补齐（ADR-0015 加第四条 `ck_transcripts_summary_method_enum`
+>    时顺手把那三处差异也收进块里，避免"块是导读、真相在别处"）。
+>    engine 那条是 V1→V2 迁移脚本撞出来的：provenance 只能走自由格式的 `metadata_json`，
+>    **不许占用枚举列**（§6 的映射因此而定型）。
+>    **约束清单的看守是 `EXPECTED_CHECKS`**（`tests/unit/storage/test_schema_types.py`，
+>    比全集不比子集）—— 漂移看护看不见 CHECK 的增删改。
 > 2. **§2.5 `task_runs` 是三条 CHECK 不是两条**：多出的 `ck_task_runs_terminal_has_ended_at`
 >    （`status = 'running' OR ended_at IS NOT NULL`）是 **V1 §2 契约二的 DB 半边** ——
 >    它让"声称 success 却没有 ended_at"这一状态在库里根本不可表示。
@@ -413,6 +437,8 @@ class Storage(Protocol):
 | `creators.platform_id` / `creator_platform_id` / `mid` | `creators.platform_id` | 统一命名（V1 §7.11 解决） |
 | `videos.creator_platform_id` | `videos.creator_id`（FK） | 通过 `(platform, platform_id)` 查 V2 `creators.id` |
 | `videos.transcript_status` / `transcript_char_count` | `transcripts` 表 | 拆出独立表。只有 `已转写` 且稿子非空才搬（实测本机 V1 库：已转写 16 条全部带稿、待转写 5 条全部没有）；`transcripts.engine` 是有 CHECK 枚举的列，来源不明的稿子归 `manual` |
+| `videos.content_summary` / `videos.key_points` | `transcripts.content_summary` / `.key_points`（+ `.summary_method = 'v1-imported'`） | ADR-0015。V1 这两列在 `videos` 上，V2 落在 `transcripts`（它们是一份稿子的派生字段）。实测本机 V1 库 13/21 与 11/21 非空，且**全部落在已转写的行上**（"有摘要但没稿子" = 0 条），所以搬进 `transcripts` 今天不丢数据。但脚本仍要判断：**有摘要却换不来 `transcripts` 行时如实记一条 `report.errors`**，不许把丢列说成迁移成功。正文**原样搬**（V1 那份最长 2982 字，不截到 V2 的 600 字上限，也不改写 —— 迁移不许编辑数据），来源写 `v1-imported` 以便与 `local-extractive` 分开 |
+| `videos.user_pain_points` / `videos.expandable_topics` / `videos.representative_comments` | **不搬** | 实测本机 V1 库三者**全空（0/21）**。前两列是 V2.2 分析层（爆款拆解 / 脚本生成）的**输出**，`representative_comments` 属 T4.1 评论域 —— 给它们预建空列等于给前端两个永远为空的字段，并把"这列由谁写"含糊掉（V1 §1.3） |
 | `videos.is_hidden`（不存在，走 JSON 墓碑） | `videos.is_hidden` | 内化为列（V1 §7.25 解决） |
 | `creators.json` | `creators` 表 | 废双源（V1 §7.7 解决） |
 | `hidden-videos.json` | `videos.is_hidden` | 废文件。**实际路径是 `downloads/launcher-state/hidden-videos.json`**（V1 `launcher_server.load_state_list()` 一律带 `downloads/` 前缀），少一层前缀 = 读不到 = 静默空集 = 用户删过的作品整批复活。取键口径照 V1 `hidden_video_keys()`：只认 `platform_video_id` 与 `record_id`（外加 `local:<平台>:<vid>` 的尾段），**条目自带的那个 `id` 是随机串，不是作品身份** |

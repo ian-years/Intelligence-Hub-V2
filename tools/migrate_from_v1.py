@@ -90,6 +90,7 @@ class MigrationReport:
     creators: int = 0
     videos: int = 0
     transcripts: int = 0
+    summaries: int = 0
     hidden: int = 0
     media_linked: int = 0
     media_copied: int = 0
@@ -121,6 +122,37 @@ def open_v1_readonly(db_path: Path) -> sqlite3.Connection:
 
 def _clean_transcript_of(video: dict[str, Any]) -> str:
     return (video.get("clean_transcript") or video.get("raw_transcript") or "").strip()
+
+
+def _v1_text(video: dict[str, Any], key: str) -> str | None:
+    """V1 的文本列：空串与空白归 None —— V2 用 NULL 表示"没做过"，空串是另一种"有值"。"""
+    raw = str(video.get(key) or "").strip()
+    return raw or None
+
+
+def _reference_of(
+    vrow: dict[str, Any], pvid: str, report: MigrationReport
+) -> tuple[str | None, str | None]:
+    """V1 的 `content_summary` / `key_points`，**前提是这条作品会换来一个 `transcripts` 行**。
+
+    ADR-0015 把这两列放在 `transcripts` 上（它们是"一份稿子的派生字段"）。所以 V1 行
+    有摘要却没有可搬的稿子时，它在 V2 里**没有落脚点** —— 这时必须响。
+    实测本机 V1 库这种行是 0 条（13/21 有摘要，全部落在已转写的行上），但那条 0 是
+    今天这一份库的抽样，不是契约：丢了要写进 `report.errors`，不能让"迁移完成"里
+    悄悄含着一批永远不会出现在看板上的数据（V1 §1.3）。
+    """
+    summary = _v1_text(vrow, "content_summary")
+    points = _v1_text(vrow, "key_points")
+    if not (summary or points):
+        return None, None
+    if not _transcript_worth_moving(vrow):
+        report.errors.append(
+            f"video {pvid} 带着 V1 摘要/要点，却没有可搬的稿子"
+            "（这两列在 V2 挂在 transcripts 上，见 ADR-0015）—— 原文已丢弃，需要就去 V1 库手抄"
+        )
+        return None, None
+    report.summaries += 1
+    return summary, points
 
 
 def _metadata_with_provenance(vrow: dict[str, Any], *, extra: dict[str, Any] | None = None) -> str:
@@ -507,6 +539,7 @@ def _project_dry_run(
     """预演只记账、不写库。三项都要投影：漏报"会隐藏 2 条"，看计划的人就以为
     这次跑不会碰到任何被删过的作品。"""
     report.videos += 1
+    _reference_of(vrow, pvid, report)  # 预演就要报出"哪些摘要会丢"，不是到真跑才发现
     if _transcript_worth_moving(vrow):
         report.transcripts += 1
     if _tombstone_hit(vrow, pvid, hidden_keys):
@@ -555,6 +588,9 @@ async def _maybe_attach_transcript(
 ) -> None:
     """V1 的稿子是内联文本列；V2 是 `transcripts` 表 + 磁盘文件。dry-run 走不到这里。"""
     text = _clean_transcript_of(vrow)
+    # 先问摘要（它自己判"这条有没有稿子可搬"，放不下时已经把那条响记进 report），
+    # 再决定要不要往下走 —— 反过来写就会在"没有稿子"那一支上悄悄跳过整次记账。
+    summary, points = _reference_of(vrow, str(vrow.get("platform_video_id") or ""), report)
     if not _transcript_worth_moving(vrow):
         return
     if media_rel is None:
@@ -579,6 +615,12 @@ async def _maybe_attach_transcript(
             char_count=len(text),
             sentence_count=text.count("。") + text.count("！") + text.count("？") or 1,
             text_path=files.rel(path),
+            # **正文原样搬**：V1 那份摘要最长实测 2982 字，不截到 V2 抽取式的 600 字上限，
+            # 也不改写 —— 迁移不许编辑数据。来源如实写 v1-imported（V1 侧四个写入口都查不清
+            # 是模型整理还是原稿片段，那就不能说它是 local-extractive）。
+            content_summary=summary,
+            key_points=points,
+            summary_method="v1-imported" if (summary or points) else None,
         ),
     )
     report.transcripts += 1
@@ -622,7 +664,10 @@ async def _amain(argv: list[str]) -> int:
 def _print_report(report: MigrationReport) -> None:
     mode = "DRY-RUN（未写任何东西）" if report.dry_run else "已写入"
     print(f"== V1→V2 迁移 · {mode} ==")
-    print(f"  creators={report.creators} videos={report.videos} transcripts={report.transcripts}")
+    print(
+        f"  creators={report.creators} videos={report.videos} "
+        f"transcripts={report.transcripts} 带摘要={report.summaries}"
+    )
     print(
         f"  hidden墓碑={report.hidden} 媒体 link={report.media_linked} copy={report.media_copied} "
         f"missing={report.media_missing} 已存在跳过={report.skipped_existing}"

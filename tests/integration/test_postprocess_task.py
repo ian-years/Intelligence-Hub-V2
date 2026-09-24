@@ -26,11 +26,13 @@ from tests.unit.tasks.conftest import FakeAdapter, FakeBus, FakeConfig, FakeRegi
 from intelligence_hub_v2.asr import engine as asr_engine
 from intelligence_hub_v2.infra.subprocess import SubprocessResult
 from intelligence_hub_v2.models.event import EventType
+from intelligence_hub_v2.models.transcript import TranscriptDraft
 from intelligence_hub_v2.models.video import VideoDraft
 from intelligence_hub_v2.platforms.base import Capabilities
 from intelligence_hub_v2.storage.files import FileStorage
 from intelligence_hub_v2.tasks.params import PostprocessParams
 from intelligence_hub_v2.tasks.postprocess import run_postprocess
+from intelligence_hub_v2.tasks.reference import MAX_SUMMARY_CHARS
 
 _SENTENCES = (
     "今天讲三件事，先说第一件怎么用工具。",
@@ -214,6 +216,51 @@ async def test_the_whole_chain_from_media_to_three_files_and_one_db_row(
     assert not Path(record.text_path).is_absolute(), "库里存绝对路径 = 换机器就废"
     assert json.loads(str(record.segments_json))[0]["text"] == lines[0]
     assert any(event.type is EventType.TRANSCRIPT_READY for event in ctx.events.events)
+
+
+async def test_the_db_reference_is_extractive_and_survives_no_rerun(
+    storage, files: FileStorage, ffmpeg: list[list[str]], fake_model: Path
+) -> None:
+    """库里那三列（ADR-0015）钉两件事：**抽取式**与**同源**。
+
+    "抽取式"的可执行定义是：每一条要点都能在正文里找到原样片段 —— 说不出来路的话
+    就不该出现在这一列里。"同源"靠 `attach()` 整行替换：重跑一遍转写，旧摘要必须
+    跟着旧稿子一起没，而不是留在原地指向一份已经不存在的正文。
+    """
+    vid = await _seed(storage, files)
+    await run_postprocess(_ctx(storage, files), PostprocessParams(video_ids=[vid]))
+
+    record = await storage.transcripts.get_for_video(vid)
+    assert record is not None
+    assert record.summary_method == "local-extractive"
+    clean = files.abs(record.text_path)  # 库里那一列就是正文的位置（§7.5 统一路径）
+    collapsed = " ".join(clean.read_text(encoding="utf-8").split())
+    points = [line.removeprefix("- ").strip() for line in str(record.key_points).splitlines()]
+    assert points and all(line in collapsed for line in points), "要点里有原文找不到的句子"
+    assert record.content_summary and len(record.content_summary) <= MAX_SUMMARY_CHARS
+
+    # 事先塞一份"别的来源"的摘要，重跑之后它必须不在了。
+    await storage.transcripts.attach(
+        vid,
+        TranscriptDraft(
+            engine="manual",
+            char_count=1,
+            sentence_count=1,
+            text_path=record.text_path,
+            content_summary="上一份稿子留下的旧摘要",
+            key_points="- 旧要点",
+            summary_method="v1-imported",
+        ),
+    )
+    await run_postprocess(_ctx(storage, files), PostprocessParams(video_ids=[vid]))
+
+    after = await storage.transcripts.get_for_video(vid)
+    assert after is not None
+    assert after.engine == "sherpa_sense_voice", "重跑没换掉稿子本身"
+    assert after.summary_method == "local-extractive"
+    assert "旧摘要" not in str(after.content_summary) and "旧要点" not in str(after.key_points), (
+        "库里留着指向另一份稿子的摘要 —— 这正是把两列放 `videos` 会长出来的那种状态"
+    )
 
 
 async def test_rerunning_does_not_decode_the_audio_twice(

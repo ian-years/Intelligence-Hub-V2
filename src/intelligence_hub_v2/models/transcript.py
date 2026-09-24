@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TranscriptSegment(BaseModel):
@@ -45,6 +45,19 @@ class TranscriptDraft(BaseModel):
     sentence_count: int
     text_path: str
     segments_json: str | None = None
+    # ADR-0015：摘要与要点跟着稿子走（同表、同一次 `attach()` 整行替换）。
+    content_summary: str | None = None
+    key_points: str | None = None
+    summary_method: str | None = None
+
+    @model_validator(mode="after")
+    def _summary_needs_its_provenance(self) -> TranscriptDraft:
+        """有摘要却没写来源就拒绝入库 —— `summary_method` 是那张"能信到什么程度"的标签，
+        没有它，本地抽取式（≤600 字片段）与 V1 搬来的整篇改写长得一模一样。"""
+        if (self.content_summary or self.key_points) and not self.summary_method:
+            msg = "写摘要/要点必须同时写 summary_method（local-extractive / v1-imported）"
+            raise ValueError(msg)
+        return self
 
 
 class TranscriptRecord(BaseModel):
@@ -68,4 +81,7 @@ class TranscriptRecord(BaseModel):
     sentence_count: int
     text_path: str
     segments_json: str | None = None
+    content_summary: str | None = None
+    key_points: str | None = None
+    summary_method: str | None = None
     created_at: datetime

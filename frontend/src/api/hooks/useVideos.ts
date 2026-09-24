@@ -53,6 +53,12 @@ export interface TranscriptResponse {
   /** 正文在磁盘上，由后端拼好交出（V1 §7.5：别让前端自己猜口播稿在哪）。 */
   text: string;
   segments_json: string | null;
+  /** ADR-0015：摘要与要点跟着稿子走，所以跟着同一个端点一起交出。 */
+  content_summary: string | null;
+  key_points: string | null;
+  /** 这份摘要出自谁：`local-extractive`（≤600 字抽取片段）还是 `v1-imported`
+   * （V1 搬来的整篇改写）。两者长得一样，能信的程度不一样，所以必须能被区分。 */
+  summary_method: string | null;
 }
 
 /** 转写稿：后端对"还没有稿子"回 404，不当错误处理 —— 404 是这里的正常态。 */

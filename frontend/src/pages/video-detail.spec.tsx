@@ -28,6 +28,11 @@ const transcriptBody = {
   sentence_count: 2,
   text: "口播稿第一句。\n口播稿第二句。",
   segments_json: null,
+  // ADR-0015：这三列后端一定会给（没做过就是 null），所以桩也得给全 ——
+  // 少给一个字段，用例会在"组件读了一个不存在的键"上绿。
+  content_summary: null,
+  key_points: null,
+  summary_method: null,
 };
 
 const calls: string[] = [];
@@ -137,6 +142,51 @@ describe("VideoDetail", () => {
     renderAt("/video/7");
     await screen.findByText(/口播稿第一句/);
     expect(screen.getByText(/引擎 subtitle/)).toBeTruthy();
+  });
+
+  it("参考材料：摘要与要点渲染出来，并说出它是谁产的（ADR-0015）", async () => {
+    stub({
+      transcript: [
+        200,
+        {
+          ...transcriptBody,
+          content_summary: "这条讲两句话，先说桥再说任务。",
+          key_points: "- 先说桥\n- 再说任务",
+          summary_method: "local-extractive",
+        },
+      ],
+    });
+    renderAt("/video/7");
+    await screen.findByText("这条讲两句话，先说桥再说任务。");
+    // 要点前面的 "- " 是数据格式，不是要显示给用户看的记号
+    expect(screen.getByText("先说桥")).toBeTruthy();
+    expect(screen.queryByText(/- 先说桥/)).toBeNull();
+    // 那行来源标签是这块的存在理由：抽取式片段与整篇改写长得一样，能信的程度不一样
+    expect(screen.getByText(/本地抽取式/)).toBeTruthy();
+  });
+
+  it("V1 搬来的摘要要说「生产者没有记录」，不冒充本地抽取式", async () => {
+    stub({
+      transcript: [
+        200,
+        {
+          ...transcriptBody,
+          content_summary: "V1 里那份整篇改写。",
+          key_points: null,
+          summary_method: "v1-imported",
+        },
+      ],
+    });
+    renderAt("/video/7");
+    await screen.findByText(/生产者没有记录/);
+    expect(screen.queryByText(/本地抽取式/)).toBeNull();
+  });
+
+  it("没做过摘要时整块不渲染，不放「（无）」占位", async () => {
+    renderAt("/video/7");
+    await screen.findByText(/口播稿第一句/);
+    expect(screen.queryByText(/参考材料/)).toBeNull();
+    expect(screen.queryByText(/本地抽取式/)).toBeNull();
   });
 
   it("稿子真读不到（500）：给原因，不许被 404 那句「还没有」盖掉", async () => {

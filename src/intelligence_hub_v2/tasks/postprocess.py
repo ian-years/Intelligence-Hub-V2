@@ -8,7 +8,9 @@
    失败时不回落（下一轮还会挑到它）。
 2. 其余（抖音/小红书，或没有字幕轨的作品）→ `extract_audio` 抽 16k 单声道 WAV →
    `asr.transcribe_wav` → `normalize_transcript` → 落 `speech-clean.txt` +
-   `segments.json` + `reference.md` → 写 `transcripts` 行 + 发 `TRANSCRIPT_READY`。
+   `segments.json` + `reference.md` → 写 `transcripts` 行（含摘要与要点那三列，
+   ADR-0015）+ 发 `TRANSCRIPT_READY`。摘要与要点**两条路都产**（字幕那条也一样），
+   判据是同一条：稿子够不够长。
 
 三份产物，**V1 的 `speech-raw.txt` 不落**：ASR 的原始输出与归一化结果只差空白折叠，
 落两份近似文件等于给前端第二个可读答案（§7.5/§7.11 同一族）。要查中间状态看 `segments.json`。
@@ -43,6 +45,7 @@ from intelligence_hub_v2.tasks.dispatch import canonical_video_url
 from intelligence_hub_v2.tasks.params import PostprocessParams
 from intelligence_hub_v2.tasks.reference import (
     MIN_TRANSCRIPT_CHARS,
+    ReferenceMaterial,
     extractive_reference,
     normalize_transcript,
     speech_length,
@@ -97,7 +100,14 @@ async def _process_one(
             tally.record_failure(video=video, error=str(exc), kind="Subtitle")
             return
         if transcript is not None:
-            await _store(ctx, video=video, transcript=transcript, reference=None)
+            # 字幕稿同样过那一道参考材料的闸：ADR-0015 之后两列在 `transcripts` 上，
+            # 如果只有 ASR 那条路填，B站 有轨作品的摘要与要点就永远是空的。
+            await _store(
+                ctx,
+                video=video,
+                transcript=transcript,
+                reference=_reference_for(video, transcript.text),
+            )
             tally.transcribed += 1
             return
         # `None` = 契约里的"确实没有轨"。没有轨不等于这条转不了：回落到听音频，
@@ -146,7 +156,8 @@ async def _transcribe_with_asr(
         return
 
     text = normalize_transcript(transcript.text)
-    if speech_length(text) < MIN_TRANSCRIPT_CHARS:
+    reference = _reference_for(video, text)
+    if reference is None:
         # 反幻觉闸的第二层：能量闸放过去、却只换来"我。我。"的那种输入。
         # 仍然 attach（这条确实转过了，别让它每轮都被重跑一遍），但不产 reference.md：
         # 从一串幻觉句里抽"候选句"是在给噪声化妆。
@@ -154,15 +165,21 @@ async def _transcribe_with_asr(
         tally.no_speech += 1
         return
 
-    reference = extractive_reference(
+    await _store(ctx, video=video, transcript=transcript, text=text, reference=reference)
+    tally.transcribed += 1
+
+
+def _reference_for(video: Video, text: str) -> ReferenceMaterial | None:
+    """够长的稿子才配一份抽取式参考材料。字幕与 ASR 两条路共用这一道闸（ADR-0015）。"""
+    if speech_length(text) < MIN_TRANSCRIPT_CHARS:
+        return None
+    return extractive_reference(
         title=video.title,
         video_id=video.platform_video_id,
         platform=video.platform,
         url=canonical_video_url(video.platform, video.platform_video_id),
         cleaned_text=text,
     )
-    await _store(ctx, video=video, transcript=transcript, text=text, reference=reference.markdown)
-    tally.transcribed += 1
 
 
 def _audio_source(ctx: TaskContext, *, video: Video) -> Path:
@@ -212,7 +229,7 @@ async def _store(
     video: Video,
     transcript: Transcript,
     text: str | None = None,
-    reference: str | None = None,
+    reference: ReferenceMaterial | None = None,
 ) -> None:
     """写 `speech-clean.txt`（+ `segments.json` / `reference.md`）并 attach `transcripts` 行。
 
@@ -220,6 +237,10 @@ async def _store(
     `sentence_count` 取的是 `segments` 的条数，与 `bilibili/subtitles.py` 同一口径；
     ASR 那条路的 `normalize_transcript` 只折叠空白、丢字幕署名行，而动 ASR 稿子里
     既没有署名行也没有空行 —— 所以行数不会与 segments 分叉（有用例钉着这条）。
+
+    `reference` 那份派生材料**同时落磁盘与库**：`reference.md` 给人看，
+    `content_summary` / `key_points` / `summary_method` 三列给机器与前端读（ADR-0015）。
+    两边同源同一次写，所以不会出现"文件是新的、库里是旧的"。
     """
     media_dir = ctx.files.abs(str(video.media_path)).parent
     body = transcript.text if text is None else text
@@ -227,8 +248,8 @@ async def _store(
     products: list[tuple[Path, str]] = [(path, body.rstrip("\n") + "\n")]
     if transcript.segments:
         products.append((ctx.files.segments_path(media_dir), _segments_payload(transcript)))
-    if reference:
-        products.append((ctx.files.reference_path(media_dir), reference))
+    if reference is not None:
+        products.append((ctx.files.reference_path(media_dir), reference.markdown))
     await asyncio.to_thread(_write_files, products)
 
     draft = TranscriptDraft(
@@ -238,6 +259,9 @@ async def _store(
         sentence_count=transcript.sentence_count,
         text_path=ctx.files.rel(path),
         segments_json=_segments_json(transcript),
+        content_summary=reference.content_summary if reference else None,
+        key_points=reference.key_points if reference else None,
+        summary_method=reference.summary_method if reference else None,
     )
     await ctx.storage.transcripts.attach(video.id, draft)
     await ctx.publish(

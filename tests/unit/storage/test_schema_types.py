@@ -3,7 +3,7 @@
 Alembic 的 `compare_metadata()` **不比 CHECK 约束的文本**（SQLite 反射不出来，
 所以 `env.py` 里 `compare_server_default=False`）。这意味着一件具体的事：
 往 `HEALTH_STATUSES` 里加一个取值，漂移看护不会红 —— 内存库（走 metadata）放行，
-文件库（走 0001 迁移里那段字面量）当场拒收。
+文件库（走迁移里那段字面量，0001 与 0002 各一段）当场拒收。
 本文件最后三条用例把这条缝补上：直接从迁移建出来的库里读 `sqlite_master`，
 把 CHECK 里的取值集合与 Python 常量对回去。
 
@@ -32,6 +32,7 @@ from intelligence_hub_v2.storage.schema import (
     MEDIA_SOURCES,
     TASK_STATUSES,
     TRANSCRIPT_ENGINES,
+    TRANSCRIPT_SUMMARY_METHODS,
     UTCDateTime,
     metadata,
     platforms_table,
@@ -178,6 +179,7 @@ def migrated_checks(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
         ("platforms_health_status_enum", "health_status", HEALTH_STATUSES),
         ("videos_media_source_enum", "media_source", MEDIA_SOURCES),
         ("transcripts_engine_enum", "engine", TRANSCRIPT_ENGINES),
+        ("transcripts_summary_method_enum", "summary_method", TRANSCRIPT_SUMMARY_METHODS),
         ("task_runs_status_enum", "status", TASK_STATUSES),
     ],
 )
@@ -235,6 +237,7 @@ EXPECTED_CHECKS: frozenset[str] = frozenset(
         "transcripts_engine_enum",
         "transcripts_char_count_nonneg",
         "transcripts_sentence_count_nonneg",
+        "transcripts_summary_method_enum",
         # task_runs
         "task_runs_status_enum",
         "task_runs_progress_range",

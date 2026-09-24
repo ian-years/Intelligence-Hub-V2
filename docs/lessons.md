@@ -2100,6 +2100,71 @@ intelligence_hub_v2.bridge.server --headless`，`/navigate` 一页成功，然�
 
 ---
 
+#### 经验 52 · 真跑一遍迁移，量出五件"照计划写就会错"的事（T1.2b）
+
+**第一条：Alembic 的 batch 模式在 SQLite 上加/删 CHECK，四步全有坑，而且只有 round-trip 看得见。**
+`0002` 加三个可空列 + 一条 CHECK，照 `0001` 头注释的命令 autogenerate 之后：
+
+1. **CHECK autogenerate 报不出来** —— SQLite 反射不出约束原始文本（`env.py` 里
+   `compare_server_default=False` 的同一个盲区）。所以"别手写迁移"那句在这里必须破一次例，
+   手补 `create_check_constraint`，否则 `schema.py` 与迁移链**永远差一条约束**，
+   而漂移看护对约束的增删改整条是瞎的。
+2. **约束名只写裸的那一段**。batch 会按 metadata 的命名约定补前缀：写
+   `ck_transcripts_summary_method_enum` 得到的是
+   `ck_transcripts_ck_transcripts_summary_method_enum`（真 DDL 里量到的）。upgrade 与
+   downgrade **两侧**都补，所以 `drop_constraint()` 那里同样只写 `summary_method_enum`。
+3. **`downgrade()` 要先删约束再删列**。第一版只 `drop_column` 三列 → batch 反射出来的新表
+   带着一条引用已删列的 CHECK，SQLite 建表那一刻就 `no such column: summary_method`，
+   **迁移卡死在 0002 退不出去**。这比 upgrade 失败贵得多：库已经在新版本上。
+4. **`type_` 的合法值是 `'check'`**，不是 `'constraint'`（后者直接 `TypeError`，报错里给了清单）。
+
+看护：`make db-roundtrip` 那三条命令（`upgrade head && downgrade base && upgrade head && alembic check`）
++ `EXPECTED_CHECKS` 比全集不比子集。**`alembic upgrade head` 单跑一次绿，不等于迁移可逆** ——
+这次就是单跑绿、round-trip 红。
+
+**第二条：`--v1-root` 挡不住 V1 的绝对 `video_path`。**
+我想造一个"只搬库不搬媒体"的真迁移跑法（把 `local.sqlite3` 拷进临时根目录），结果它照样
+去真实 V1 树里搬媒体：V1 那一列存的是**绝对路径**，`_media_source_path()` 第一句就是
+"绝对且存在 → 直接用"，`--v1-root` 只是相对路径的回退基准。C: 上那个临时目录又跟 E: 的媒体
+**不同卷**，`os.link` 抛 EXDEV 退成 `shutil.copy2` —— 4.5 GB 落进 `AppData/Local/Temp`，
+把 C: 填到 100%（脚本如实报了 4 条 `OSError [WinError 112] 磁盘空间不足`，然后 return 1）。
+
+判据（对 T3.5 是直接的前置条件）：**目标 data/ 卷与 V1 媒体同卷 = hardlink（几乎不占空间），
+跨卷 = copy，要预留 5.4 GB 级别**。改到 E: 之后同一跑是 `link=21 copy=0 missing=0`，0 错误。
+清理用精确路径 `rm -rf E:/08-Codework/.t12b-scratch`（只 unlink，V1 原始媒体核对过：
+`downloads` 仍 5.4G、`videos/` 仍 80 个文件、库文件时间戳没变）。
+
+**第三条：管道尾巴的退出码又骗人一次。**
+`uv run python tools/migrate_from_v1.py … | tail -6; echo EXIT=$?` 报的是 `tail` 的 0，
+而那一次真有 4 条错误、脚本 `return 1`。这条仓库里写过两遍（`AGENTS.md` §4、Makefile 注释），
+这次是自己撞的：**取退出码用 `${PIPESTATUS[0]}`，或者别加管道。**
+
+**第四条："实测 0 条"不能当看护的前提。**
+`_reference_of()` 要在"V1 行有摘要却没有可搬的稿子"时响。本机 V1 库这种行**实测 0 条**
+（13 条摘要全部落在已转写的 16 行上）—— 那句话是关于一份抽样的，不是关于契约的，
+所以测试里**手工造一条**孤儿行来钉这条响（`test_a_summary_without_a_transcript_says_so`），
+而不是让看护依赖真库恰好没有那种数据。反过来，dry-run 也要报出会丢什么
+（`带摘要=13` 那一格），否则"摘要没了"要等到真跑之后第一次被看见。
+
+**第五条（差点据此报出一个假门禁）：`pytest --collect-only` 会把 `.coverage` 覆盖掉。**
+addopts 里带着 `--cov=...`，所以**只收集不跑测试**的那一问也走完 coverage 的写盘流程 ——
+`.coverage` 变成"0 条测试的覆盖率"。我随后 `coverage report --fail-under=90` 读到的是
+**29% / 33%**，看起来像"新迁移把覆盖率砸了"，而真数是 93.81%。
+判据：**`coverage report` 的数只在这之后跑过一次完整 `pytest`（不带 `--no-cov`、
+不带 `--collect-only`）才算数**；要单看某个门，就先把完整那一跑跑掉再 report。
+（`--no-cov` 那一条不覆盖文件，是安全的；`--collect-only` 不安全，因为它没走 `--no-cov`。）
+
+**顺带一条实测**：同一条《作弊》作品，V1 的 `content_summary` 是 1459 字、以 `# 标题` 开头的
+整篇改写；V2 的抽取式对同一份稿子交回 600 字原文片段（上限成立）。**这就是 `summary_method`
+必须存在的理由** —— 两样东西共用一列而不标来源，前端与人都分不出该把哪一条当参考。
+
+**看护**：`tests/unit/storage/test_migrations.py`（既有的 round-trip 与 CHECK 清单）+
+`tests/unit/storage/test_schema_types.py::EXPECTED_CHECKS` +
+`tests/integration/test_migrate_from_v1.py` 新增三条。真机数字记在
+`docs/progress/2026-09-24.md` 主题八。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

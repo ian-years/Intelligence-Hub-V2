@@ -80,6 +80,27 @@ def _subtitle_transcript() -> Transcript:
     )
 
 
+def _long_subtitle() -> Transcript:
+    """够得着 `MIN_TRANSCRIPT_CHARS` 的字幕正文（上面那份三句的太短，抽不出参考材料）。"""
+    lines = [
+        "开场先说这期要解决什么问题，以及为什么值得花十分钟听完。",
+        "第二段讲工具链，把采集这一步换成本机的桥，登录态就不用每次重扫。",
+        "第三段给一份能自己照着跑的清单，跑一遍就把整条链路都打通了。",
+    ]
+    text = "\n".join(lines)
+    return Transcript(
+        engine="bilibili_subtitle",
+        language="zh-CN",
+        text=text,
+        char_count=len(text),
+        sentence_count=len(lines),
+        segments=[
+            TranscriptSegment(start_seconds=index * 3.0, end_seconds=index * 3.0 + 2.5, text=line)
+            for index, line in enumerate(lines)
+        ],
+    )
+
+
 def _seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, text: str) -> dict[str, Any]:
     """ASR 那一侧的四个接缝；`extract_sources` 用来判"到底有没有去跑 ffmpeg"。"""
     lines = [line for line in text.splitlines() if line.strip()]
@@ -165,6 +186,34 @@ async def test_a_track_absent_video_falls_back_to_local_asr(
     record = await storage.transcripts.get_for_video(vid)
     assert record is not None and record.engine == "sherpa_sense_voice"
     assert record.text_path.endswith("transcript/speech-clean.txt")
+
+
+async def test_the_subtitle_path_fills_the_reference_columns(
+    storage, files: FileStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0015：字幕那条路也填那三列。
+
+    这条存在的理由很具体：摘要与要点原来只在 ASR 分支产，而 T1.3 之后字幕才是第一优先 ——
+    不补这一步，B站 有轨作品的两列**永远是空的**，看板上"没有摘要"与"这条没转写"长一样。
+    判据与 ASR 那条共用同一条（稿子够不够长），所以这里给一份够长的字幕正文。
+    """
+    vid = await _seed(storage, files)
+    calls = _seams(monkeypatch, files.root, text="这一句足够长可以通过反幻觉门限的稿子。")
+    adapter = FakeAdapter("bilibili", subtitles=_long_subtitle(), capabilities=_SUB_CAPS)
+
+    result = await run_postprocess(
+        _ctx(storage, files, adapter), PostprocessParams(video_ids=[vid])
+    )
+
+    assert result.status == "success" and calls["transcribe_calls"] == 0
+    record = await storage.transcripts.get_for_video(vid)
+    assert record is not None and record.engine == "bilibili_subtitle"
+    assert record.summary_method == "local-extractive"
+    body = " ".join(files.abs(record.text_path).read_text(encoding="utf-8").split())
+    points = [line.removeprefix("- ").strip() for line in str(record.key_points).splitlines()]
+    assert points and all(line in body for line in points), "要点不是从这份稿子里抽的"
+    assert record.content_summary
+    assert (files.abs(record.text_path).parent / "reference.md").is_file(), "库里写了、磁盘上没有"
 
 
 async def test_a_failed_subtitle_question_does_not_go_run_ffmpeg(

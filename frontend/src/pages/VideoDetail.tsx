@@ -146,6 +146,11 @@ export function VideoDetail(): JSX.Element {
                           <span>{formatCount(body.char_count)} 字</span>
                           <span>{formatCount(body.sentence_count)} 句</span>
                         </p>
+                        <TranscriptReference
+                          summary={body.content_summary}
+                          points={body.key_points}
+                          method={body.summary_method}
+                        />
                         <p className="whitespace-pre-wrap text-body-md">{body.text}</p>
                       </HardShadowCard>
                     )}
@@ -157,6 +162,51 @@ export function VideoDetail(): JSX.Element {
         )}
       </QueryState>
     </PageShell>
+  );
+}
+
+const SUMMARY_METHOD_LABEL: Record<string, string> = {
+  "local-extractive": "本地抽取式 · 只搬运原文片段，不是结论",
+  "v1-imported": "V1 库搬来 · 生产者没有记录，当参考用",
+};
+
+/**
+ * 摘要 + 候选要点（ADR-0015）。两个字段都可空：空就整块不渲染，不放"（无）"占位 ——
+ * 这一页已经有一句"没做≠出错"说稿子了，再摆一个空盒子只会多一个可读的假信号。
+ *
+ * 那行来源标签是这块的存在理由：本地抽取式（≤600 字的原文片段）与 V1 搬来的那份
+ * （实测最长 2982 字的整篇改写）**长得一模一样**，能信的程度却差一档。
+ * 库里那一列没这个信息就分不出来，所以端点把 `summary_method` 一起交出。
+ */
+function TranscriptReference({
+  summary,
+  points,
+  method,
+}: {
+  summary: string | null;
+  points: string | null;
+  method: string | null;
+}): JSX.Element | null {
+  const lines = (points ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^[-•]\s*/, "").trim())
+    .filter(Boolean);
+  if (!summary && lines.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-2 border-t-2 border-dashed border-ink-black pt-3">
+      <p className="text-mono-sm">
+        {method ? (SUMMARY_METHOD_LABEL[method] ?? method) : "参考材料"}
+      </p>
+      {summary && <p className="whitespace-pre-wrap text-body-md">{summary}</p>}
+      {lines.length > 0 && (
+        <ul className="flex list-disc flex-col gap-1 pl-5 text-body-md">
+          {lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

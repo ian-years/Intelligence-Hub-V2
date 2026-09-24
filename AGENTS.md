@@ -65,7 +65,7 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie 到 `data/cookies/<域名>.txt`（走 `CookieManager.refresh_from_bridge`，渲染器只有那一处；T0.2，2026-09-24） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
 | `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试 |
-| `docs/adr/` | 架构决策记录（0001~0010，背景/选项/决定/后果） |
+| `docs/adr/` | 架构决策记录（0001~0015，背景/选项/决定/后果。**0014 已预留**给 `_check_requires` 那道闸，新决定从 0016 起 —— 编号不复用） |
 | `docs/specs/` | 接口契约文档 |
 | `docs/progress/YYYY-MM-DD.md` | 每日推进日志 |
 | `docs/lessons.md` | V1 → V2 移植经验 |

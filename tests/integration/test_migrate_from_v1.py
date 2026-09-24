@@ -267,6 +267,9 @@ def _standard_v1(root: Path) -> Path:
                 metrics_json='{"view_count": 999}',
                 transcript_status="已转写",
                 clean_transcript="第一句。第二句。第三句。",
+                # ADR-0015：V1 的摘要与要点要跟着稿子搬进 `transcripts`，不截不改写。
+                content_summary="  这条讲三件事：先讲选题，再讲结构，最后讲封面。  ",
+                key_points="- 先讲选题\n- 再讲结构",
             ),
             _video(
                 id="row2",
@@ -475,7 +478,69 @@ async def test_real_migration_moves_media_transcript_and_state(v1, unseeded_stor
     rec = await unseeded_storage.transcripts.get_for_video(pv1.id)
     assert rec is not None and rec.engine == "manual"  # 有 CHECK 枚举，迁移稿归 manual
     assert files.abs(rec.text_path).read_text(encoding="utf-8").startswith("第一句")
+    # ADR-0015：V1 的摘要与要点搬进 `transcripts`（不放 videos 的理由见那份 ADR）。
+    # 只做首尾空白归一，**不截到 V2 抽取式的 600 字上限、也不改写** —— 迁移不许编辑数据。
+    assert rec.content_summary == "这条讲三件事：先讲选题，再讲结构，最后讲封面。"
+    assert rec.key_points == "- 先讲选题\n- 再讲结构"
+    assert rec.summary_method == "v1-imported"
     assert (files.root / ".migration_state.json").is_file()
+
+
+async def test_a_summary_without_a_transcript_says_so(
+    tmp_path: Path, unseeded_storage, files
+) -> None:
+    """V1 行有摘要却没有可搬的稿子 → 在 V2 没有落脚点（两列挂在 `transcripts` 上）。
+
+    实测本机 V1 库这种行是 **0 条**（13/21 有摘要，全部落在已转写的行上），但那条 0 是
+    今天这份库的抽样，不是契约。所以这里**手工造一条**：宁可让看护依赖一条编出来的数据，
+    也不能让"丢了摘要"这件事只在未来某次真迁移里第一次被看见（V1 §1.3）。
+    """
+    root = _build_v1(
+        tmp_path / "v1-orphan",
+        creators=[_creator(V1_DOUYIN, "sec1", "姜胡说")],
+        videos=[
+            _video(
+                id="orphan",
+                platform=V1_DOUYIN,
+                platform_video_id="pv-orphan",
+                creator_id="sec1",
+                creator_name="姜胡说",
+                video_title="只有摘要没有稿子",
+                transcript_status="待转写",  # 稿子不搬 → 摘要无处可去
+                content_summary="这是一段 V1 里留下来的摘要",
+            )
+        ],
+    )
+    report = await migrate(root, unseeded_storage, files, dry_run=False)
+
+    assert report.summaries == 0
+    assert any("pv-orphan" in line and "摘要" in line for line in report.errors), report.errors
+    assert await unseeded_storage.transcripts.count() == 0
+
+
+async def test_dry_run_already_reports_a_summary_that_will_be_dropped(
+    tmp_path: Path, unseeded_storage, files
+) -> None:
+    """预演就要报出会丢什么 —— 等到真跑才发现"摘要没了"已经晚了（数据已被状态文件标记完成）。"""
+    root = _build_v1(
+        tmp_path / "v1-orphan",
+        creators=[_creator(V1_DOUYIN, "sec1", "姜胡说")],
+        videos=[
+            _video(
+                id="orphan",
+                platform=V1_DOUYIN,
+                platform_video_id="pv-orphan",
+                creator_id="sec1",
+                creator_name="姜胡说",
+                video_title="只有摘要没有稿子",
+                transcript_status="待转写",
+                key_points="- 一条要点",
+            )
+        ],
+    )
+    report = await migrate(root, unseeded_storage, files, dry_run=True)
+
+    assert any("pv-orphan" in line for line in report.errors), report.errors
 
 
 async def test_second_run_is_idempotent(v1, unseeded_storage, files) -> None:
