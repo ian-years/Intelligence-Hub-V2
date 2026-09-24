@@ -67,6 +67,25 @@ xiaohongshu: { color: "{coral_red}",     shape: "square",    display_name: "小�
 youtube:     { color: "{lemon_yellow}",  shape: "wave",      display_name: "YouTube" }
 ```
 
+### 2.5 落在饱和色块上的文字（On accent）
+
+```yaml
+on_accent: "#0A0A0A"
+```
+
+五个主色是**块**，不是字。块上的字在两版主题里都是近黑这一档，所以它必须是自己的令牌：
+暗色版（§11）把 `ink_black` 换成浅色当正文色，如果块上的字跟着它走，
+就得到"亮块 + 亮字"。CSS 侧由 `globals.css` 那条
+`.bg-coral-red, .bg-lemon-yellow, .bg-mint-green, .bg-hot-pink { color: var(--color-on-accent) }`
+统一施加，不用每个调用点自己写。
+
+`electric_blue` **不在那条名单里**：它是五个里唯一深到"近黑字压不住"的一个
+（`#0066ff` 上是 4.1:1），它的配字是 `paper_cream` —— 那两个令牌在暗色下互换角色，
+所以这一对在两版里都过 4.5:1。漏写配字的位置由 `src/styles/tokens.spec.ts` 扫源码钉住。
+
+被当**正文色**用的色（`text-<色>`）另有一条量法：扫描 `src/**/*.tsx` 里真出现过的
+`text-*`，逐个量它压在页面底上的对比度 ≥ 4.5:1（两版都量）。
+
 ---
 
 ## 3. 形状语言
@@ -368,17 +387,33 @@ export function PlatformBadge({ platform, size = 'md' }: Props) {
 
 ---
 
-## 11. 暗色模式（V2.2）
+## 11. 暗色模式（V2.1 T5.6 已实施）
 
-孟菲斯暗色版色板要单独调，**V2.0 不做**。V2.2 实施时：
+孟菲斯暗色版。切换写在 `<html data-theme="…">` 上，令牌仍是 CSS 变量：
 
 - 背景：`#1A1A1A` 替代 `paper_cream`
-- 文字：`paper_cream` 替代 `ink_black`
-- 主色保持亮色（电光蓝/烈粉等在暗背景上更跳）
-- 描边与阴影：用 `paper_cream` 替代 `ink_black`
-- 令牌走 CSS 变量 `[data-theme="dark"]` 切换
+- 文字与描边、硬阴影：`#FAF7F2`（`paper_cream` 那个字面值）替代 `ink_black`
+- 主色保持亮色（烈粉/柠檬黄/薄荷绿在暗背景上更跳）
+- 令牌走 `[data-theme="dark"]` 覆盖，组件不引"暗色变体"
 
----
+三条实施时定下来的补充（原草稿没覆盖到，都带量过的数）：
+
+1. **`grey_mist` 跟着换**（→ `#3D3D47`）。草稿只提了背景与文字两件，但次级底
+   （"已隐藏"那一类标签）留在 `#D8D8D8` 上，压浅色正文只有 1.3:1。
+2. **`electric_blue` 调亮**（→ `#4D9BFF`）。它同时被当链接文字用
+   （`text-electric-blue`），`#0066FF` 压在 `#1A1A1A` 上是 3.6:1，过不了 4.5。
+   其余四个主色只当块、不当字，所以只有它需要动。
+3. **新增 §2.5 `on_accent`**。"主色保持亮色"与"正文色翻成浅色"两件事叠在一起时，
+   色块上的字不能跟着正文色走。
+
+角色与名字在暗色下对不上（`paper-cream` 是深色、`ink-black` 是浅色）是这一节的代价。
+为什么不给组件换一组 `--color-surface` / `--color-line` 引用：那要改 400 多处
+`bg-paper-cream` / `border-ink-black`，漏一处就是"暗色下某个角落还是白的"，
+而**那种漏网没有任何测试能发现**；在这里改三个名字，界面要么全跟、要么当场红。
+理由与备选见 `docs/adr/0023-dark-theme-by-role-swap.md`。
+
+`data-theme` 只有 `light` / `dark` 两个值：界面上的第三档"跟随系统"在写进 DOM 之前
+就被解析成两者之一（CSS 里没有"跟随"这种状态）。落点唯一：`components/shared/Layout.tsx`。
 
 ## 12. V3 重写时的契约
 

@@ -4,7 +4,7 @@
  * （jsdom 下 `import.meta.url` 是 http: URL，`fileURLToPath` 会直接抛
  * "The URL must be of scheme file" —— 第一次跑就撞上了。）
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import yaml from "js-yaml";
@@ -168,6 +168,155 @@ describe("tokens.css ↔ docs/specs/ui-tokens.md", () => {
 describe("tokens.css ↔ tokens.json（产物）", () => {
   it("tokens.json 就是 CSS 的投影，不多不少", () => {
     expect(JSON_BODY).toBe(render(TOKENS));
+  });
+});
+
+/** `[data-theme="…"] { --x: y; }` 那两块 → 主题名 → 令牌表。 */
+function themeOverrides(): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const match of CSS.matchAll(/\[data-theme="([a-z]+)"\]\s*\{([\s\S]*?)\}/g)) {
+    const tokens = new Map<string, string>();
+    for (const decl of (match[2] ?? "").matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      tokens.set(decl[1] ?? "", (decl[2] ?? "").trim());
+    }
+    out.set(match[1] ?? "", tokens);
+  }
+  return out;
+}
+
+const DARK = themeOverrides().get("dark") ?? new Map<string, string>();
+
+/** 暗色下的实际值 = `@theme` 打底，暗色块覆盖。 */
+function valueOf(name: string, dark: boolean): string {
+  return (dark ? DARK.get(name) : undefined) ?? TOKENS[name] ?? "";
+}
+
+function channel(unit: number): number {
+  const c = unit / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex: string): number {
+  const body = hex.replace("#", "");
+  const parts = [0, 2, 4].map((at) => channel(Number.parseInt(body.slice(at, at + 2), 16)));
+  return 0.2126 * (parts[0] ?? 0) + 0.7152 * (parts[1] ?? 0) + 0.0722 * (parts[2] ?? 0);
+}
+
+/** WCAG 2.1 对比度。"全站可读"这四个字唯一的量法就是它。 */
+function contrast(first: string, second: string): number {
+  const a = luminance(first);
+  const b = luminance(second);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+/** 五个色块色（`bg-*` 用它们）。`grey-mist` 是次级底，不在这组里。 */
+const ACCENTS = ["electric-blue", "coral-red", "lemon-yellow", "mint-green", "hot-pink"];
+
+/** 递归收集 `src/**\/*.tsx`（跳过 spec 与 node_modules）。 */
+function tsxSources(): Map<string, string> {
+  const found = new Map<string, string>();
+  const walk = (dir: URL): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = new URL(`${entry.name}`, `${dir.href}/`);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(child);
+        continue;
+      }
+      if (!entry.name.endsWith(".tsx") || entry.name.endsWith(".spec.tsx")) continue;
+      found.set(entry.name, readFileSync(child, "utf8"));
+    }
+  };
+  walk(new URL("../", import.meta.url));
+  return found;
+}
+
+describe('§11 暗色版（tokens.css 里的 [data-theme="dark"]）', () => {
+  it("暗色块存在且覆盖了那几个角色令牌（否则下面每一条都是空转）", () => {
+    expect(DARK.size).toBeGreaterThanOrEqual(4);
+    for (const name of ["--color-paper-cream", "--color-ink-black", "--color-grey-mist"]) {
+      expect(DARK.has(name), `暗色没换 ${name}`).toBe(true);
+    }
+  });
+
+  it("暗色块里只出现 @theme 已经声明过的令牌名", () => {
+    // 多一个没人声明的名字 = 界面上没有任何东西会读它，而它看起来像"调过了"。
+    for (const name of DARK.keys()) {
+      expect(TOKENS[name], `@theme 里没有 ${name}`).toBeDefined();
+    }
+  });
+
+  it("每一个暗色覆盖值都是合法的十六进制色", () => {
+    for (const [name, value] of DARK) {
+      expect(value, `${name} 不是十六进制色`).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it("两个主题、每一对角色色，对比度都量过线", () => {
+    const cases: [string, string, string, number][] = [
+      // [前景令牌, 背景令牌, 用途, 门槛]
+      ["--color-ink-black", "--color-paper-cream", "正文在面上", 7],
+      ["--color-ink-black", "--color-grey-mist", "正文在次级底上", 4.5],
+      ["--color-electric-blue", "--color-paper-cream", "链接在面上", 4.5],
+      ["--color-on-accent", "--color-coral-red", "字在色块上", 4.5],
+      ["--color-on-accent", "--color-lemon-yellow", "字在色块上", 4.5],
+      ["--color-on-accent", "--color-mint-green", "字在色块上", 4.5],
+      ["--color-on-accent", "--color-hot-pink", "字在色块上", 4.5],
+      // 蓝块上的字是 paper-cream 而不是 on-accent，理由见 globals.css 那段注释
+      ["--color-paper-cream", "--color-electric-blue", "字在蓝块上", 4.5],
+    ];
+    for (const dark of [false, true]) {
+      for (const [fgToken, bgToken, use, floor] of cases) {
+        const ratio = contrast(valueOf(fgToken, dark), valueOf(bgToken, dark));
+        const label = `${dark ? "暗" : "亮"}色 ${use}：${fgToken} on ${bgToken}`;
+        expect(ratio, `${label} = ${ratio.toFixed(2)} < ${String(floor)}`).toBeGreaterThanOrEqual(
+          floor,
+        );
+      }
+    }
+  });
+
+  it("凡是被当正文色用的色，压在页面底上两个主题都过 4.5:1", () => {
+    // 判据不是"哪几个色不许当字"（那是人记的规矩），而是"你在源码里真把它当了字，
+    // 我就量它"。侧栏与任务页原来那两处 `text-coral-red`（压在 cream 上 2.6:1）
+    // 就是这么被逮到的；`text-electric-blue` 当链接色过线（4.6 / 6.4），所以留着。
+    // 两个面/线令牌自己不在名单里：`text-paper-cream` 是"色块上的字"，不是"面上的字"。
+    const MEASURABLE = [...ACCENTS, "grey-mist", "on-accent"];
+    const used = new Set<string>();
+    for (const [, text] of tsxSources()) {
+      for (const match of text.matchAll(/\btext-([a-z-]+)\b/g)) {
+        const name = match[1] ?? "";
+        if (MEASURABLE.includes(name)) used.add(name);
+      }
+    }
+    expect(used.size).toBeGreaterThan(0);
+    for (const name of used) {
+      for (const dark of [false, true]) {
+        const ratio = contrast(
+          valueOf(`--color-${name}`, dark),
+          valueOf("--color-paper-cream", dark),
+        );
+        expect(
+          ratio,
+          `text-${name} 在${dark ? "暗" : "亮"}色面上只有 ${ratio.toFixed(2)}:1（要当字用得 ≥4.5）`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("每一处 bg-electric-blue 都显式带着它的配字", () => {
+    // 蓝块是五个里唯一"近黑字压不住"的那个（4.1:1），配字必须是 paper-cream。
+    // 漏写不会报错，只会得到一段读不清的字 —— 所以扫源码而不是相信写的人。
+    const unpaired: string[] = [];
+    let seen = 0;
+    for (const [name, text] of tsxSources()) {
+      for (const line of text.split("\n")) {
+        if (!line.includes("bg-electric-blue")) continue;
+        seen += 1;
+        if (!line.includes("text-paper-cream")) unpaired.push(`${name}: ${line.trim()}`);
+      }
+    }
+    expect(seen, "一处 `bg-electric-blue` 都没有 → 这条在空转").toBeGreaterThan(0);
+    expect(unpaired).toEqual([]);
   });
 });
 

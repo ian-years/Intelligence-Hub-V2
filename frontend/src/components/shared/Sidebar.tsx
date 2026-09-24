@@ -6,6 +6,7 @@ import { NAV_ITEMS } from "@/lib/nav";
 import { PlatformBadge } from "@/components/memphis/PlatformBadge";
 import { usePlatforms } from "@/api/hooks/useConfig";
 import { cn } from "@/lib/utils";
+import { ThemeSwitch } from "./ThemeSwitch";
 import { useUi } from "@/stores/ui";
 
 export function Sidebar(): JSX.Element {
@@ -60,6 +61,9 @@ export function Sidebar(): JSX.Element {
       </ul>
 
       <div className="mt-auto flex flex-col gap-2">
+        {/* 主题放在侧栏尾巴上而不是某个页面里：它是"怎么看"而不是"看什么"，
+            而且暗色下第一屏就该能切 —— 藏进设置页等于让未调过的那一版先亮一次。 */}
+        <ThemeSwitch />
         {/* 平台清单来自 `/api/platforms`：侧栏这块是"哪些平台现在是活的"，
             不是前端自己列的四家 —— 关掉的平台会从这里消失，这正是要看见的。 */}
         <span className="text-body-sm">平台</span>
@@ -71,7 +75,7 @@ export function Sidebar(): JSX.Element {
           <span className="text-body-sm">读取中…</span>
         )}
         {platforms.isError && (
-          <span className="text-body-sm text-coral-red">读不到：{platforms.error.message}</span>
+          <span className="bg-coral-red px-2 text-body-sm">读不到：{platforms.error.message}</span>
         )}
         {platforms.data?.platforms.map((platform) => (
           <PlatformBadge

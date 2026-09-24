@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Layout } from "./Layout";
 import { NAV_ITEMS } from "@/lib/nav";
+import { useSettings } from "@/stores/settings";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -82,5 +84,92 @@ describe("Layout / Sidebar", () => {
     renderLayout();
     await waitFor(() => expect(screen.getByText(/读不到/)).toBeTruthy());
     expect(screen.getByText(/配置层还没起来/)).toBeTruthy();
+  });
+});
+
+/** 一个可驱动的 `matchMedia`：`set()` 改偏好并**通知订阅者**，
+ *  这样"跟随系统那一档到底跟不跟"才问得出来（只在挂载时读一次的实现会红在第二条）。 */
+function fakeMedia(initial: boolean): { media: MediaQueryList; set: (next: boolean) => void } {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  let current = initial;
+  const media = {
+    get matches(): boolean {
+      return current;
+    },
+    addEventListener: (_: string, cb: (event: MediaQueryListEvent) => void): void => {
+      listeners.add(cb);
+    },
+    removeEventListener: (_: string, cb: (event: MediaQueryListEvent) => void): void => {
+      listeners.delete(cb);
+    },
+  } as unknown as MediaQueryList;
+  return {
+    media,
+    set: (next: boolean): void => {
+      current = next;
+      for (const listener of listeners) listener({ matches: next } as MediaQueryListEvent);
+    },
+  };
+}
+
+describe("主题（T5.6）", () => {
+  beforeEach(() => {
+    vi.mocked(fetch).mockImplementation(async () => jsonResponse(200, { platforms: [] }));
+    act(() => useSettings.getState().resetToInitial());
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("light / dark 两档原样写进 <html> 的 data-theme", async () => {
+    const { media } = fakeMedia(false);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
+
+    act(() => useSettings.getState().setThemeMode("dark"));
+    renderLayout();
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+
+    act(() => useSettings.getState().setThemeMode("light"));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+  });
+
+  it("system 那一档跟着系统偏好变，不用重新渲染", async () => {
+    const { media, set } = fakeMedia(false);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
+    act(() => useSettings.getState().setThemeMode("system"));
+
+    renderLayout();
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    // 操作系统里切到暗色：界面当场跟着切。只读一次的话这一行会一直停在 light。
+    act(() => set(true));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it('DOM 上永远不出现 "system"：CSS 里没有这一档', async () => {
+    vi.stubGlobal("matchMedia", undefined);
+    act(() => useSettings.getState().setThemeMode("system"));
+    renderLayout();
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(document.documentElement.dataset.theme).not.toBe("system");
+  });
+
+  it("侧栏那三个按钮按得动，按下去 DOM 与 store 一起变", async () => {
+    const { media } = fakeMedia(false);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
+    renderLayout();
+
+    await userEvent.click(await screen.findByRole("button", { name: "暗" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(useSettings.getState().themeMode).toBe("dark");
+    expect((screen.getByRole("button", { name: "暗" }) as HTMLButtonElement).ariaPressed).toBe(
+      "true",
+    );
   });
 });

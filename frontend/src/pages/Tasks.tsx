@@ -86,7 +86,7 @@ export function Tasks(): JSX.Element {
           )}
         </QueryState>
         {cancel.isError && (
-          <p className="mt-2 break-words text-body-sm text-coral-red">
+          <p className="mt-2 inline-block break-words bg-coral-red px-2 text-body-sm">
             取消没送达：
             {cancel.error instanceof ApiError ? cancel.error.detail : cancel.error.message}
           </p>

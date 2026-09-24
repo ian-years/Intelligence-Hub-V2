@@ -57,3 +57,36 @@ describe("settings store（V1 §7.24：跟踪默认值只能有一处）", () =>
     ).toThrow(TypeError);
   });
 });
+
+describe("themeMode（T5.6：DOM 上只许出现 light/dark，store 里存三档）", () => {
+  it("默认是 system，不是 light", () => {
+    // 首屏该跟操作系统走。默认写死 light 的话，"跟随系统"这一档在第一次访问时
+    // 与"亮"完全同值，用户按了才见效 —— 那看起来像没实现。
+    expect(useSettings.getState().themeMode).toBe("system");
+  });
+
+  it("三档都写得进去并落盘", () => {
+    for (const mode of ["light", "dark", "system"] as const) {
+      act(() => useSettings.getState().setThemeMode(mode));
+      expect(useSettings.getState().themeMode).toBe(mode);
+      expect(localStorage.getItem(KEY)).toContain(`"themeMode":"${mode}"`);
+    }
+  });
+
+  it("写一个 CSS 认不了的档：当场抛，不静默收下", () => {
+    // `"Dark"` 存进去之后的症状是"按了暗色开关没反应"，且没有任何一处会报错。
+    for (const bad of ["Dark", "auto", "", null, 1]) {
+      expect(
+        () => useSettings.getState().setThemeMode(bad as unknown as "light"),
+        String(bad),
+      ).toThrow(TypeError);
+    }
+  });
+
+  it("localStorage 里是认不了的 themeMode 时回到唯一默认值，不拿脏值去写 DOM", async () => {
+    // 与上面 `captureTrackingDefault: "false"` 那条同一个理由：那是外部输入。
+    primePersisted({ themeMode: "midnight" });
+    await rehydrate();
+    expect(useSettings.getState().themeMode).toBe("system");
+  });
+});

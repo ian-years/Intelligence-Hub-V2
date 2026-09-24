@@ -14,6 +14,24 @@
     background-color: var(--color-paper-cream);
   }
 
+  /* §2.5：落在饱和色块上的字统一走 `--color-on-accent`（ADR-0023）。
+   *
+   * 为什么是一条选择器而不是 43 处 `text-ink-black`：正文色在暗色下翻成浅色，
+   * 而色块**不翻**（翻了就不是孟菲斯），于是"继承正文色"在亮色下恰好能读、
+   * 在暗色下正好不能读 —— 靠每个调用点自觉写对一个色，是那种一定会漏一处的规矩。
+   *
+   * `electric-blue` **不在这张名单里**：它是五个色块里唯一深到"近黑字压不住"的那个
+   * （#0066ff 上是 4.1:1），它的配字是 `paper-cream` —— 那两个令牌在暗色下互换角色，
+   * 所以这一对在两个主题里都过线。哪一处 `bg-electric-blue` 漏写 `text-paper-cream`，
+   * `src/styles/tokens.spec.ts` 那条源码扫描会红。
+   */
+  .bg-coral-red,
+  .bg-lemon-yellow,
+  .bg-mint-green,
+  .bg-hot-pink {
+    color: var(--color-on-accent);
+  }
+
   body {
     margin: 0;
     font-size: var(--text-body-md);
