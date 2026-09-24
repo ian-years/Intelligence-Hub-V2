@@ -293,16 +293,22 @@ def test_a_fully_wired_platform_reports_nothing() -> None:
     那个红是**对的** —— 自洽性检查必须看着整个构建，
     只查传入的那一小撮就等于永远绿灯。改用 `douyin`（schema 真的在）才成立。
     """
-    # 三家一起给：`inconsistencies()` 是拿**全局** schema 表比的（这正是上面那段
+    # 四家一起给：`inconsistencies()` 是拿**全局** schema 表比的（这正是上面那段
     # docstring 讲的设计），所以加一个平台就必须在这里补一格 —— 这条红不是它坏了，
     # 是它在提醒"有一个平台登记了 schema 却没登记实现"。
     registry = PlatformRegistry(
-        {"douyin": _config(), "bilibili": _config(), "xiaohongshu": _config()},
+        {
+            "douyin": _config(),
+            "bilibili": _config(),
+            "xiaohongshu": _config(),
+            "youtube": _config(),
+        },
         lambda name: None,  # type: ignore[arg-type]
         classes={
             "douyin": _Adapter,
             "bilibili": _Adapter,
             "xiaohongshu": _Adapter,
+            "youtube": _Adapter,
         },  # type: ignore[dict-item]
     )
     problems = registry.inconsistencies()
@@ -378,4 +384,4 @@ def test_registered_names_are_theones_in_the_config_file_sections() -> None:
     """`config/platforms.yaml` 的顶层 key 必须与 schema 注册表一致 —— Task 2 已有
     一条读真实发货文件的看护，这里补的是"两边都活着"这一层。"""
     assert PLATFORM_CONFIG_SCHEMAS
-    assert set(PLATFORM_CONFIG_SCHEMAS) == {"douyin", "bilibili", "xiaohongshu"}
+    assert set(PLATFORM_CONFIG_SCHEMAS) == {"douyin", "bilibili", "xiaohongshu", "youtube"}

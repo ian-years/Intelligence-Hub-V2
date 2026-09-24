@@ -39,10 +39,15 @@ async def test_platform_schema_is_json_schema(client: httpx.AsyncClient) -> None
 
 
 async def test_unknown_platform_404(client: httpx.AsyncClient) -> None:
-    # 样本要挑**真的还没注册**的那家。T2.1 之前 xiaohongshu 是"未注册"的现成例子，
-    # 注册进来之后它就成了合法值 —— 这条如果继续用它就会悄悄退化成"什么都没测"。
-    assert (await client.get("/api/platforms/youtube/schema")).status_code == 404
-    assert (await client.get("/api/platforms/youtube/config")).status_code == 404
+    # 样本要挑**真的还没注册**的那家。T2.1 之前 xiaohongshu、T2.2 之前 youtube 都是
+    # "未注册"的现成例子，注册进来之后它们就成了合法值 —— 继续用就会悄悄退化成
+    # "什么都没测"。四家齐了之后没有现成的第五家，所以用假想名 + 一条防空转的前置。
+    from intelligence_hub_v2.platforms import PLATFORM_CONFIG_SCHEMAS  # noqa: PLC0415
+
+    stranger = "weibo"
+    assert stranger not in PLATFORM_CONFIG_SCHEMAS, "样本已经不陌生了，这条会空转"
+    assert (await client.get(f"/api/platforms/{stranger}/schema")).status_code == 404
+    assert (await client.get(f"/api/platforms/{stranger}/config")).status_code == 404
 
 
 async def test_get_platform_config_with_health(client, app_state: AppState) -> None:

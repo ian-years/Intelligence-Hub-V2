@@ -26,6 +26,7 @@ from intelligence_hub_v2.models.event import EventType
 from intelligence_hub_v2.models.task import TaskResult
 from intelligence_hub_v2.models.video import VideoMeta
 from intelligence_hub_v2.platforms.xiaohongshu.urls import extract_note_id
+from intelligence_hub_v2.platforms.youtube.urls import extract_video_id
 from intelligence_hub_v2.tasks.collect import build_video_draft
 from intelligence_hub_v2.tasks.dispatch import canonical_video_url, detect_platform
 from intelligence_hub_v2.tasks.params import SingleLinkParams
@@ -136,6 +137,14 @@ def _extract_video_id(platform: str, url: str) -> str:
             found = match.group("id") or match.group("q")
             if found:
                 return found
+    elif platform == "youtube":
+        # 同小红书那条纪律：**不在这里再抄一份 11 位的形状**。
+        # `watch?v=` / `youtu.be/` / `/shorts/` / `/live/` / `/embed/` 五种落地页
+        # 的判据住在 `platforms/youtube/urls.py`，两处各写一遍迟早漂成
+        # "任务认得出而适配器认不出"。
+        found = extract_video_id(url)
+        if found:
+            return found
     msg = f"从 {platform} 链接里认不出作品 id：{url}（平台改了 URL 形状？）"
     raise PlatformError(platform, "parse_url", msg)
 

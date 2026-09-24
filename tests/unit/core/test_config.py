@@ -548,8 +548,12 @@ def test_shipped_config_files_load() -> None:
     # 注册顺序 = `PLATFORM_CONFIG_SCHEMAS` 的顺序 = `/api/platforms` 给前端的顺序。
     # 这一串是**发货配置的快照**：加平台必须同时改这里，红是设计出来的（不是脆），
     # 因为它挡的是"改了代码忘了改仓库里那份 config/platforms.yaml"（或反过来）。
-    assert mgr.platform_names() == ["douyin", "bilibili", "xiaohongshu"]
+    assert mgr.platform_names() == ["douyin", "bilibili", "xiaohongshu", "youtube"]
+    # 四家里**只有三家默认开着**：youtube 段自己写着 `enabled: false`，
+    # 理由是这台机器到 YouTube 大概率直连不通（V1 §6）。两个名单**不相等**是刻意的，
+    # 所以两条都要断言 —— 只断第一条就放过了"默认打开一个采不动的平台"。
     assert mgr.enabled_platforms() == ["douyin", "bilibili", "xiaohongshu"]
+    assert mgr.get_platform("youtube").enabled is False
     # 发货的 YAML 里不许再躺着一个没人读的键（extra="forbid" 会当场红，
     # 但这条断言的红比 ConfigError 好读得多）
     raw = (Path("config/platforms.yaml")).read_text(encoding="utf-8")
@@ -567,7 +571,7 @@ def test_shipped_config_files_load() -> None:
     assert bili.prefer_subtitles is True
 
 
-def test_only_the_still_unregistered_platform_stays_commented_out() -> None:
+def test_the_live_platform_sections_are_exactly_the_registered_ones() -> None:
     """`platforms.yaml` 里"活着的段"必须**正好**等于注册表里的平台，一家不多一家不少。
 
     两个方向都要挡，因为后果不同：
@@ -577,7 +581,10 @@ def test_only_the_still_unregistered_platform_stays_commented_out() -> None:
       小红书在 T2.1 落地时踩的就是第二种：注册表放开了、yaml 忘了放开。
 
     判据取"有效行的集合 == `PLATFORM_CONFIG_SCHEMAS`"，不是一张手写名单 ——
-    手写名单每加一个平台都要改两处，早晚会与代码分叉。youtube 仍注释着（T2.2）。
+    手写名单每加一个平台都要改两处，早晚会与代码分叉。
+    V2.1 T2.2 之后四家全活着，所以这条**不再需要**"某家必须还注释着"的附加断言
+    （以前那句 `assert "youtube" not in live` 就是这种名单，删掉它不是放松判据：
+    真正在管的是上面那个等号）。
     """
     raw = (SHIPPED_CONFIG_DIR / "platforms.yaml").read_text(encoding="utf-8")
     live = {
@@ -590,7 +597,6 @@ def test_only_the_still_unregistered_platform_stays_commented_out() -> None:
     assert live == set(PLATFORM_CONFIG_SCHEMAS), (
         f"yaml 里活着的段 {sorted(live)} 与注册表 {sorted(PLATFORM_CONFIG_SCHEMAS)} 不一致"
     )
-    assert "youtube" not in live
 
 
 def test_shipped_platforms_yaml_survives_write_roundtrip(tmp_path: Path) -> None:

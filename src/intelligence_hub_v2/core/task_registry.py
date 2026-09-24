@@ -1,8 +1,8 @@
 """`TASKS` 注册表 + 适配器依赖袋的装配（`PlatformRegistry` / `AdapterDeps`）。
 
-`task-runner.md §3` 的 12 个任务在这里全部登记，但 **V2.0 只给 6 个真 handler**
-（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）。
-其余 6 个（小红书 / YouTube / all_platforms / backfill / feishu_sync / migrate）
+`task-runner.md §3` 的 12 个任务在这里全部登记。**四平台适配器齐了**（V2.1 T2.2），
+所以 8 个有真 handler（preflight / 四家 collect / single_link / add_creator / postprocess）。
+其余 4 个（all_platforms / backfill / feishu_sync / migrate_from_v1）
 仍进注册表、runner 是 `NotImplementedError` —— 两个理由：
 
 1. 未实现平台的采集任务受平台开关过滤，本来就不会出现在 `/api/tasks`
@@ -160,11 +160,15 @@ TASKS: dict[str, TaskDefinition] = {
         kind=TaskKind.PLATFORM_COLLECT,
         params_schema=CollectParams,
         platforms=("youtube",),
+        # 没有 `cookies:youtube` 那一格：YouTubeAdapter 声明 needs_cookies=False。
+        # `ffmpeg` 是**媒体合并**的前置（缺了 download_media 会判失败），
+        # 与 B站 不同处在于这里不列也不会有人误以为能跑 —— 这道闸本身还没实现，
+        # 声明它是纸面防护（见 ADR-0014 与本文件 `_check_requires` 那段）。
         requires=("ffmpeg",),
         timeout_seconds=1800,
         cancellable=True,
-        runner=_not_implemented("youtube_collect"),
-        implemented=False,
+        runner=make_collect_handler("youtube"),
+        implemented=True,
     ),
     "all_platforms": TaskDefinition(
         name="all_platforms",

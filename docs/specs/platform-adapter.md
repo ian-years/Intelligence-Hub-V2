@@ -373,7 +373,7 @@ class ListError(PlatformError):
 | 抖音 | `douyin` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser','none'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp_with_fallback' | V2.0 |
 | B站 | `bilibili` | needs_browser=False, needs_cookies=True, cookie_variants=('exported_file','browser','anonymous'), supports_subtitles=True, supports_dash_split=True, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.0 |
 | 小红书 | `xiaohongshu` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp' | V2.1 |
-| YouTube | `youtube` | needs_browser=False, needs_cookies=False, cookie_variants=(), supports_subtitles=True, supports_dash_split=False, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.1 |
+| YouTube | `youtube` | needs_browser=False, needs_cookies=False, cookie_variants=('none',), supports_subtitles=True, supports_dash_split=False, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.1 T2.2（已注册）|
 
 ---
 
@@ -430,9 +430,21 @@ class ListError(PlatformError):
 
 ### 4.4 YouTube
 
-- **纯 yt-dlp**，不需要桥
-- **本机网络不可达时如实失败**（V1 §6），不要伪造
-- **`yt-dlp-ejs` 是 yt-dlp 的 JS 挑战插件，跑时要调 node**
+- **纯 yt-dlp**，不需要桥，也**不带任何 cookie**：`cookie_variants=('none',)` 是真实档位
+  （`plan_cookie_variants` 给出的那一档 argv 为空），不是"没有阶梯"。
+  所以 V1 §7.15 那一族（枚举与下载都要带导出 cookie）在这一族不可能发生。
+- **本机网络不可达时如实失败**（V1 §6）：`healthcheck()` 的 `network` 一格回
+  `unreachable` 并带 httpx 原文；`yt_dlp` 缺一格在这里是 `unreachable` 而不是 `degraded`
+  （没有第二条媒体路）。配了 `proxy` 时探活与 yt-dlp 走同一个代理。
+- **`--recent-days` 的语义进 `since`**：窗外丢弃、窗内保留、**日期缺失的条目保留**并计数
+  （V1 "不编造时间，按原顺序取"）。判"缺失即丢"会让整位博主空手，两个判法的后果不同。
+- **未合并的 DASH 分片 = 失败**：`supports_dash_split=False` 的兑现方式是判失败并点名
+  ffmpeg，而不是挑一条交出去（V1 的 `glob("*.mp4")` 恰好会交出**纯视频轨**）。
+- **字幕真的去取**（`supports_subtitles=True`）：`--skip-download --write-auto-subs` 落一份
+  `.vtt` 到专用临时目录再解析；**确认没有轨**才回 None，跑失败要抛。
+- **`yt-dlp-ejs` 是 yt-dlp 的 JS 挑战插件，跑时要调 node**（V1 §4.1）：
+  探到 node 才加 `--js-runtimes node`；`advanced.require_node` 决定缺它时红不红。
+- **V1 的 `SHOW_YOUTUBE` 环境变量没有搬**：V2 用平台开关（`enabled`）天然覆盖那一格。
 
 ---
 

@@ -22,10 +22,12 @@ async def test_list_tasks_shows_v2_implemented(client: httpx.AsyncClient) -> Non
         "postprocess",
     } <= names
     # 未实现 / 未移植平台的任务不该出现在列表里（不撒谎原则）。
-    # `xiaohongshu_collect` 在 T2.1 之前是这一条的现成样本，现在它有真 handler 了 ——
-    # 继续拿它当"不该出现"的例子就会悄悄变成零断言。样本换成 youtube_collect：
-    # 它是下一个要落地的（T2.2），届时这一格还得再翻，那是设计出来的红。
-    assert "youtube_collect" not in names
+    # `xiaohongshu_collect` 在 T2.1 之前是这一条的现成样本，`youtube_collect` 在
+    # T2.2 之前是 —— 两家都有真 handler 之后，继续拿它们当"不该出现"的例子
+    # 就会悄悄变成零断言。样本换成 `backfill`：它仍未实现（V2.2），
+    # 而"该出现的"那一半改成显式断言 youtube_collect 在列（注册表翻向的两半都要钉）。
+    assert "youtube_collect" in names
+    assert "backfill" not in names
     assert "all_platforms" not in names
 
 

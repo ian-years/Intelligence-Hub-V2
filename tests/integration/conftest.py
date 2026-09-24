@@ -30,6 +30,8 @@ bilibili:
   enabled: true
 xiaohongshu:
   enabled: true
+youtube:
+  enabled: true
 """
 # 这一份名单**跟着 `PLATFORM_CONFIG_SCHEMAS` 走**，不是"先给两个够用的"。
 # 少一家会经由 `registry.inconsistencies()` 报"注册了 schema 却没有配置对象"，

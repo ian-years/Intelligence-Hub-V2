@@ -289,7 +289,18 @@ class BilibiliAdvanced(BaseModel):
 > `capabilities.cookie_variants` 是同一份顺序写两遍）。但**这个代码块当时没跟着改**，
 > 于是"注记说删了、示例还在"成了第二处真相 —— 2026-09-23 一并对齐。
 
-### 3.3 `XiaohongshuConfig` / `YoutubeConfig`
+### 3.3 `XiaohongshuConfig` / `YouTubeConfig`
+
+> **V2.1 T2.2 的更正**：模型类名是 `YouTubeConfig`（不是 `YoutubeConfig`），
+> 真源在 `platforms/youtube/config.py`。顶层只有 `proxy` 一个自有字段（进 yt-dlp 的
+> `--proxy`，同时让 `healthcheck()` 的探活走同一个代理，两处一致才不骗人）；
+> `advanced` 五键 `request_timeout_seconds` / `format_preference` / `require_node` /
+> `node_as_js_runtime` / `subtitle_languages`，**全都有读取路径**（ADR-0012 那道棘轮看着）。
+> 镜像字段里 `cookies_file` 在 YouTube 这一族没有任何实现路径（三条路都不带登录态），
+> 因此被覆盖成 `ui:hidden` 并在 description 里写明"没有效果"；
+> `use_cdp_bridge` / `media_strategy` / `list_strategy` 同 B站 的处理方式。
+> `prefer_subtitles` **没有建**：字幕优先的判据在 `capabilities.supports_subtitles`
+> 与 `tasks/postprocess.py`，留一个没人读的开关就是撒谎。
 
 类似，详见 `src/intelligence_hub_v2/platforms/<name>/config.py`。
 **新平台接进来会自动进 ADR-0012 那张网**（守卫遍历 `PLATFORM_CONFIG_SCHEMAS` 的全部成员）：

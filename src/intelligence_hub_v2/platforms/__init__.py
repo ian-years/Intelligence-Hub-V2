@@ -6,8 +6,10 @@ V2 的纪律：**显式注册表**，不搞 import 时自动发现的魔法（AD
 2. `config/platforms.yaml` 的顶层 key
 3. 前端平台开关的 id
 
-V2.1 注册了 douyin + bilibili + xiaohongshu；youtube 仍未注册 ——
-注册了却没有实现等于对前端撒谎（`platforms/youtube/` 目录已经在那儿了）。
+V2.1 注册了 douyin + bilibili + xiaohongshu + youtube（四平台齐）；
+注册了却没有实现等于对前端撒谎 —— 所以这一张表的每一项都必须同时有
+`platforms/<name>/config.py` 的模型与 `platforms/<name>/adapter.py` 的实现，
+`registry.register` 与本文件末尾那批 import 就是管这件事的。
 """
 
 from __future__ import annotations
@@ -28,12 +30,15 @@ from intelligence_hub_v2.platforms.xiaohongshu.config import (
     XiaohongshuAdvanced,
     XiaohongshuConfig,
 )
+from intelligence_hub_v2.platforms.youtube.config import YouTubeAdvanced, YouTubeConfig
 
 PLATFORM_CONFIG_SCHEMAS: dict[str, type[PlatformConfig]] = {
     "douyin": DouyinConfig,
     "bilibili": BilibiliConfig,
     # V2.1 T2.1。顺序 = 注册顺序 = `/api/platforms` 与 `supported_platforms()` 的顺序。
     "xiaohongshu": XiaohongshuConfig,
+    # V2.1 T2.2。
+    "youtube": YouTubeConfig,
 }
 """平台名 → 配置模型类。`/api/platforms/{name}/schema` 就是查这张表。"""
 
@@ -86,6 +91,9 @@ __all__ = [
     "XiaohongshuAdapter",
     "XiaohongshuAdvanced",
     "XiaohongshuConfig",
+    "YouTubeAdapter",
+    "YouTubeAdvanced",
+    "YouTubeConfig",
     "config_schema_for",
     "default_display_name",
     "platform_defaults",
@@ -112,3 +120,4 @@ from intelligence_hub_v2.platforms.douyin.adapter import DouyinAdapter  # noqa: 
 from intelligence_hub_v2.platforms.xiaohongshu.adapter import (  # noqa: E402
     XiaohongshuAdapter,
 )
+from intelligence_hub_v2.platforms.youtube.adapter import YouTubeAdapter  # noqa: E402

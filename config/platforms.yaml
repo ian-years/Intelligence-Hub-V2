@@ -110,10 +110,10 @@ bilibili:
     search_fallback_node_playwright: false
 
 # ---------------------------------------------------------------------------
-# 小红书 / YouTube —— V2.1 才实现（ROADMAP.md + ADR-0010）
+# 小红书（V2.1 T2.1）/ YouTube（V2.1 T2.2）
 # ---------------------------------------------------------------------------
-# 这两段**故意注释掉**：配置层对未注册的平台名是硬失败（ConfigError），
-# 留着不注释 = 新克隆的仓库起不来。V2.1 注册适配器时把注释放开即可。
+# 这两段以前**故意注释掉**：配置层对未注册的平台名是硬失败（ConfigError），
+# 留着不注释 = 新克隆的仓库起不来。两段都随各自的适配器注册放开。
 #
 xiaohongshu:
   enabled: true
@@ -139,22 +139,33 @@ xiaohongshu:
     include_image_notes: true
     sort_notes_by: "page_order"
     max_images_per_note: 9
-# youtube:
-#   enabled: false                              # 默认关：V1 §6 实测本机网络不可达
-#   display_name: "YouTube"
-#   cookies_file: null                          # YouTube 不需要 cookie
-#   use_cdp_bridge: false
-#   media_strategy: "yt_dlp"
-#   list_strategy: "yt_dlp_flat"                # yt-dlp --flat-playlist
-#   videos_per_creator: 30
-#   prefer_subtitles: true
-#   rate_limit:
-#     per_minute: 30
-#     per_creator_seconds: 1
-#   proxy: null                                 # 本机网络不可达时填 "http://127.0.0.1:7890"
-#   advanced:
-#     retry_max: 3
-#     retry_backoff_seconds: 2
-#     request_timeout_seconds: 60
-#     require_node: true                        # yt-dlp-ejs 需要 node 在 PATH（V1 §4.1）
-#     format_preference: "bestvideo[height<=1080]+bestaudio/best"
+youtube:
+  # 默认关：这台机器到 YouTube 大概率直连不通（V1 §6 的实测结论）。
+  # 关掉不是"假装支持"，打开也不会假装能采 —— healthcheck 会红成 unreachable
+  # 并交出 httpx 的原文，AGENTS.md §1.3 要的就是这一句。
+  # 有可用代理时把下面的 proxy 填上并把 enabled 打开，才是这一格的正解。
+  enabled: false
+  display_name: "YouTube"
+  # 没有 cookies_file：枚举、下载、字幕三条路都不带登录态
+  # （YouTubeAdapter.capabilities.cookie_variants == ("none",)）。
+  # 那一个档位没有实现路径的键在这里就不出现，别去 Settings 找一个不存在的开关。
+  use_cdp_bridge: false
+  media_strategy: "yt_dlp"
+  list_strategy: "yt_dlp_flat"            # yt-dlp --flat-playlist -j
+  videos_per_creator: 30
+  # 直连不通时填 "http://127.0.0.1:7890" 之类；留空 = 直连（不是"自动探测系统代理"）。
+  # 它会同时出现在 yt-dlp 的 `--proxy` 与 healthcheck 的探活上 —— 两处一致才不骗人。
+  proxy: null
+  rate_limit:
+    per_minute: 30
+    per_creator_seconds: 1
+  advanced:
+    request_timeout_seconds: 60
+    # V1 的 FORMAT_1080P，一字未改：口播内容 1080p 够转写与看板用，4K 只是字节。
+    format_preference: "bv*[height<=1080]+ba/b[height<=1080]"
+    # 探到 node 才在 argv 里加 --js-runtimes node（V1 同一条）
+    node_as_js_runtime: true
+    # 没有 node 时 healthcheck 报 degraded（V1 §4.1：新版 yt-dlp 解析签名要用它）
+    require_node: true
+    # 多轨时按这个顺序挑；也是 --sub-langs 的内容
+    subtitle_languages: ["zh-Hans", "zh", "en"]

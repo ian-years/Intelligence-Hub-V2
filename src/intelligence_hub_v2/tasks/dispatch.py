@@ -25,10 +25,13 @@ PLATFORM_HOST_SUFFIXES: dict[str, tuple[str, ...]] = {
     "douyin": ("douyin.com", "iesdouyin.com"),
     "xiaohongshu": ("xiaohongshu.com", "xhslink.com"),
     "bilibili": ("bilibili.com", "b23.tv"),
+    # `youtube-nocookie.com` 也在：那是嵌入域名，认不出它等于
+    # "同一条视频换个域名粘进来就变成未知平台"。
+    "youtube": ("youtube.com", "youtu.be", "youtube-nocookie.com"),
 }
 """平台 → 允许的主机名后缀。与 `config/platforms.yaml` 的 key、注册表 name 同一批名字。
 
-V2.0 只有这两个（`ADR-0010`）。小红书 / YouTube 进来时在这里加一行即可，
+小红书 / YouTube 在 V2.1 进来了（`ADR-0010`），四家齐。
 `detect_platform` 不用动 —— 它按这张表 + 注册表的 enabled 集合求交。
 """
 
@@ -36,6 +39,10 @@ _VIDEO_URL_TEMPLATE: dict[str, str] = {
     "bilibili": "https://www.bilibili.com/video/{id}",
     "douyin": "https://www.douyin.com/video/{id}",
     "xiaohongshu": "https://www.xiaohongshu.com/explore/{id}",
+    # 查询串形式：`/shorts/<id>` 与 `/live/<id>` 都接受 `watch?v=`，反过来不成立。
+    # 真源是 `platforms/youtube/urls.canonical_video_url`，两处必须一致
+    # （看护在 tests/unit/platforms/test_youtube_adapter.py）。
+    "youtube": "https://www.youtube.com/watch?v={id}",
 }
 
 

@@ -40,7 +40,7 @@ from intelligence_hub_v2.bridge.server import BridgeHandler  # noqa: E402
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient  # noqa: E402
 from intelligence_hub_v2.infra.cookies import COOKIE_FILE_HEADER, CookieManager  # noqa: E402
 from intelligence_hub_v2.platforms.bilibili.urls import BILI_COOKIE_DOMAIN  # noqa: E402
-from intelligence_hub_v2.platforms.douyin.media import DOUYIN_COOKIE_DOMAIN
+from intelligence_hub_v2.platforms.douyin.media import DOUYIN_COOKIE_DOMAIN  # noqa: E402
 from intelligence_hub_v2.platforms.xiaohongshu.media import XHS_COOKIE_DOMAIN  # noqa: E402
 from intelligence_hub_v2.storage.files import FileStorage  # noqa: E402
 from refresh_bridge_cookies import (  # noqa: E402 - 上面那行 sys.path 是这条路必需的形状

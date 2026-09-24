@@ -1,0 +1,6 @@
+{"id":"aqzZKE2FJDg","url":"/watch?v=aqzZKE2FJDg","type":"video","title":"对标频道的一期口播（合成样本）","duration":612.0,"timestamp":1758585600,"view_count":40211,"channel":"合成频道","channel_id":"UCKC8SZ0cdXPnnkKkQQLJmsQ","uploader_id":"@synthetic_channel"}
+{"id":"bQw4w9WgXc1","url":"https://www.youtube.com/watch?v=bQw4w9WgXc1","type":"video","title":"只有 upload_date 的一条（合成样本）","duration":118.5,"upload_date":"20260910","channel":"合成频道","channel_id":"UCKC8SZ0cdXPnnkKkQQLJmsQ"}
+{"id":"cQw4w9WgXc2","title":"既没有 timestamp 也没有 upload_date（合成样本）","duration":42.0,"channel":"合成频道","channel_id":"UCKC8SZ0cdXPnnkKkQQLJmsQ"}
+{"id":"PL000000000000000000000000000000x","type":"playlist","title":"合集条目：不是作品（合成样本）","channel":"合成频道","channel_id":"UCKC8SZ0cdXPnnkKkQQLJmsQ"}
+{"id":"","type":"video","title":"没有 id，收进来就是库里的孤儿（合成样本）"}
+{"id":"dQw4w9WgXc3","url":"/watch?v=dQw4w9WgXc3","type":"video","title":"窗外的老作品（合成样本）","duration":900.0,"timestamp":1600000000,"channel":"合成频道","channel_id":"UCKC8SZ0cdXPnnkKkQQLJmsQ"}
