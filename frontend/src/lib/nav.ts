@@ -17,6 +17,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/feed", label: "作品流", built: true },
   { to: "/creators", label: "博主", built: true },
   { to: "/topics", label: "选题", built: true },
+  { to: "/workshop", label: "创作工坊", built: true },
   { to: "/tasks", label: "任务", built: true },
   { to: "/preflight", label: "预检", built: true },
   { to: "/settings", label: "设置", built: true },

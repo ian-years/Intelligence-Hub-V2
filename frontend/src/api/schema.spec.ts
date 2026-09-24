@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { RUN_STATUS_META } from "@/lib/run-status";
 
 import { EXPORT_ENTITIES, EXPORT_FORMATS } from "@/lib/export";
+import { BEAT_TEMPLATE_KEYS } from "@/lib/workshop";
 
 import { VIDEO_HIDDEN_MODES, VIDEO_SORT_MODES } from "./hooks/useVideos";
 
@@ -65,6 +66,7 @@ const ENUM_LISTS: Record<string, readonly string[]> = {
   "/api/videos get hidden": VIDEO_HIDDEN_MODES,
   // 爆款回溯（T6.6）发出去的 `"benchmark"` 就来自这份名单，不是又一处字面量。
   "/api/videos get sort": VIDEO_SORT_MODES,
+
   // 导出那三条：`hidden` 故意复用作品流那份名单，**不是再抄一遍三个字符串** ——
   // 两处各一份的话，加一档可见性时早晚只改一边，症状是"导出比屏幕多一行/少一行"。
   "/api/export get entity": EXPORT_ENTITIES,
@@ -95,6 +97,18 @@ function enumQueryParams(): Map<string, readonly string[]> {
   }
   return found;
 }
+
+describe("工坊页那张模板名单与请求体 enum", () => {
+  it("BEAT_TEMPLATE_KEYS 与 DraftScriptRequest.template_key 的枚举逐字相等", () => {
+    // 上面那条扫的是**查询参数**的 enum；`template_key` 在请求体里，那里够不着。
+    // 而它正是"前端发一个后端不认的值 → 422"会发生的地方，所以单独钉一条双向相等。
+    const declared = snapshot.components?.schemas?.DraftScriptRequest?.properties?.template_key as
+      { enum?: unknown[] } | undefined;
+    const values = (declared?.enum ?? []).map(String);
+    expect(values.length, "快照里没有这个枚举（下面两条都会空转）").toBeGreaterThan(0);
+    expect([...BEAT_TEMPLATE_KEYS].sort(), "前端名单与契约不等").toEqual([...values].sort());
+  });
+});
 
 describe("查询参数里的 enum 与前端名单", () => {
   const fromSnapshot = enumQueryParams();

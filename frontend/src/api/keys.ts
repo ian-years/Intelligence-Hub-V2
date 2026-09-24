@@ -19,6 +19,9 @@ export const keys = {
    *  不该让草稿列表重取（它们除了同一个页面之外没有关系）。 */
   topics: (search?: string) => ["topics", search ?? null] as const,
   drafts: (status?: string) => ["drafts", status ?? null] as const,
+  /** 爆款拆解（T5.2 的端点，T4.7 的工坊页要读它）。按作品 id 分键：
+   *  两篇对标稿的拆解结果共用一格缓存的话，切作品时界面会留着上一篇的钩子。 */
+  benchmark: (videoId: number) => ["benchmark", videoId] as const,
   taskSchema: (name: string) => ["tasks", name, "schema"] as const,
   runs: (status?: string) => ["runs", status ?? null] as const,
   run: (id: string) => ["runs", id] as const,
