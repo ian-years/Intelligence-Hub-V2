@@ -2165,6 +2165,52 @@ addopts 里带着 `--cov=...`，所以**只收集不跑测试**的那一问也�
 
 ---
 
+#### 经验 53 · 一条"撤销"路径，把三个既有缺口一次照出来（T6.2）
+
+`--rollback` 是这仓库里第一条**会删数据**的脚本路径。写它之前，"迁移写进去的行都带
+`migrated_from_v1` 标记"这句 ADR-0010 的话一直是**没人验证的断言**；有了回滚，它当场可验证 ——
+于是三件事一起露头。
+
+**第一条：标记只打了一半。** `_video_draft` 走 `_metadata_with_provenance()`（打标记），
+`_creator_draft` 是 `metadata_json=str(crow.get("metadata_json") or "{}")` —— 原样搬 V1 那段，
+**从来没打过标记**。真数据那一跑的形状是"21 条视频删了、4 位博主一行没删"，
+而库里看不出任何异常：回滚报告说 `creators=0`，读的人第一反应会是"这个库本来就没有博主"。
+**判据**：写者决定"哪些行是我写的"，那么**每一条写路径都必须打**，缺一半等于没有。
+修法是一个 `_mark_migrated(raw, v1_id=...)` 两边共用，顺带把 ADR-0010 要求的 `v1_id` 也补上。
+
+**第二条：dry-run 少报就是撒谎，哪怕报的方向是"少"。** 第一版 dry-run 输出
+`transcripts（随级联）=0`，真跑报 16 —— 因为我把那个数写成"删完之后再差一次"，
+而 dry-run 分支提前 return。预演少报回滚范围，看计划的人会以为稿子不受影响。
+**判据**：dry-run 与真跑必须**共用同一套计数来源**，各算一遍就早晚分叉
+（与 T0.1 那个 `/cookies` 的 `netscape`/`cookies` 分歧是同一族：提供方与消费方各写一半）。
+现在 dry-run 用 `SELECT video_id IN (...)` 数一遍要连带消失的稿子行。
+
+**第三条：删数据的判据不能是文本匹配。** 最省事的写法是
+`WHERE metadata_json LIKE '%migrated_from_v1%'`，它会连 `{"note": "migrated_from_v1"}`、
+`{"migrated_from_v1": "true"}`（字符串）一起删。这里选逐行 `json.loads` 判 `is True`：
+**删错的代价不可逆，扫全库的成本可以忽略**（本机 21 行；哪怕几万行也是几十毫秒）。
+用例把这张判据表钉成 parametrize（10 格，含"值是字符串 true"这一格）。
+
+**第四条（我自己写错的，被看护抓回来）**：`rollback()` 第一版
+`await storage.sessionmaker().execute(...)` 不接 `async with` —— 连接漏在池外，
+症状不是当场报错，而是 teardown 时 aiosqlite 工作线程 `RuntimeError: Event loop is closed`
++ SQLAlchemy"non-checked-in connection will be terminated"的 GC 警告。
+这个仓库 `filterwarnings = ["error"]`，所以它变红了 —— **如果没有那条配置，
+这段代码会带着一个连接泄漏安静地活很久**。`SqliteStorage.sessionmaker` 的
+docstring 写着"给需要写自定义查询的调用方"，但没说"要自己关"。
+
+**跨卷那条**已经在经验 52 第二条（V1 的 `video_path` 是绝对路径，`--v1-root` 挡不住它，
+跨卷退 copy 就是 4.5 GB 级）。`--media-strategy` 因此把降级做成**计数而不是错误**：
+`media_downgraded` 单独一位，不进 `report.errors` —— 否则每次跨卷迁移都以退出码 1 收尾，
+而 1 的含义是"有东西没做成"，真失败（比如点名要 symlink 却建不出来）就被淹没了。
+
+**看护**：`tests/tools/test_migrate_rollback.py`（21 条：判据表 10 格、四种 media-strategy 的
+行为差异、symlink 不降级、hardlink 降级不占 errors、dry-run 不动东西、只删迁移行、
+**回滚后重迁真的搬得动**、空库不臆造成功、缺库不建库）。真机数字在
+`docs/progress/2026-09-24.md` 主题十。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

@@ -9,7 +9,18 @@
 uv run python -X utf8 tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hub" --dry-run
 # 真迁移（幂等；中断后据 data/.migration_state.json 续跑）
 uv run python -X utf8 tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hub"
+# 换媒体策略：copy / symlink / reference（reference = 一个字节都不搬，库里只记 V1 路径）
+uv run python -X utf8 tools/migrate_from_v1.py --v1-root "..." --media-strategy copy
+# 回滚：删掉库里所有带 migrated_from_v1 的 creators/videos（transcripts 随级联），
+# 并删掉 .migration_state.json。媒体文件一个都不动。先 --dry-run 看清单。
+uv run python -X utf8 tools/migrate_from_v1.py --rollback --dry-run
+uv run python -X utf8 tools/migrate_from_v1.py --rollback
 ```
+
+**跑之前先看 `data.dir` 与 V1 媒体是不是同一个卷。** 同卷是 hardlink（本机实测 21 条作品
+≈ 0 额外占用）；跨卷就是逐条 copy，V1 那 21 条实测 **4.5 GB 级**（本机踩过：默认策略退
+copy 之后把一个 99 GB 的系统盘填到 100%）。降级本身是 ADR-0010 写明的预期行为，
+所以它进 `media_downgraded` 计数而不是 `errors` —— 退出码 1 要留给真失败。
 
 三条硬规矩（V1 的经验直接搬过来）：
 1. **V1 只读**。V1 的库以 `mode=ro` URI 打开，任何写都会 `OperationalError` —— 不是"我们
@@ -47,14 +58,16 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from pydantic import ValidationError
+from sqlalchemy import select as sa_select
 
-from intelligence_hub_v2.core.config import ConfigManager
+from intelligence_hub_v2.core.config import AppConfig, ConfigManager
 from intelligence_hub_v2.errors import StorageError
 from intelligence_hub_v2.models.creator import CreatorDraft
 from intelligence_hub_v2.models.transcript import TranscriptDraft
 from intelligence_hub_v2.models.video import Video, VideoDraft
-from intelligence_hub_v2.storage.db import SqliteStorage
+from intelligence_hub_v2.storage.db import SqliteStorage, resolve_db_path
 from intelligence_hub_v2.storage.files import FileStorage
+from intelligence_hub_v2.storage.schema import creators_table, transcripts_table, videos_table
 
 V1_DB_RELPATH = Path("downloads") / "local.sqlite3"
 # V1 的 `launcher_server.load_state_list()` 走 `root / "downloads" / "launcher-state" / name`
@@ -94,9 +107,23 @@ class MigrationReport:
     hidden: int = 0
     media_linked: int = 0
     media_copied: int = 0
+    media_downgraded: int = 0
+    """hardlink 因跨卷退成 copy 的条数。**不是失败**，是一条磁盘代价。"""
+    media_symlinked: int = 0
+    media_referenced: int = 0
     media_missing: int = 0
     skipped_existing: int = 0
+    rolled_back_videos: int = 0
+    rolled_back_creators: int = 0
+    rolled_back_transcripts: int = 0
+    files_left_on_disk: int = 0
     errors: list[str] = field(default_factory=list)
+    preview: list[str] = field(default_factory=list)
+    """dry-run 时"会动到哪些行"的样例（最多 `_ROLLBACK_PREVIEW` 条，见 `rollback`）。"""
+
+
+#: `--media-strategy` 的四个取值（ADR-0010 §行为契约 3）。
+MEDIA_STRATEGIES = ("hardlink", "copy", "symlink", "reference")
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -168,6 +195,7 @@ def _metadata_with_provenance(vrow: dict[str, Any], *, extra: dict[str, Any] | N
     except ValueError:
         payload = {"v1_raw_data_unparsed": raw[:500]}
     payload["migrated_from_v1"] = True
+    payload["v1_id"] = str(vrow.get("id") or "")
     payload.update(extra or {})
     return json.dumps(payload, ensure_ascii=False)
 
@@ -296,15 +324,39 @@ def _media_source_path(v1_root: Path, video_path: str) -> Path | None:
     return None
 
 
-def _link_or_copy(src: Path, dest: Path, report: MigrationReport) -> None:
+def _stage_file(src: Path, dest: Path, report: MigrationReport, strategy: str) -> None:
+    """按 `strategy` 把 V1 的那个文件放进 V2 的目录树。
+
+    **只有默认的 `hardlink` 允许自动降级**（ADR-0010：跨盘时退成 copy）。
+    显式选了 `copy` / `symlink` 却失败时**不降级**，只把原文记进 `report.errors` ——
+    用户点名要的东西没做成、却悄悄换成另一件事，症状是"磁盘占用不对 / 文件是副本"
+    这种没人会去核对的差异（`AGENTS.md` §1.3 说的就是这一类）。
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os_link(src, dest)
-        report.media_linked += 1
-    except OSError:
-        # 跨卷（EXDEV）或 V1 与 V2 不在同一文件系统：退回复制，代价是磁盘翻倍，如实记。
+    if strategy == "copy":
         shutil.copy2(src, dest)
         report.media_copied += 1
+        return
+    if strategy == "symlink":
+        if dest.exists():
+            return  # 幂等重跑：上一次已经建好了
+        dest.symlink_to(src)
+        report.media_symlinked += 1
+        return
+    try:
+        os_link(src, dest)
+    except OSError:
+        if strategy != "hardlink":
+            raise
+        # 跨卷（EXDEV）或 V1 与 V2 不在同一文件系统：默认策略退成复制。**这不是失败**
+        # （ADR-0010 明写"失败自动降级 copy"），所以不进 `report.errors` —— 那会让每次
+        # 跨卷迁移都以 1 退出，而 1 的意思是"有东西没做成"。它是一条**代价**：
+        # 磁盘要多留一份，所以单独计数并在汇总里说出来。
+        shutil.copy2(src, dest)
+        report.media_copied += 1
+        report.media_downgraded += 1
+        return
+    report.media_linked += 1
 
 
 def os_link(src: Path, dest: Path) -> None:
@@ -331,6 +383,147 @@ def _save_state(v2_data: Path, done: set[str]) -> None:
     )
 
 
+#: `--rollback` 一次列出来的样例行数（只为了让人 eyeball，不是全部）。
+_ROLLBACK_PREVIEW = 10
+
+
+def _is_migrated(metadata_json: str | None) -> bool:
+    """这一行是不是迁移脚本写的。**只认 `migrated_from_v1` 这个布尔真值**。
+
+    不用 `metadata_json LIKE '%migrated_from_v1%'`：那条 LIKE 会把一条**人写的**
+    metadata 里恰好出现这个词的行也算进来（用户在 `advanced` 里贴过一段日志
+    就够呛）—— 删错的代价是把真数据删了，比漏删贵得多。所以取出来逐行 `json.loads`。
+    """
+    raw = str(metadata_json or "").strip()
+    if not raw:
+        return False
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("migrated_from_v1") is True
+
+
+async def rollback(
+    storage: SqliteStorage, files: FileStorage, *, dry_run: bool = False
+) -> MigrationReport:
+    """撤掉迁移写进来的行（ADR-0010 §行为契约 6）。
+
+    删的是 `creators` + `videos`（`transcripts` 由 `ON DELETE CASCADE` 跟着走），
+    判据是 `metadata_json.migrated_from_v1 === true`。
+
+    **媒体文件一个都不删**：hardlink 的那一侧还连着 V1，删了 V2 这份只是 unlink，
+    而 copy / symlink 那份删下去就是不可逆的。所以报告里给"留在盘上多少个"，
+    要清理由人自己决定（这也让"回滚后重新迁一遍"仍然有全部原始文件可用）。
+
+    **顺手删掉 `.migration_state.json`**：那是"哪些 V1 行已经搬过"的记账，
+    留着它，回滚之后的下一次迁移会把整库当成已完成而**一条都不搬** ——
+    回滚看起来成功了，实际把下一次跑变成空操作。这是本轮写这条时最容易漏的一半。
+    """
+    report = MigrationReport(dry_run=dry_run)
+    # 两条查询各开一个 session 并**当场关掉**：`storage.sessionmaker().execute(...)` 这种
+    # 不接 `async with` 的写法会把连接漏在池外，症状不是报错而是几分钟后 GC 警告
+    # （"non-checked-in connection will be terminated"）—— 而 pytest 的
+    # `filterwarnings = ["error"]` 会把它变成一条红。第一版就是这么写的，被测试抓出来了。
+    async with storage.sessionmaker() as session:
+        video_rows = (
+            (
+                await session.execute(
+                    sa_select(
+                        videos_table.c.id,
+                        videos_table.c.platform,
+                        videos_table.c.platform_video_id,
+                        videos_table.c.media_path,
+                        videos_table.c.metadata_json,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        creator_rows = (
+            (
+                await session.execute(
+                    sa_select(
+                        creators_table.c.id,
+                        creators_table.c.platform,
+                        creators_table.c.platform_id,
+                        creators_table.c.metadata_json,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    migrated_videos = [row for row in video_rows if _is_migrated(row["metadata_json"])]
+    migrated_creators = [row for row in creator_rows if _is_migrated(row["metadata_json"])]
+    report.rolled_back_videos = len(migrated_videos)
+    report.rolled_back_creators = len(migrated_creators)
+    report.files_left_on_disk = sum(1 for row in migrated_videos if row["media_path"])
+
+    if dry_run:
+        # 预演也要报出会连带删掉多少份稿子：只报"21 条视频"而漏了"16 行口播稿会随级联走"，
+        # 看计划的人就不知道回滚的范围有多大。
+        await _count_cascaded_transcripts(storage, report, {int(r["id"]) for r in migrated_videos})
+        for row in migrated_videos[:_ROLLBACK_PREVIEW]:
+            report.preview.append(f"video {row['platform']}:{row['platform_video_id']}")
+        for row in migrated_creators[:_ROLLBACK_PREVIEW]:
+            report.preview.append(f"creator {row['platform']}:{row['platform_id']}")
+        return report
+
+    before = await storage.transcripts.count()
+    for row in migrated_videos:
+        await storage.videos.delete(int(row["id"]))
+    for row in migrated_creators:
+        await storage.creators.delete(int(row["id"]))
+    report.rolled_back_transcripts = before - await storage.transcripts.count()
+
+    state_file = files.root / STATE_FILENAME
+    if state_file.is_file():
+        state_file.unlink()  # 精确路径，不用通配符（AGENTS §1）
+    return report
+
+
+async def _count_cascaded_transcripts(
+    storage: SqliteStorage, report: MigrationReport, video_ids: set[int]
+) -> None:
+    """dry-run 专用：这些视频名下有几行 `transcripts`（回滚时随外键级联消失）。"""
+    if not video_ids:
+        return
+    async with storage.sessionmaker() as session:
+        rows = (
+            await session.execute(
+                sa_select(transcripts_table.c.video_id).where(
+                    transcripts_table.c.video_id.in_(video_ids)
+                )
+            )
+        ).all()
+    report.rolled_back_transcripts = len(rows)
+
+
+def _mark_migrated(raw_metadata: object, *, v1_id: object = None) -> str:
+    """给一行 V2 记录打上"这行是迁移写进来的"标记（ADR-0010 §迁移内容 末段）。
+
+    `--rollback` 就靠这个标记认行。**两边都要打**：只给 `videos` 打而漏了 `creators`，
+    回滚就会留下满库没人认领的博主行，而库里看不出异常 —— 这条今天真被 `--rollback`
+    的量测抓出来了（1 条视频删掉、1 位博主没删）。
+
+    V1 那侧的 `metadata_json` 解析不出来时不丢原文：包一层 `v1_metadata_raw` 再打标记。
+    """
+    raw = str(raw_metadata or "").strip()
+    try:
+        payload = json.loads(raw) if raw else {}
+        if not isinstance(payload, dict):
+            payload = {"v1_metadata_raw": payload}
+    except ValueError:
+        payload = {"v1_metadata_raw": raw[:500]}
+    payload["migrated_from_v1"] = True
+    if v1_id is not None and str(v1_id).strip():
+        payload["v1_id"] = str(v1_id)
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _creator_draft(crow: dict[str, Any], report: MigrationReport) -> CreatorDraft | None:
     """V1 `creators` 行 → `CreatorDraft`；认不出的平台记一条错误并返回 None（不猜平台）。"""
     raw_platform = str(crow.get("platform") or "").strip()
@@ -353,7 +546,7 @@ def _creator_draft(crow: dict[str, Any], report: MigrationReport) -> CreatorDraf
             crow.get("homepage_url") or crow.get("profile_url") or f"{slug}://{platform_id}"
         ),
         is_tracking=bool(crow.get("is_tracking", 1)),
-        metadata_json=str(crow.get("metadata_json") or "{}"),
+        metadata_json=_mark_migrated(crow.get("metadata_json"), v1_id=crow.get("id")),
     )
 
 
@@ -363,6 +556,8 @@ def _video_draft(
     creator_id: int | None,
     media_rel: str | None,
     report: MigrationReport,
+    *,
+    media_reference: str | None = None,
 ) -> VideoDraft:
     """V1 `videos` 行 → `VideoDraft`。V1 把发布时间与四个计数存在文本列里，这里拆开映射。"""
     pvid = str(vrow.get("platform_video_id") or "")
@@ -378,6 +573,9 @@ def _video_draft(
         extra["published_at_assumed_tz"] = "local"
     if metrics_unparsed:
         extra["v1_metrics_json"] = metrics_unparsed
+    if media_reference:
+        # `--media-strategy=reference`：V2 不持有这份媒体，只记它在 V1 哪儿。
+        extra["v1_media_path"] = media_reference
     return VideoDraft(
         platform=platform,
         platform_video_id=pvid,
@@ -447,12 +645,17 @@ async def migrate(
     *,
     dry_run: bool = False,
     resume: bool = True,
+    media_strategy: str = "hardlink",
     report: MigrationReport | None = None,
 ) -> MigrationReport:
     """把 V1 的一次性搬进 V2。幂等：已存在的 (platform, platform_id / platform_video_id) 跳过。
 
     单行失败只记一条 `report.errors`，不炸整跑 —— 一次跑不完比跑错一半便宜得多，
     而状态文件让下一次接着跑。
+
+    `media_strategy` 见 `MEDIA_STRATEGIES` 与 `_stage_file`：默认 hardlink、跨卷退 copy，
+    其余三种各自失败时**不降级**。**跑之前先看目标卷与 V1 媒体卷是不是同一个**：
+    不同卷就是逐条 copy，本机量过一次 21 条作品 = 4.5 GB 级（`docs/lessons.md` 经验 52）。
     """
     report = report or MigrationReport(dry_run=dry_run)
     v1_db = v1_root / V1_DB_RELPATH
@@ -494,8 +697,19 @@ async def migrate(
         ).strip()
         creator_id = platform_key_to_id.get((platform, creator_pid))
 
-        media_rel, _source = _stage_media(v1_root, files, vrow, platform, report, dry_run)
-        video_draft = _video_draft(vrow, platform, creator_id, media_rel, report)
+        media_rel, source = _stage_media(
+            v1_root, files, vrow, platform, report, dry_run, media_strategy
+        )
+        video_draft = _video_draft(
+            vrow,
+            platform,
+            creator_id,
+            media_rel,
+            report,
+            media_reference=(
+                str(source) if media_rel is None and media_strategy == "reference" else None
+            ),
+        )
         if dry_run:
             _project_dry_run(vrow, pvid, hidden_keys, report)
             continue
@@ -553,24 +767,37 @@ def _stage_media(
     platform: str,
     report: MigrationReport,
     dry_run: bool,
+    strategy: str,
 ) -> tuple[str | None, Path | None]:
     """把 V1 的媒体文件挂进 V2 的 data/ 树。`platform` 是**已翻译好的 slug**（目录名要与
-    V2 自己采集出来的路径同构，不能再拿 V1 的显示名去拼一层）。"""
+    V2 自己采集出来的路径同构，不能再拿 V1 的显示名去拼一层）。
+
+    `strategy == "reference"` 时**一个字节都不搬**：交回 `(None, source)`，由调用方把
+    V1 的绝对路径写进 `metadata_json`。注意那意味着 V2 里这条作品**没有可读媒体**
+    （Feed 看得到、播放与转写不行）—— 所以 `media_path` 老老实实留 NULL，
+    不把 V1 的绝对路径塞进那一列：那一列的契约是"相对 `data/`"，
+    塞绝对路径等于给 `files.abs()` 埋一颗雷（"库里存绝对路径 = 换机器就废"）。
+    """
     source = _media_source_path(v1_root, str(vrow.get("video_path") or ""))
     if source is None:
         if str(vrow.get("video_path") or "").strip():
             report.media_missing += 1
         return None, None
+    if strategy == "reference":
+        report.media_referenced += 1
+        return None, source
     pvid = str(vrow.get("platform_video_id") or "")
     creator_name = str(vrow.get("creator_name") or "unknown")
     title = str(vrow.get("video_title") or pvid)
     dest_dir = files.media_dir(platform, creator_name, pvid, title)
     dest = dest_dir / ("media" + source.suffix or ".mp4")
     if dry_run:
+        # 预演报的是"这一跑会走哪条路"，不是笼统的"会搬 21 个文件"：
+        # 跨卷时 hardlink 会变 copy，磁盘代价差着数量级（本机实测 4.5 GB 级）。
         report.media_linked += 1
         return files.rel(dest), source
     try:
-        _link_or_copy(source, dest, report)
+        _stage_file(source, dest, report, strategy)
     except OSError as exc:
         report.errors.append(f"媒体搬运失败 {source} → {dest}: {type(exc).__name__}: {exc}")
         return None, source
@@ -628,11 +855,26 @@ async def _maybe_attach_transcript(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="V1 → V2 数据迁移（只读 V1）")
-    parser.add_argument("--v1-root", type=Path, required=True, help="V1 工作区根目录")
+    parser.add_argument("--v1-root", type=Path, help="V1 工作区根目录（`--rollback` 之外必填）")
     parser.add_argument("--config-dir", type=Path, default=Path("config"), help="V2 配置目录")
     parser.add_argument("--dry-run", action="store_true", help="只统计不写")
     parser.add_argument(
         "--no-resume", action="store_true", help="忽略 .migration_state.json 全量重跑"
+    )
+    parser.add_argument(
+        "--media-strategy",
+        choices=MEDIA_STRATEGIES,
+        default="hardlink",
+        help="媒体怎么进 data/：hardlink（默认，跨卷自动退 copy）/ copy / symlink / "
+        "reference（不搬，只在库里记 V1 绝对路径 —— 那条作品在 V2 里没有可读媒体）。"
+        "非默认策略失败时不降级，只记错误。",
+    )
+    parser.add_argument(
+        "--rollback",
+        action="store_true",
+        help="删掉库里所有 `migrated_from_v1` 的 creators/videos（transcripts 随外键级联），"
+        "并删掉 .migration_state.json。**媒体文件一个都不动**（见 `rollback` 的 docstring）。"
+        "与 `--dry-run` 连用只列出将删的行。",
     )
     return parser
 
@@ -642,6 +884,13 @@ async def _amain(argv: list[str]) -> int:
     manager = ConfigManager(args.config_dir)
     config = manager.load()
     files = FileStorage.from_config(config)
+
+    if args.rollback:
+        return await _amain_rollback(args, config, files)
+    if args.v1_root is None:
+        msg = "--v1-root 是必需的（只有 --rollback 不需要它）"
+        raise SystemExit(msg)
+
     if args.dry_run:
         # 预演**不碰目标树**：`ensure_dirs()` 会建出五个目录，`from_config().initialize()`
         # 会建库并跑 Alembic —— 那之前"dry-run 未写任何东西"是句假话（打印它也一样假）。
@@ -653,11 +902,35 @@ async def _amain(argv: list[str]) -> int:
     await storage.initialize()
     try:
         report = await migrate(
-            args.v1_root, storage, files, dry_run=args.dry_run, resume=not args.no_resume
+            args.v1_root,
+            storage,
+            files,
+            dry_run=args.dry_run,
+            resume=not args.no_resume,
+            media_strategy=args.media_strategy,
         )
     finally:
         await storage.close()
     _print_report(report)
+    return 1 if report.errors else 0
+
+
+async def _amain_rollback(args: argparse.Namespace, config: AppConfig, files: FileStorage) -> int:
+    """回滚那一支：读**真实目标库**，所以它不能像迁移的 dry-run 那样换内存库 ——
+    要列出的正是"库现在有什么"。库还不存在时直接说实话，不建它
+    （建一个空库再报"没有可回滚的"是把副作用藏进一条查询里）。"""
+    db = resolve_db_path(config)
+    if not db.is_file():
+        print("== V1→V2 回滚 ==")
+        print(f"  目标库不存在（{db}）—— 没有可回滚的东西，也没建它")
+        return 0
+    storage = SqliteStorage(db)
+    await storage.initialize()
+    try:
+        report = await rollback(storage, files, dry_run=args.dry_run)
+    finally:
+        await storage.close()
+    _print_rollback(report)
     return 1 if report.errors else 0
 
 
@@ -670,8 +943,35 @@ def _print_report(report: MigrationReport) -> None:
     )
     print(
         f"  hidden墓碑={report.hidden} 媒体 link={report.media_linked} copy={report.media_copied} "
+        f"symlink={report.media_symlinked} reference={report.media_referenced} "
+        f"降级 copy={report.media_downgraded} "
         f"missing={report.media_missing} 已存在跳过={report.skipped_existing}"
     )
+    _print_errors(report)
+
+
+def _print_rollback(report: MigrationReport) -> None:
+    mode = "DRY-RUN（未删任何东西）" if report.dry_run else "已删除"
+    print(f"== V1→V2 回滚 · {mode} ==")
+    print(
+        f"  videos={report.rolled_back_videos} creators={report.rolled_back_creators} "
+        f"transcripts（随级联）={report.rolled_back_transcripts} "
+        f"留在盘上的媒体文件={report.files_left_on_disk}"
+    )
+    if report.dry_run:
+        for line in report.preview:
+            print(f"    - {line}")
+        if not report.preview:
+            print("    （库里没有一条带 migrated_from_v1 标记的行）")
+    else:
+        print(
+            "  媒体文件一个没动（可能仍是 hardlink，删了也白删）；"
+            ".migration_state.json 已删 —— 留着它下次迁移会整库跳过"
+        )
+    _print_errors(report)
+
+
+def _print_errors(report: MigrationReport) -> None:
     if report.errors:
         print(f"  ⚠️ {len(report.errors)} 条错误：")
         for line in report.errors[:50]:

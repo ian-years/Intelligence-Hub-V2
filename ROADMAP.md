@@ -129,7 +129,11 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `creators=4 videos=21 transcripts=16 墓碑=2 媒体 link=21 copy=0 missing=0`。
   两处"看着像丢数据"的只读复核：8 条 B站 作品 `creator_id` 为空 = V1 那几行本来就是 `''`
   （V1 的 videos 表没有 mid 列）；`view_count` 全 null = V1 的 `metrics_json` 21 条全空。
-  **仍然等点头的**：把这 4/21/16 写进 live `data/`（不可自动回退，`--rollback` 没实现）。
+  **等点头的那道闸已经装上**：`--rollback` 于 2026-09-24（T6.2）实现，live `data/` 那一跑
+  现在写得也撤得回（撤的是数据行 + 状态文件，媒体文件按设计不动）。真数据量过一遍：
+  真迁移 `link=21 copy=0` → `--rollback --dry-run` 报 `videos=21 creators=4 transcripts=16` →
+  真回滚后三张表归零、21 个媒体文件仍在盘上 → 换 `--media-strategy=reference` 重迁，
+  又搬进 21 条（这一跑就是为了证明"状态文件跟着回滚走"这件事成立）。
   —— 代码 + 离线用例完成（Task 15）。V1 以 `mode=ro` URI 打开（写它当场抛，不靠约定）；
   幂等（`(platform, platform_id/platform_video_id)` 命中跳过）+ `.migration_state.json` 续跑；
   墓碑从 `hidden-videos.json` 内化成 `videos.is_hidden`；V1 内联的 `clean_transcript` 落成 V2
