@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlparse
 from pydantic import HttpUrl, TypeAdapter, ValidationError
 
 from intelligence_hub_v2.errors import PlatformError
+from intelligence_hub_v2.platforms.urls import parse_cn_count  # ADR-0016 转发，见文件末尾
 
 __all__ = [
     "PROFILE_URL_PREFIX",
@@ -202,41 +203,6 @@ def require_http_url(value: object, *, context: str) -> HttpUrl:
 # 粉丝数 / 点赞数：中文计数法 → int
 # --------------------------------------------------------------------------- #
 
-_CN_UNIT_MULTIPLIERS = {"万": 10_000, "亿": 100_000_000, "w": 10_000, "W": 10_000}
-_NUMBER_WITH_UNIT = re.compile(r"(\d+(?:\.\d+)?)\s*([万亿wW])?")
-
-
-def parse_cn_count(value: object) -> int | None:
-    """把页面上各种形状的**中文计数**收成 int，收不出返回 **None**（不是 0）。
-
-    粉丝数与点赞数共用这一份：主页 `data-e2e="user-fans-count"` 与作品卡片右下角
-    的赞数都是"1.2万"这种形状，所以两个字段过同一个函数。
-
-    与 V1 的方向**相反**：V1 的 `format_follower_count()` 是 int → "1.2万"，
-    因为它的终点是飞书表格里的展示单元格。V2 的 `creators.follower_count` 是
-    `INTEGER` 列（`data-model.md §2.2`），Feed 页要按粉丝数排序 ——
-    所以适配器要的是**解析**，把解析结果再格式化一遍等于把排序搞挂。
-
-    认的形状：`1234` / `"1,234"` / `"1234"` / `"1.2万"` / `"3.5亿"` / `"10w+"` /
-    `"粉丝 1.2万"`（主页 DOM 里 `data-e2e="user-fans-count"` 就长这样）。
-
-    返回 None 而不是 0 的理由：0 是一个**合法的**粉丝数（新号），
-    而"读不出来"必须是可区分的第二种状态 —— 存 0 会让"这个号 0 粉"和
-    "我们没解析出来"在看板上长得一模一样，而那正是 V1 §1.3 说的"看起来在跑"。
-    """
-    if isinstance(value, bool):
-        # True 是 int 的子类，不挡一下会写出 follower_count=1
-        return None
-    if isinstance(value, (int, float)):
-        return int(value) if value >= 0 else None
-    text = str(value or "").strip().replace(",", "").replace(" ", "")
-    if not text:
-        return None
-    match = _NUMBER_WITH_UNIT.search(text)
-    if match is None:
-        return None
-    number = float(match.group(1))
-    unit = match.group(2)
-    if unit:
-        number *= _CN_UNIT_MULTIPLIERS[unit]
-    return int(number) if number >= 0 else None
+# 实现已提到 `platforms/urls.py::parse_cn_count`（ADR-0016：第三个平台进来时，
+# 三份重复就不再是权衡）。抖音的 `listing.py` 与契约测试仍从本模块 import 这个名字，
+# 所以顶上那次转发要留着 —— 判据、形状清单与"为什么返回 None 而不是 0"都写在那边。

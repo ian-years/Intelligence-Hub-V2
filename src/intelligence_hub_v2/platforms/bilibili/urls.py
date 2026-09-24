@@ -15,11 +15,10 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from pydantic import HttpUrl, TypeAdapter, ValidationError
+from pydantic import HttpUrl
 
 from intelligence_hub_v2.errors import PlatformError
-
-_HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
+from intelligence_hub_v2.platforms.urls import absolute_http_url
 
 __all__ = [
     "BILI_COOKIE_DOMAIN",
@@ -178,18 +177,12 @@ def require_model_url(value: object, *, context: str) -> HttpUrl:
 def as_http_url(value: object) -> HttpUrl | None:
     """接口给的字符串 → `HttpUrl`，认不出来返回 None（必填字段别用这个，用上面那个）。
 
-    与 `platforms/douyin/urls.py` 里那个**是同一份逻辑**。为什么不合并：
-    两个适配器都住在 `platforms/`，而 `platforms/base.py` 是 Locked 契约模块
-    （加公共助手要走 ADR），`core/` 又在依赖图**上方**，`infra/` 不该认识 Pydantic 类型。
-    两处各十几行的重复比那个流程便宜，而且各自有用例钉着。
-    **第三个平台进来时（V2.1 小红书）就该通过 ADR 提到公共层** ——
-    三份重复就不再是权衡，而是漂移的开始。
+    实现住在 `platforms/urls.py::absolute_http_url`（ADR-0016：第三个平台进来时，
+    第三份复制就该变成一次转发）。名字留在这里不动 —— `subtitles.py`、`listing.py`
+    与 `tests/contracts/test_bilibili_helpers.py` 都指着它。
+
+    **抖音那份 `as_http_url()` 不补协议头**（`//…` 在那边直接得到 None）。
+    这个差异是有意的保留，不是待修的 bug：统一它是一次真实行为变更，得拿抖音自己的
+    用例当证据，判据写在 `platforms/urls.py` 的 docstring 里。
     """
-    text = str(value or "").strip()
-    if not text:
-        return None
-    candidate = f"https:{text}" if text.startswith("//") else text
-    try:
-        return _HTTP_URL_ADAPTER.validate_python(candidate)
-    except ValidationError:
-        return None
+    return absolute_http_url(value)
