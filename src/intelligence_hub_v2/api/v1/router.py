@@ -8,6 +8,7 @@ from intelligence_hub_v2.api.v1 import (
     config,
     creators,
     events,
+    export,
     health,
     manifests,
     tasks,
@@ -20,6 +21,7 @@ api_router.include_router(health.router)
 api_router.include_router(config.router)
 api_router.include_router(creators.router)
 api_router.include_router(videos.router)
+api_router.include_router(export.router)
 api_router.include_router(transcripts.router)
 api_router.include_router(tasks.router)
 api_router.include_router(events.router)

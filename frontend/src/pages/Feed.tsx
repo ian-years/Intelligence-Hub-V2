@@ -14,6 +14,8 @@ import {
   type VideoHiddenMode,
 } from "@/api/hooks/useVideos";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
+import { ExportLinks } from "@/components/shared/ExportLinks";
+import type { Query } from "@/api/client";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { PageShell } from "@/components/shared/PageShell";
 import { QueryState } from "@/components/shared/QueryState";
@@ -83,6 +85,9 @@ export function Feed(): JSX.Element {
           库里每一条作品，按发布时间倒序。隐藏＝打墓碑（不删文件、不删稿子），
           在"只看已隐藏"那一档可以取消。
         </p>
+        {/* 导出带的是**已经应用的**筛选（applied，不是 draft）：还没点"查询"的那半截
+            条件没生效，按它导出会比屏幕上的多或少。 */}
+        <ExportLinks entity="videos" query={toQuery(applied)} />
       </header>
 
       <form
@@ -211,14 +216,18 @@ interface Draft {
 /** 空串＝"不加这个筛选"。送 `null` 而不是 `undefined`：
  *  `exactOptionalPropertyTypes` 下 `undefined` 压根不是这些字段的合法取值，
  *  而 `client.ts` 的 `url()` 会把 null 与空串一起丢掉。 */
-function toFilter(draft: Draft, page: number): VideoFilter {
+/** 筛选条件 → query。**这一份是唯一的映射**：列表与导出都从它走，
+ *  否则"屏幕上这一列"和"导出来那一份"早晚会是两个口径。 */
+function toQuery(draft: Draft): Query {
   return {
     platform: draft.platform === "" ? null : draft.platform,
     hidden: draft.hidden,
     search: draft.search === "" ? null : draft.search,
-    page,
-    size: PAGE_SIZE,
   };
+}
+
+function toFilter(draft: Draft, page: number): VideoFilter {
+  return { ...toQuery(draft), page, size: PAGE_SIZE };
 }
 
 function Field({

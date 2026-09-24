@@ -1111,6 +1111,113 @@
         ]
       }
     },
+    "/api/export": {
+      "get": {
+        "description": "导出一张表。`hidden` 的默认值与 `/api/videos` 一致（visible）——\n导出默认含隐藏行会让人以为\"删掉的作品还在\"，那是另一种口径分叉。",
+        "operationId": "export_table_api_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "entity",
+            "required": false,
+            "schema": {
+              "default": "videos",
+              "enum": [
+                "videos",
+                "creators"
+              ],
+              "title": "Entity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "csv",
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hidden",
+            "required": false,
+            "schema": {
+              "default": "visible",
+              "enum": [
+                "visible",
+                "hidden",
+                "all"
+              ],
+              "title": "Hidden",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Table",
+        "tags": [
+          "export"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "description": "进程活着 + 版本号。前端侧边栏的连接指示灯用。\n\n**不打数据库**：`/health` 是\"进程在不在\"，不是\"依赖好不好的\" —— 后者是 `/preflight`。\n把 DB 探活塞这里会让一次 SQLite 卡顿看起来像服务挂了。",

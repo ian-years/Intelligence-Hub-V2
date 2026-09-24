@@ -96,4 +96,12 @@ export const api = {
     request<T>({ method: "PATCH", ...withBody(body) }, path),
 };
 
+/** 给"点了就下载"的链接用的地址：**复用同一个 query 归一化**（空串与 null 不进 URL），
+ *  否则会出现"`/api/videos` 里空的平台等于不过滤，而导出那条拼成 `platform=`"
+ *  这种两份规则分叉。端点自己带 `Content-Disposition: attachment`，所以这里
+ *  只需要一个诚实的 href，不需要 fetch + blob。 */
+export function downloadUrl(path: string, query?: Query): string {
+  return url(path, query);
+}
+
 export type Schemas = components["schemas"];

@@ -82,6 +82,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Table
+         * @description 导出一张表。`hidden` 的默认值与 `/api/videos` 一致（visible）——
+         *     导出默认含隐藏行会让人以为"删掉的作品还在"，那是另一种口径分叉。
+         */
+        get: operations["export_table_api_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -961,6 +982,41 @@ export interface operations {
                 since?: string | null;
                 /** @description 只看这一次任务（带上才回放历史） */
                 task_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_table_api_export_get: {
+        parameters: {
+            query?: {
+                entity?: "videos" | "creators";
+                format?: "csv" | "json";
+                platform?: string | null;
+                hidden?: "visible" | "hidden" | "all";
+                search?: string | null;
             };
             header?: never;
             path?: never;

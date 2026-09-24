@@ -223,3 +223,48 @@ describe("墓碑操作", () => {
     await waitFor(() => expect(patches.at(-1)?.url).toBe("/api/videos/11/unhide"));
   });
 });
+
+describe("导出链接", () => {
+  /** 读 href 的查询参数而不是比字符串：参数顺序不是契约，谁重排都会把用例弄红一次。 */
+  function paramsOf(name: string): URLSearchParams {
+    const link = screen.getByRole("link", { name }) as HTMLAnchorElement;
+    expect(link.getAttribute("href") ?? "").toMatch(/^\/api\/export\?/);
+    return new URL(link.getAttribute("href") ?? "", "http://localhost").searchParams;
+  }
+
+  it("给的是 CSV 与 JSON 两条，且不带分页参数", async () => {
+    renderPage();
+    await screen.findByText("第一条");
+    const csv = paramsOf("导出 CSV");
+    expect(csv.get("entity")).toBe("videos");
+    expect(csv.get("format")).toBe("csv");
+    expect(csv.get("hidden")).toBe("visible");
+    // `page` / `size` 混进导出地址是最坏的一种残留：
+    // 它会让"整表导出"看起来带着分页语义，而服务端根本不读它们。
+    expect(csv.get("page")).toBeNull();
+    expect(csv.get("size")).toBeNull();
+    expect(paramsOf("导出 JSON").get("format")).toBe("json");
+  });
+
+  it("点了「查询」之后，导出跟着平台与关键词走", async () => {
+    renderPage();
+    await screen.findByText("第一条");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /平台/ }), "douyin");
+    await userEvent.type(screen.getByRole("searchbox", { name: /标题关键词/ }), "选题");
+    await userEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.includes("search=%E9%80%89%E9%A2%98"))).toBe(true),
+    );
+
+    const csv = paramsOf("导出 CSV");
+    expect(csv.get("platform")).toBe("douyin");
+    expect(csv.get("search")).toBe("选题");
+  });
+
+  it("只打字没点查询：导出仍按上一版已应用的条件（不承诺没生效的筛选）", async () => {
+    renderPage();
+    await screen.findByText("第一条");
+    await userEvent.type(screen.getByRole("searchbox", { name: /标题关键词/ }), "没提交的条件");
+    expect(paramsOf("导出 CSV").get("search")).toBeNull();
+  });
+});

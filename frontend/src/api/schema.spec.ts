@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import { RUN_STATUS_META } from "@/lib/run-status";
 
+import { EXPORT_ENTITIES, EXPORT_FORMATS } from "@/lib/export";
+
 import { VIDEO_HIDDEN_MODES } from "./hooks/useVideos";
 
 /**
@@ -61,6 +63,11 @@ describe("src/api/schema.d.ts ↔ openapi 快照", () => {
  * 键的形状是 `路径 方法 参数名`。 */
 const ENUM_LISTS: Record<string, readonly string[]> = {
   "/api/videos get hidden": VIDEO_HIDDEN_MODES,
+  // 导出那三条：`hidden` 故意复用作品流那份名单，**不是再抄一遍三个字符串** ——
+  // 两处各一份的话，加一档可见性时早晚只改一边，症状是"导出比屏幕多一行/少一行"。
+  "/api/export get entity": EXPORT_ENTITIES,
+  "/api/export get format": EXPORT_FORMATS,
+  "/api/export get hidden": VIDEO_HIDDEN_MODES,
 };
 
 interface SnapshotParam {

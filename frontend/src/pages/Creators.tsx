@@ -5,6 +5,7 @@ import { ApiError } from "@/api/client";
 import { useAddCreator, useCreators, useSetTracking, type Creator } from "@/api/hooks/useCreators";
 import { usePlatforms } from "@/api/hooks/useConfig";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
+import { ExportLinks } from "@/components/shared/ExportLinks";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { CreatorCard } from "@/components/shared/CreatorCard";
 import { PageShell } from "@/components/shared/PageShell";
@@ -53,6 +54,12 @@ export function Creators(): JSX.Element {
           收录一位博主＝起一个 <code>add_creator</code> 任务（要跟链接、要拉资料）。
           跟踪开关是本地写入，立刻生效。
         </p>
+        {/* 这一页的平台筛选是**立刻生效**的（不像作品流要点"查询"），
+            所以导出直接跟着 `filterPlatform` 走就是诚实的。 */}
+        <ExportLinks
+          entity="creators"
+          query={{ platform: filterPlatform === "" ? null : filterPlatform }}
+        />
       </header>
 
       <section aria-label="收录博主">

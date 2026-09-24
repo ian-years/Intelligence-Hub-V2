@@ -277,7 +277,15 @@ cd E:/08-Codework/Intelligence-Hub-V2
 - [ ] 暗色模式的设计令牌（孟菲斯暗色版色板需要单独调）
 - [ ] Visual regression 测试方案（本地 `make screenshots` 抓基线 + PR 人眼比对，不上 Chromatic/Percy）
 - [ ] 多语言 UI（V1 全中文，V2 暂时也全中文，i18n 留 V2.x）
-- [ ] 数据导出（CSV / JSON）
+- [x] 数据导出（CSV / JSON）
+  —— 2026-09-24（V2.1 T6.4）：`GET /api/export?entity=videos|creators&format=csv|json`
+  带 `platform` / `hidden` / `search` 三个筛选，`Content-Disposition: attachment` 直接下载；
+  作品流与博主页各有一对导出链接，**带的是屏幕上已应用的筛选**。
+  三件外部可见的规矩都有用例钉着：CSV 中和公式起手（`= + - @` 与带前导空白的变体，
+  只中和**字符串**，负数不能被改坏）、UTF-8 BOM（没它中文 Windows 的 Excel 整篇乱码）、
+  以及**翻页翻到 total 对齐**（列表端那个 `size<=200` 是列表页的要紧事，不是导出的上限 ——
+  少翻一页得到的是一份"看起来完整"的 CSV）。文件名不含任何请求输入（防 header injection）。
+  数字：`export.py` 语句覆盖 100%，新用例后端 17 条 + 前端 4 条，全量 1556 passed / 93.57%。
 - [ ] 定时任务调度 UI（V2.0 后端有 APScheduler，但前端没暴露）
 
 ---
