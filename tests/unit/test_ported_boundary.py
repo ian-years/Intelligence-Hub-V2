@@ -79,19 +79,24 @@ def test_every_allowed_shell_still_reaches_in() -> None:
 
 
 def test_each_ported_file_declares_its_own_two_exemptions() -> None:
-    """第一行 `# ruff: noqa`（lint 豁免在文件里，不在 pyproject 里）+ 一处 `TODO(v2-adapt)`。
+    """**前两行之内**要有 `# ruff: noqa`（lint 豁免在文件里，不在 pyproject 里），
+    外加一处 `TODO(v2-adapt)`。为什么不是"钉死第 1 行"：V1 那三个脚本的首行是 shebang，
+    把它挪走就等于搬掉了一个入口（`./sync_feishu_base_to_local.py` 直接跑不了），
+    而"原样搬运"里就包括"还能照着老办法跑"。
 
-    这条不是在管风格：`# ruff: noqa` 是**唯一**让 lint 放过它的机制，写歪一行
-    （比如挪到第二行、或写成 `#noqa`）就会让这份文件在下一个人的提交里当场红 ——
+    这条不是在管风格：`# ruff: noqa` 是**唯一**让 lint 放过它的机制，写歪（比如写成
+    `#noqa`、或把它塞进 docstring 里）就会让这份文件在下一个人的提交里当场红 ——
     而红在一个没人调用、没人打算近期修的脚本上，只会教出"这个门禁是噪音"这个结论。
+    另一个方向也真实咬过一次：豁免句里照抄 `# ruff: noqa` 这几个字符，ruff 会把注释
+    里那句也当成指令并抱怨它格式不对，所以这句现在写成散文。
     """
     offenders: list[str] = []
     for path in _py_files(PORTED):
         if path.name == "__init__.py":
             continue
         head = path.read_text(encoding="utf-8").splitlines()[:12]
-        if not head or head[0].strip() != "# ruff: noqa":
-            offenders.append(f"{_rel(path)}: 第一行不是 `# ruff: noqa`")
+        if not any(line.strip() == "# ruff: noqa" for line in head[:2]):
+            offenders.append(f"{_rel(path)}: 前两行里没有整行的 `# ruff: noqa`")
         elif not any("TODO(v2-adapt)" in line for line in head):
             offenders.append(f"{_rel(path)}: 前 12 行里没有 `TODO(v2-adapt)`")
     assert offenders == [], "\n".join(offenders)
