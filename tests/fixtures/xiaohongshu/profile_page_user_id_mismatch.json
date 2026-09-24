@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": "user_id_mismatch",
+  "expected": "5fb1a2c30000000000100001",
+  "actual": "5fb1a2c30000000000100099",
+  "page_url": "https://www.xiaohongshu.com/user/profile/5fb1a2c30000000000100099?login_wall=1"
+}

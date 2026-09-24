@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "user_id": "5fb1a2c30000000000100099",
+  "nickname": "另一个人",
+  "avatar_url": "",
+  "follower_count": "10",
+  "notes": [
+    {
+      "id": "665f1c7e0000000000104a01",
+      "title": "别人的笔记",
+      "cover_url": "",
+      "likes": "1",
+      "xsec_token": "AB2oYh3kQ8dXp0vMfaBm5c8Jg0KgY=",
+      "note_type": "video"
+    }
+  ],
+  "login_wall": false,
+  "user_not_found": false,
+  "page_url": "https://www.xiaohongshu.com/user/profile/5fb1a2c30000000000100099"
+}

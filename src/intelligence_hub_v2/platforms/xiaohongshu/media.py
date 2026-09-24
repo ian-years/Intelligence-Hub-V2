@@ -450,7 +450,9 @@ async def download_single_file(
             total_candidates=total,
             path=str(target),
         )
-        return DirectDownload(path=target, attempted=index)
+        # 成功那一趟也带上前面几个候选的原文：第一个地址已经失效（403）这件事
+        # 是"这条笔记的直链快到期了"的信号，丢了它就只能等第二个也失效时再猜。
+        return DirectDownload(path=target, attempted=index, failures=tuple(failures))
     return DirectDownload(path=None, attempted=total, failures=tuple(failures))
 
 

@@ -176,6 +176,17 @@ class TestDouyinContract(PlatformAdapterContractTests):
     # + 上面那四个 fixture 钩子，各 1~4 行（复用平台测试文件里已有的 helper）
 ```
 
+> **子类写在 `tests/contracts/test_<platform>_adapter.py` 里，不写在基类文件里**
+> （V2.1 T2.2 定下来的口径）。`test_platform_adapter.py` 是**契约面本身**：
+> 加一个平台不该去改它，那会让"谁在改契约"与"谁在加平台"撞在同一个文件上。
+> YouTube 那份子类是 `tests/contracts/test_youtube_adapter.py::TestYoutubeContract`，
+> 同文件里还有该平台独有的深水区（`-j` 那份契约常量、`--recent-days` 时间窗、
+> DASH 分片**判失败**、字幕"确认没有才 None、问不出来要抛"）。
+> 另附两条**反漂移**用例：同一批样本分别喂 `youtube` 与 `bilibili` 各自的
+> `parse_dump_json_lines` / `ytdlp_failure_reason`，结果必须逐字相等 ——
+> 那两处是已知的重复，正解在 `infra/ytdlp.py`（要连着改 B站 的引用），
+> 在这一格不顺手做。
+
 平台**特有**契约仍写在 `tests/contracts/test_<platform>_adapter.py`，例如抖音的
 `test_fallback_marks_the_source_and_keeps_the_yt_dlp_original_text`（§7.2 的原文级断言）
 与 B站 的 `test_pair_reaches_the_caller_as_a_video_audio_pair`（§7.21）。

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 import pytest
 from tests.contracts import test_bilibili_adapter as _bili
 from tests.contracts import test_douyin_adapter as _dy
+from tests.contracts import test_xiaohongshu_adapter as _xhs
 
 from intelligence_hub_v2.models.media import MediaArtifact, VideoAudioPairArtifact
 from intelligence_hub_v2.models.video import VideoMeta
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
 
     from tests.contracts.test_bilibili_adapter import BilibiliAdapter
     from tests.contracts.test_douyin_adapter import DouyinAdapter
+    from tests.contracts.test_xiaohongshu_adapter import XiaohongshuAdapter
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _HEALTHY_STATUSES = {"ok", "degraded", "unreachable", "unknown"}
@@ -311,3 +313,55 @@ class TestBilibiliContract(PlatformAdapterContractTests):
             _bili.make_adapter(tmp_path, runner=runner, monkeypatch=monkeypatch),
             _bili.bili_video(),
         )
+
+
+class TestXiaohongshuContract(PlatformAdapterContractTests):
+    """小红书：第三个平台，也是第二个"只能在已登录浏览器里跑"的平台。
+
+    钩子全部转调 `test_xiaohongshu_adapter.py` 里那套假件 —— 那里才是深水区，
+    这一层只钉跨平台都成立的那几条。
+    """
+
+    def build(self, tmp_path: Path) -> XiaohongshuAdapter:
+        return _xhs.make_adapter(tmp_path)
+
+    def expected_capabilities(self) -> Capabilities:
+        return Capabilities(
+            needs_browser=True,
+            needs_cookies=True,
+            # 阶梯顺序是 ADR-0011 的第二份快照：改它等于改契约，两家必须一起红。
+            cookie_variants=("exported_file", "browser", "none"),
+            supports_subtitles=False,
+            supports_dash_split=False,
+            list_strategy="browser_scroll",
+            media_strategy="yt_dlp_with_fallback",
+        )
+
+    def resolvable_profile_url(self) -> str:
+        return str(_xhs.profile_ref().profile_url)
+
+    def video_fixture(self) -> VideoMeta:
+        return _xhs.make_video()
+
+    def listing_adapter(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlatformAdapter:
+        del monkeypatch  # 小红书只经桥，不经 subprocess。
+        return _xhs.make_adapter(
+            tmp_path,
+            bridge=_xhs.FakeBridge(
+                script=[
+                    _xhs.page_payload("profile_page.json"),
+                    _xhs.page_payload("scroll_page.json"),
+                ]
+            ),
+        )
+
+    def downloadable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[PlatformAdapter, VideoMeta]:
+        """primed 成"yt-dlp 失败 → 退页面 masterUrl"，也就是 §7.2 那条常态。"""
+        harness = _xhs.media_harness(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            runner=_xhs.FakeYtDlpRunner(result=_xhs.ytdlp_blocked()),
+        )
+        return harness.adapter, _xhs.make_video()

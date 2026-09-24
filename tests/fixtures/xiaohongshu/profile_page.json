@@ -1,0 +1,52 @@
+{
+  "ok": true,
+  "user_id": "5fb1a2c30000000000100001",
+  "nickname": "影视飓风",
+  "avatar_url": "//sns-webpic-qc.xhscdn.com/avatar/T0010egvd0g00.jpg",
+  "follower_count": "217.5万",
+  "notes": [
+    {
+      "id": "665f1c7e0000000000104a01",
+      "title": "如何用三秒抓住观众",
+      "cover_url": "//sns-webpic-qc.xhscdn.com/cover/1.jpg",
+      "likes": "1.2万",
+      "xsec_token": "",
+      "note_type": ""
+    },
+    {
+      "id": "665f1c7f0000000000104a02",
+      "title": "办公室的灯怎么摆",
+      "cover_url": "//sns-webpic-qc.xhscdn.com/cover/2.jpg",
+      "likes": "3456",
+      "xsec_token": "",
+      "note_type": ""
+    },
+    {
+      "id": "sidebar-rec-slot",
+      "title": "相关推荐位",
+      "cover_url": "",
+      "likes": "",
+      "xsec_token": "",
+      "note_type": ""
+    },
+    {
+      "id": "665f1c7e0000000000104a01",
+      "title": "异步水合扫到的第二条（字段更少）",
+      "cover_url": "",
+      "likes": "",
+      "xsec_token": "",
+      "note_type": ""
+    },
+    {
+      "id": "665f1c80000000000104a03",
+      "title": "一条没人记得拍的第 3 期",
+      "cover_url": "//sns-webpic-qc.xhscdn.com/cover/3.jpg",
+      "likes": "8.9亿",
+      "xsec_token": "",
+      "note_type": ""
+    }
+  ],
+  "login_wall": false,
+  "user_not_found": false,
+  "page_url": "https://www.xiaohongshu.com/user/profile/5fb1a2c30000000000100001"
+}

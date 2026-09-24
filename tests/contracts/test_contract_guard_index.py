@@ -430,14 +430,18 @@ def test_this_module_binds_no_test_classes() -> None:
     """本文件不许在模块级绑任何 `Test*` 名字 —— 那会让整套契约用例被收集两遍。
 
     前置条件先钉住（否则"没有违规"可能只是"没东西可查"）：`_abc` 那个模块里确实
-    有两个会被重复收集的 `Test*` 类。
+    有若干个会被重复收集的 `Test*` 类（今天是三家：B站 / 抖音 / 小红书）。
     """
     collected = [
         name
         for name in dir(_abc)
         if name.startswith("Test") and isinstance(getattr(_abc, name), type)
     ]
-    assert collected == ["TestBilibiliContract", "TestDouyinContract"], collected
+    assert collected == [
+        "TestBilibiliContract",
+        "TestDouyinContract",
+        "TestXiaohongshuContract",
+    ], collected
 
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     bound: list[str] = []

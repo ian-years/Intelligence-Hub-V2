@@ -1,0 +1,28 @@
+{
+  "candidates": [
+    {
+      "user_id": "5fb1a2c30000000000100001",
+      "name": "影视飓风",
+      "follower_count": "粉丝・217.5万",
+      "avatar_url": "//sns-webpic-qc.xhscdn.com/avatar/T0010egvd0g00.jpg",
+      "homepage_url": "https://www.xiaohongshu.com/user/profile/5fb1a2c30000000000100001?xsec_token=AB2oYh3kQ8dXp0vMfaBm5c8Jg0KgY=&xsec_source=pc_search"
+    },
+    {
+      "user_id": "5fb1a2c30000000000100001",
+      "name": "重复的那一条",
+      "follower_count": "1",
+      "avatar_url": "",
+      "homepage_url": "https://www.xiaohongshu.com/user/profile/x"
+    },
+    {
+      "user_id": "5fb1a2c30000000000100099",
+      "name": "",
+      "follower_count": "",
+      "avatar_url": "",
+      "homepage_url": "https://www.xiaohongshu.com/user/profile/5fb1a2c30000000000100099?xsec_source=pc_search"
+    }
+  ],
+  "title": "影视飓风 - 搜索 - 小红书",
+  "login_wall": false,
+  "page_url": "https://www.xiaohongshu.com/search_result/?keyword=%E5%BD%B1%E8%A7%86%E9%A3%93%E9%A3%8E&type=51"
+}
