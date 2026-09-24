@@ -15,6 +15,7 @@ import shutil
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
+from intelligence_hub_v2.asr import detect as asr_detect
 from intelligence_hub_v2.models.task import FailureRecord, TaskResult
 from intelligence_hub_v2.platforms.base import HealthReport
 from intelligence_hub_v2.tasks.params import PreflightParams
@@ -95,6 +96,10 @@ async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult
 
     tools = {key: (shutil.which(cmd) is not None) for key, cmd in _TOOLS}
     asr_present = ctx.files.asr_models_dir.is_dir()
+    # `asr_model` 答的是"那棵目录树在不在"，`asr_engine` 答的是"到底能不能转写"：
+    # 权重在而 sherpa-onnx 没装（换机器只拷了 data/ 就会这样）是两种不同的修法。
+    # 合成一个键就会把"装个包"与"下 233 MB 权重"这两件事混成一句"ASR 不可用"。
+    asr_status = asr_detect(models_root=ctx.files.asr_models_dir)
 
     status = _settle_status(storage_ok, unreachable, degraded)
     summary: dict[str, int | str] = {
@@ -103,6 +108,8 @@ async def run_preflight(ctx: TaskContext, params: PreflightParams) -> TaskResult
         "platforms_unreachable": unreachable,
         "storage": "ok" if storage_ok else "unreachable",
         "asr_model": "present" if asr_present else "missing",
+        "asr_engine": asr_status.as_summary,
+        "asr_detail": asr_status.reason or str(asr_status.model_dir),
         "platform_status": ", ".join(f"{k}={v}" for k, v in sorted(platforms.items()))
         or "（无启用的平台）",
         "tools_present": ", ".join(k for k, v in tools.items() if v) or "（PATH 上一个都没有）",

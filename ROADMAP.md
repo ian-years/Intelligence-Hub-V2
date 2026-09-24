@@ -143,7 +143,12 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 - [ ] 小红书 Adapter（依赖桥的页面 JS 注入）
 - [ ] YouTube Adapter（纯 yt-dlp，本机网络不可达时如实失败）
-- [ ] ASR 引擎接入（sherpa-onnx SenseVoice，§7.9 标点注入）
+- [x] ASR 引擎接入（sherpa-onnx SenseVoice，§7.9 标点注入）
+  —— 2026-09-24（V2.1 T1.1）落 `src/intelligence_hub_v2/asr/`：静音切句 + 反幻觉闸 +
+  切点补标点（§7.9 已升进契约测试看护）+  recognizer 缓存；引擎交回契约对象 `Transcript`
+  （带逐句时间戳），抽音频仍走 `infra/ffmpeg.extract_audio()`。**真机量过**：真权重 +
+  一支 67 秒真口播 → 7.5 秒转完、11 句 / 538 字、9.0× 实时，每行以标点收尾。
+  还差下一格：`postprocess` 把它接进任务链（T1.2），"输出 speech-clean.txt"那一步在今晚之后。
 - [ ] `PostprocessTask` 跨平台统一（废 V1 三份 postprocess_*）
 - [ ] 字幕优先路径（B站 / YouTube）
 - [ ] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）

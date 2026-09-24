@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from tests.unit.tasks.conftest import FakeAdapter, FakeBus, FakeConfig, FakeRegistry, make_ctx
 
+from intelligence_hub_v2.asr.engine import ENGINE_NAME, EngineStatus
 from intelligence_hub_v2.models.task import TaskKind
 from intelligence_hub_v2.platforms.base import HealthReport
 from intelligence_hub_v2.tasks.params import PreflightParams
@@ -121,6 +122,54 @@ async def test_missing_binaries_surfaced_in_summary(storage, files, monkeypatch)
 
     assert "ffmpeg" in result.summary["tools_missing"]
     assert result.summary["platform_status"] == "（无启用的平台）"
+
+
+async def test_asr_engine_and_asr_dir_are_two_separate_answers(storage, files, monkeypatch) -> None:
+    """`asr_model`（那棵目录树在不在）与 `asr_engine`（到底能不能转写）是两问。
+
+    合成一问就会把两种完全不同的修法说成一句"ASR 不可用"：换机器只拷了 `data/`
+    → 缺的是 233 MB 权重；全新环境 → 缺的是 `uv sync --extra asr`。
+    这里刻意让两个键**互相矛盾**（目录在、权重不在），这才是真实状态。
+    """
+    files.asr_models_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "intelligence_hub_v2.tasks.preflight.asr_detect",
+        lambda **kwargs: EngineStatus(
+            available=False,
+            engine=ENGINE_NAME,
+            reason="找不到 SenseVoice 权重目录。把权重放进 data/asr-models/ 下的一个子目录",
+        ),
+    )
+    reg = FakeRegistry({}, {})
+    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
+
+    result = await run_preflight(ctx, PreflightParams())
+
+    assert result.summary["asr_model"] == "present"
+    assert result.summary["asr_engine"] == "weights_missing"
+    assert "data/asr-models" in result.summary["asr_detail"]
+
+
+async def test_a_missing_asr_package_is_reported_as_its_own_state(
+    storage, files, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "intelligence_hub_v2.tasks.preflight.asr_detect",
+        lambda **kwargs: EngineStatus(
+            available=False,
+            engine=ENGINE_NAME,
+            reason="未安装 sherpa-onnx。修复：uv sync --extra asr",
+            package_present=False,
+        ),
+    )
+    ctx = make_ctx(storage=storage, files=files, registry=FakeRegistry({}, {}), bus=FakeBus())
+
+    result = await run_preflight(ctx, PreflightParams())
+
+    assert result.summary["asr_model"] == "missing"
+    assert result.summary["asr_engine"] == "package_missing"
+    # 缺权重/缺包都只是"这一档做不了"，不该把整轮预检判死：采集与字幕那条路照走。
+    assert result.status in {"success", "partial"}
 
 
 def test_kind_is_preflight() -> None:

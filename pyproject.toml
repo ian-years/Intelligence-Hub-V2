@@ -190,6 +190,10 @@ ignore = [
                  # 消息仍然一律先赋给 `msg`（这条纪律照旧，见各文件的 raise 上方）。
 ]
 "src/intelligence_hub_v2/platforms/**" = ["EM101"]
+# asr：`numpy` / `sherpa_onnx` 都在 `asr` 这个可选 extra 里，模块顶层 import 它们等于
+# 让"没装 asr 也能跑"的那批用法（preflight 问一句引擎状态、导入 tasks.*）当场炸。
+# 所以每个函数各自延迟导入 —— PLC0415 在这里要防的"忘了放顶部"恰恰是我们必须做的形状。
+"src/intelligence_hub_v2/asr/**" = ["PLC0415"]
 # tasks：handler 里 raise 的 `PlatformError(platform, stage, message)` 与
 # `TaskCancelled` 前两位同样是元数据字面量，与上面 infra 那条同一个判据。
 # 消息照旧一律先赋给 `msg`（EM101 豁免只放行 platform/stage 这类常量，不是让内联长文案）。
