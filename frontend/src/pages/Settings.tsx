@@ -5,6 +5,7 @@ import { PlatformBadge } from "@/components/memphis/PlatformBadge";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { PageShell } from "@/components/shared/PageShell";
+import { ScheduleCard } from "@/components/shared/ScheduleCard";
 import { ApiError } from "@/api/client";
 import {
   usePlatformConfig,
@@ -70,6 +71,11 @@ export function Settings(): JSX.Element {
       {/* key=平台名：换平台时整棵表单重挂载，草稿与保存结果自然清空 ——
           比在 effect 里 setDraft({}) 少一轮渲染，也不会漏掉某个状态。 */}
       {active !== "" && <PlatformForm key={active} platform={active} />}
+
+      {/* 定时采集不是"某个平台的设置"，所以不在上面那排按钮里：它是这台机器怎么跑的事，
+          与 `app.yaml` 的 scheduler 段一一对应。放同一页是因为改完开关通常就想顺手
+          确认"那明天还会采吗"，分页会让那一问没有答案。 */}
+      <ScheduleCard />
     </PageShell>
   );
 }

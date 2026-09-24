@@ -55,6 +55,28 @@ const platforms = {
   platforms: [{ name: "douyin", display_name: "抖音", enabled: true, implemented: true }],
 };
 
+/** 定时采集那块卡片的现状。Settings 页现在挂着 `ScheduleCard`，
+ * 这一份不打桩的话，`ok()` 的兜底分支会把**平台清单**当成排期数据喂进去，
+ * 于是这一页上每条既有用例都在测一份类型不对的响应 —— 红不红全看运气。 */
+const schedule = {
+  scheduler_enabled: true,
+  timezone: "Asia/Shanghai",
+  collect_cron: "0 8 * * *",
+  collect_platforms: ["douyin"],
+  effective_platforms: ["douyin"],
+  skipped_platforms: [],
+  collect_limit: 5,
+  jobs: [
+    {
+      id: "collect:douyin",
+      platform: "douyin",
+      next_run_time: "2026-09-25T08:00:00+08:00",
+    },
+  ],
+  scheduler_running: true,
+  shadowed_by_env: [],
+};
+
 function serve(handler: (url: string, method: string) => [number, unknown]): void {
   vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
     const method = String(init?.method ?? "GET");
@@ -68,12 +90,18 @@ function serve(handler: (url: string, method: string) => [number, unknown]): voi
       method !== "PUT"
         ? body
         : status === 200
-          ? {
-              platform: "douyin",
-              config: current.config,
-              changed_fields: [],
-              requires_restart: false,
-            }
+          ? url.includes("/schedule")
+            ? {
+                schedule,
+                changed_fields: ["collect_cron"],
+                requires_restart: false,
+              }
+            : {
+                platform: "douyin",
+                config: current.config,
+                changed_fields: [],
+                requires_restart: false,
+              }
           : body;
     return new Response(JSON.stringify(responseBody), {
       status,
@@ -96,6 +124,7 @@ function renderPage(): void {
 const ok = (url: string): [number, unknown] => {
   if (url.includes("/schema")) return [200, schema];
   if (url.includes("/config")) return [200, current];
+  if (url.includes("/schedule")) return [200, schedule];
   return [200, platforms];
 };
 
@@ -149,7 +178,7 @@ describe("Settings 页", () => {
     const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "45");
-    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^保存$/ }));
     await waitFor(() => expect(lastPut).not.toBeNull());
     expect(lastPut?.url).toBe("/api/platforms/douyin/config");
     const sent = JSON.parse(String(lastPut?.body)) as typeof current.config;
@@ -171,7 +200,7 @@ describe("Settings 页", () => {
     const input = (await screen.findByDisplayValue("30")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "45");
-    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^保存$/ }));
     expect(await screen.findByText(/已写盘并热加载/)).toBeTruthy();
     expect(await screen.findByText("没有改动")).toBeTruthy();
     expect(screen.queryByText(/未保存的改动/)).toBeNull();
@@ -185,7 +214,7 @@ describe("Settings 页", () => {
     // 没有改动时保存按钮是禁用的（"没有改动"那句是真的），所以先改一笔。
     await userEvent.clear(input);
     await userEvent.type(input, "999");
-    await userEvent.click(screen.getByRole("button", { name: /保存/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^保存$/ }));
     expect(await screen.findByText(/greater than 1, less than 200/)).toBeTruthy();
     expect(input.value).toBe("999");
   });
@@ -199,6 +228,6 @@ describe("Settings 页", () => {
     renderPage();
     expect(await screen.findByText(/读不到/)).toBeTruthy();
     expect(screen.getByText(/配置层还没起来/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /保存/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^保存$/ })).toBeNull();
   });
 });

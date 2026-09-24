@@ -18,4 +18,5 @@ export const keys = {
   runs: (status?: string) => ["runs", status ?? null] as const,
   run: (id: string) => ["runs", id] as const,
   manifests: ["manifests"] as const,
+  schedule: ["schedule"] as const,
 };

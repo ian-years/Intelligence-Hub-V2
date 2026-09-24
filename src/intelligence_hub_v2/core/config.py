@@ -752,6 +752,72 @@ class ConfigManager:
                 merged[platform] = self._platforms[platform].model_dump(mode="json")
         return merged
 
+    # ---- 写 `app.yaml` 的 scheduler 段（`/api/schedule` 的唯一写入口，ADR-0017）----
+
+    def write_scheduler(self, section: SchedulerSection) -> Path:
+        """把整段 `scheduler` 原子写进 `app.yaml`，并同步内存。
+
+        与 `write_platform_config` 共享同一套纪律，只有一处不同：**这一整段是覆盖式的**。
+        `SchedulerSection` 是 `extra="forbid"`，段里出现任何一个我们不认识的键，`load()`
+        当场就红了（不会带着它活到写盘这一步），所以"保留盘上别人加的键"在这里没有对象 ——
+        真留了反而会把一个已经过期的键写回去。段**以外**的顶层键（`data` / `storage` /
+        `platforms.yaml` 那一路）一律原样保留。
+
+        没 `load()` 过就写盘同样是禁止的：那样内存是空的，写出来是一份"只有默认值"的
+        scheduler 段，等于把用户手写的 `timezone` / `max_concurrent_*` 抹掉。
+
+        **这里刻意没有配套的 `reload_app()`**：`build_components` 里
+        `config = manager.app`，所以 `AppConfig` 那**一个实例**同时被
+        `AppState.config` / `TaskRunner._app` / `TaskScheduler._app` / `DepsFactory` 握着。
+        原地换 `self._app.scheduler` 一次就到四家；而"重读一份新的再换指针"会造出第二个
+        实例，那些没跟着换引用的持有者就悄悄继续用旧配置 —— 症状是"设置页说 08:00，
+        定时器还是按昨天那条跑"。平台配置那边必须走 `reload_platform` 是因为它的值
+        分散在四份**按平台建的 dict 快照**里，而那三处都留了 `update_config()` 入口；
+        `scheduler` 段没有这种快照，只有一个共享实例。两处的形状不同，写法就不同。
+        """
+        if not self._loaded:
+            msg = (
+                "ConfigManager 还没 load() 就要写 scheduler 段。写盘是按内存重建 "
+                "app.yaml 的，空内存等于把这一段换成默认值 —— 先 ConfigManager.load()。"
+            )
+            raise ConfigError(msg, path=str(self.app_yaml_path))
+
+        payload = section.model_dump(mode="json")
+        with self._write_lock:
+            data = dict(read_yaml_mapping(self.app_yaml_path))
+            data["scheduler"] = payload
+            target = self.app_yaml_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.parent / f"{target.name}.tmp"
+            tmp.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            tmp.replace(target)
+            if self._app is not None:
+                self._app.scheduler = section
+
+        logger.info("config.scheduler_written", path=str(target), cron=payload.get("collect_cron"))
+        return target
+
+    def scheduler_keys_shadowed_by_env(self, section: SchedulerSection) -> list[str]:
+        """哪些 `scheduler.*` 键**环境变量里也有**，因此下一次启动会盖掉盘上这份。
+
+        存在的理由不是形式主义：优先级是 `默认 < yaml < env < CLI`，而 PUT 只能写 YAML。
+        于是"保存成功"这句话对一个设过 `INTELLIGENCE_HUB_SCHEDULER__COLLECT_CRON` 的部署
+        是**半真**的 —— 这台机器现在按新值跑，下一次启动回到 env 那条。不说出来，
+        症状就是"设置页明明改成 08:00，重启后又变回 06:30"，而没有人会想到去查环境变量。
+
+        前缀与分隔符从 `AppConfig.model_config` 取，不在这里再写一遍字面量：
+        那两处一漂，这个方法就永远返回空清单，而"返回空"长得和"确实没有遮挡"一模一样。
+        """
+        prefix = str(AppConfig.model_config.get("env_prefix") or "")
+        delimiter = str(AppConfig.model_config.get("env_nested_delimiter") or "__")
+        head = f"{prefix}SCHEDULER{delimiter}"
+        return sorted(
+            key for key in type(section).model_fields if f"{head}{key.upper()}" in os.environ
+        )
+
 
 __all__ = [
     "AppConfig",

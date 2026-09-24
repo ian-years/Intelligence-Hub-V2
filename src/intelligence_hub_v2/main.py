@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from intelligence_hub_v2 import __version__
 from intelligence_hub_v2.api.deps import AppState
 from intelligence_hub_v2.api.v1.router import api_router
+from intelligence_hub_v2.core import collect_jobs
 from intelligence_hub_v2.core.config import ConfigManager
 from intelligence_hub_v2.core.event_bus import InProcessEventBus
 from intelligence_hub_v2.core.runtime_env import prepare_runtime_environment
@@ -43,8 +44,6 @@ from intelligence_hub_v2.storage.db import SqliteStorage
 from intelligence_hub_v2.storage.files import FileStorage
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from intelligence_hub_v2.platforms.base import PlatformConfig
 
 logger = get_logger(__name__)
@@ -182,85 +181,41 @@ def _start_background_jobs(state: AppState) -> None:
 
 
 def collect_job_platforms(state: AppState) -> list[str]:
-    """这次要排采集 job 的平台。
+    """这次该排采集 job 的平台。判据在 `core/collect_jobs.py`，这里只把 state 拆开。
 
-    空 `collect_platforms` = 所有**启用的**平台；配了名单时，关掉的平台即使在里面也不排
-    （与"关掉平台 → 它的任务从 `/api/tasks` 消失"是同一条语义，两处不能一个排一个不排），
-    但**要说出来**：静默少排一个平台，症状是"那个平台的博主永远不更新而配置看着没问题"。
+    留着这层薄封装而不是让调用方直接引 core：两个调用点（启动排 job、`/api/schedule`
+    列出与重排）拿的是同一个答案，把"从 state 的哪三个部件取"写两遍就是两条会漂的路。
     """
-    enabled = state.config_manager.enabled_platforms()
-    wanted = state.config.scheduler.collect_platforms or enabled
-    skipped = [name for name in wanted if name not in enabled]
-    if skipped:
-        logger.warning("jobs.collect_platform_disabled", skipped=skipped)
-    return [name for name in wanted if name in enabled]
+    platforms, _skipped = collect_jobs.collect_job_platforms(
+        state.config.scheduler, state.config_manager.enabled_platforms()
+    )
+    return platforms
 
 
-def _add_collect_jobs(state: AppState, scheduler: Any) -> None:  # noqa: ANN401 - apscheduler 的实例，导入故意只住在这个模块
-    """把 `collect_cron` 变成每个平台一条 cron job。
+def _add_collect_jobs(state: AppState, scheduler: Any) -> list[str]:  # noqa: ANN401 - apscheduler 实例
+    """启动那一路：把配置段、平台名单与提交函数交给 `core.collect_jobs`。"""
+    return collect_jobs.schedule_collect_jobs(
+        state.config.scheduler,
+        collect_job_platforms(state),
+        scheduler,
+        collect_jobs.make_collect_fire(
+            state.scheduler.submit, state.config.scheduler.collect_limit
+        ),
+    )
 
-    三条不是随手选的参数：
 
-    - **`max_instances=1`**：一次采集可能要几十分钟，跨过下一次触发点时如果不挡住，
-      同一个博主集会被两个 job 同时扫 —— 白烧一份配额，还会互相撞 cookie 档位。
-      宁可跳过一次（`coalesce=True` 把攒下的几次并成一次）。
-    - **配置写错就红在启动**：`from_crontab` 在这里抛 `ConfigError`。
-      "服务绿着而采集永远不来"是 V1 的历史病（§1.3）。
-    - job id 是 `collect:<platform>` 而不是平台名：将来 `/api/schedule` 要能列与手动触发，
-      id 得能区分 `prune_events` 与采集 job，不能靠"猜哪些 id 是平台名"。
+def reschedule_collect_jobs(state: AppState) -> list[str]:
+    """按当前配置把采集 job 重排一遍（`/api/schedule` 改完 cron 当场生效靠它）。
+
+    `state.apscheduler is None` 时返回空清单而不是抛：配置照样写得住，只是要到下一次
+    启动才生效 —— 而这一句必须由调用方在响应里说出来，不许静默成功。
     """
-    cron = state.config.scheduler.collect_cron
-    if not cron:
-        return
-    from apscheduler.triggers.cron import CronTrigger
-
-    from intelligence_hub_v2.errors import ConfigError
-
-    try:
-        trigger = CronTrigger.from_crontab(cron, timezone=state.config.scheduler.timezone)
-    except (KeyError, ValueError, TypeError) as exc:
-        timezone = state.config.scheduler.timezone
-        msg = f"scheduler.collect_cron={cron!r} 在时区 {timezone!r} 下解析不了：{exc}"
-        raise ConfigError(msg) from exc
-
-    scheduled = collect_job_platforms(state)
-    if not scheduled:
-        logger.warning("jobs.collect_nothing_to_schedule", cron=cron, reason="没有启用的平台")
-        return
-    for platform in scheduled:
-        # 这里**不**再查"<platform>_collect 存不存在、implemented 没有"：
-        # `collect_platforms` 已经被 `core/config.py` 按 PLATFORM_CONFIG_SCHEMAS 校验过，
-        # 而那张表里的两家都有已实现的采集任务 —— 到这一步能进来的平台，任务必然在。
-        # 加两层今天跑不到的检查只会让人以为它们被验过了（本仓库踩过多次的那种假防护）。
-        scheduler.add_job(
-            _collect_submitting(state, f"{platform}_collect"),
-            trigger,
-            id=f"collect:{platform}",
-            coalesce=True,
-            max_instances=1,
-        )
-    logger.info("jobs.collect_scheduled", cron=cron, platforms=scheduled)
-
-
-def _collect_submitting(state: AppState, task_name: str) -> Callable[[], Awaitable[None]]:
-    """到点做的事：**发一次和人手点"采集"完全相同的提交**。
-
-    走 `state.scheduler.submit` 而不是自己起协程 —— 那条路才有开关闸门、`requires` 检查、
-    限流信号量、清单终态与事件流。定时触发不该是一个绕过所有闸门的后门。
-    """
-    from intelligence_hub_v2.tasks.params import CollectParams
-
-    async def _fire() -> None:
-        """**必须是协程函数**。`AsyncIOExecutor` 对非协程的 job 会丢进默认线程池，
-        而那个线程里没有 running loop —— `TaskScheduler.submit` 起的
-        `asyncio.create_task` 当场 `RuntimeError`，症状是"定时器响了、日志里一条 error、
-        任务永远不出现"。集成用例 `test_the_cron_job_actually_fires_and_submits_the_task`
-        就是为这一条写的（第一版这里是 `def`，它红了）。"""
-        params = CollectParams(limit=state.config.scheduler.collect_limit)
-        task_id = state.scheduler.submit(task_name, params)
-        logger.info("jobs.collect_fired", task=task_name, task_id=task_id, limit=params.limit)
-
-    return _fire
+    return collect_jobs.reschedule_collect_jobs(
+        state.config.scheduler,
+        state.config_manager.enabled_platforms(),
+        state.apscheduler,
+        state.scheduler.submit,
+    )
 
 
 def _register_exception_handlers(app: FastAPI) -> None:

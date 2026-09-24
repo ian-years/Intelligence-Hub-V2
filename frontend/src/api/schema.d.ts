@@ -247,6 +247,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Schedule
+         * @description 定时采集的当前配置，与已经排上的 job。
+         */
+        get: operations["get_schedule_api_schedule_get"];
+        /**
+         * Update Schedule
+         * @description 写 `app.yaml` 的 scheduler 段 → 热更内存 → 当场重排采集 job → 发 `CONFIG_CHANGED`。
+         *
+         *     与平台配置那条 PUT 同一条纪律：**运行时不听文件变化**，改了不生效是设计而不是 bug。
+         *     所以"生效"这一步必须显式做，不许留给下一次启动。
+         */
+        put: operations["update_schedule_api_schedule_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schedule/run-now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Now
+         * @description 立刻排队一次该平台的采集，参数用定时任务那一套（`collect_limit`）。
+         *
+         *     202 说的只是"已排队"，不是"已采到"。参数校验失败 / 平台被关掉 → `submit` 抛
+         *     `ValidationError` / `TaskRejected`，交全局异常处理器翻成 422 —— 不在这里 catch，
+         *     否则每个入口都要抄一遍映射（V1 §7.10 那一族）。
+         */
+        post: operations["run_now_api_schedule_run_now_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks": {
         parameters: {
             query?: never;
@@ -506,6 +557,18 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /**
+         * CollectJobInfo
+         * @description 一条已经排在 APScheduler 里的采集 job。
+         */
+        CollectJobInfo: {
+            /** Id */
+            id: string;
+            /** Next Run Time */
+            next_run_time?: string | null;
+            /** Platform */
+            platform: string;
+        };
         /** ConfigUpdateResponse */
         ConfigUpdateResponse: {
             /** Changed Fields */
@@ -662,6 +725,78 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             run: components["schemas"]["TaskRunRecord"];
+        };
+        /** RunNowRequest */
+        RunNowRequest: {
+            /** Platform */
+            platform: string;
+        };
+        /** RunNowResponse */
+        RunNowResponse: {
+            /** Platform */
+            platform: string;
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+        };
+        /**
+         * ScheduleStatus
+         * @description `GET /api/schedule`：配置 + 运行态两份**并排**。
+         *
+         *     两份分开是必须的：只看配置会说谎（改了没生效），只看 job 也会说谎
+         *     （`scheduler.enabled: false` 时一条 job 都没有，而配置里明明写着 08:00）。
+         */
+        ScheduleStatus: {
+            /** Collect Cron */
+            collect_cron: string | null;
+            /** Collect Limit */
+            collect_limit: number | null;
+            /** Collect Platforms */
+            collect_platforms?: string[];
+            /** Effective Platforms */
+            effective_platforms?: string[];
+            /** Jobs */
+            jobs?: components["schemas"]["CollectJobInfo"][];
+            /** Scheduler Enabled */
+            scheduler_enabled: boolean;
+            /**
+             * Scheduler Running
+             * @default false
+             */
+            scheduler_running: boolean;
+            /** Shadowed By Env */
+            shadowed_by_env?: string[];
+            /** Skipped Platforms */
+            skipped_platforms?: string[];
+            /** Timezone */
+            timezone: string;
+        };
+        /**
+         * ScheduleUpdate
+         * @description PUT 的请求体：**没出现的键保持原值**。
+         *
+         *     所以 `collect_cron: null` 是"关掉定时"，而整个键不写是"这次不改它"。这两件事必须分得开，
+         *     否则前端只能"总是提交全表"，那等于每次保存都把别人的字段顺手写一遍。
+         */
+        ScheduleUpdate: {
+            /** Collect Cron */
+            collect_cron?: string | null;
+            /** Collect Limit */
+            collect_limit?: number | null;
+            /** Collect Platforms */
+            collect_platforms?: string[] | null;
+        };
+        /** ScheduleUpdateResponse */
+        ScheduleUpdateResponse: {
+            /** Changed Fields */
+            changed_fields?: string[];
+            /**
+             * Requires Restart
+             * @default false
+             */
+            requires_restart: boolean;
+            schedule: components["schemas"]["ScheduleStatus"];
         };
         /**
          * SingleLinkParams
@@ -1267,6 +1402,92 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_schedule_api_schedule_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleStatus"];
+                };
+            };
+        };
+    };
+    update_schedule_api_schedule_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_now_api_schedule_run_now_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunNowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunNowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

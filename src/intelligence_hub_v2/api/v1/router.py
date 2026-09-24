@@ -11,6 +11,7 @@ from intelligence_hub_v2.api.v1 import (
     export,
     health,
     manifests,
+    schedule,
     tasks,
     transcripts,
     videos,
@@ -25,6 +26,7 @@ api_router.include_router(export.router)
 api_router.include_router(transcripts.router)
 api_router.include_router(tasks.router)
 api_router.include_router(events.router)
+api_router.include_router(schedule.router)
 api_router.include_router(manifests.router)
 
 __all__ = ["api_router"]

@@ -48,6 +48,37 @@
         "title": "CancelResponse",
         "type": "object"
       },
+      "CollectJobInfo": {
+        "description": "一条已经排在 APScheduler 里的采集 job。",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "next_run_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run Time"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform"
+        ],
+        "title": "CollectJobInfo",
+        "type": "object"
+      },
       "ConfigUpdateResponse": {
         "properties": {
           "changed_fields": {
@@ -391,6 +422,193 @@
           "run"
         ],
         "title": "RunDetail",
+        "type": "object"
+      },
+      "RunNowRequest": {
+        "properties": {
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform"
+        ],
+        "title": "RunNowRequest",
+        "type": "object"
+      },
+      "RunNowResponse": {
+        "properties": {
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "task_name",
+          "platform"
+        ],
+        "title": "RunNowResponse",
+        "type": "object"
+      },
+      "ScheduleStatus": {
+        "description": "`GET /api/schedule`：配置 + 运行态两份**并排**。\n\n两份分开是必须的：只看配置会说谎（改了没生效），只看 job 也会说谎\n（`scheduler.enabled: false` 时一条 job 都没有，而配置里明明写着 08:00）。",
+        "properties": {
+          "collect_cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collect Cron"
+          },
+          "collect_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collect Limit"
+          },
+          "collect_platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collect Platforms",
+            "type": "array"
+          },
+          "effective_platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Effective Platforms",
+            "type": "array"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/CollectJobInfo"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "scheduler_enabled": {
+            "title": "Scheduler Enabled",
+            "type": "boolean"
+          },
+          "scheduler_running": {
+            "default": false,
+            "title": "Scheduler Running",
+            "type": "boolean"
+          },
+          "shadowed_by_env": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shadowed By Env",
+            "type": "array"
+          },
+          "skipped_platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Platforms",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheduler_enabled",
+          "timezone",
+          "collect_cron",
+          "collect_limit"
+        ],
+        "title": "ScheduleStatus",
+        "type": "object"
+      },
+      "ScheduleUpdate": {
+        "description": "PUT 的请求体：**没出现的键保持原值**。\n\n所以 `collect_cron: null` 是\"关掉定时\"，而整个键不写是\"这次不改它\"。这两件事必须分得开，\n否则前端只能\"总是提交全表\"，那等于每次保存都把别人的字段顺手写一遍。",
+        "properties": {
+          "collect_cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collect Cron"
+          },
+          "collect_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collect Limit"
+          },
+          "collect_platforms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collect Platforms"
+          }
+        },
+        "title": "ScheduleUpdate",
+        "type": "object"
+      },
+      "ScheduleUpdateResponse": {
+        "properties": {
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Fields",
+            "type": "array"
+          },
+          "requires_restart": {
+            "default": false,
+            "title": "Requires Restart",
+            "type": "boolean"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ScheduleStatus"
+          }
+        },
+        "required": [
+          "schedule"
+        ],
+        "title": "ScheduleUpdateResponse",
         "type": "object"
       },
       "SingleLinkParams": {
@@ -1516,6 +1734,110 @@
         "summary": "Preflight",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/schedule": {
+      "get": {
+        "description": "定时采集的当前配置，与已经排上的 job。",
+        "operationId": "get_schedule_api_schedule_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Schedule",
+        "tags": [
+          "schedule"
+        ]
+      },
+      "put": {
+        "description": "写 `app.yaml` 的 scheduler 段 → 热更内存 → 当场重排采集 job → 发 `CONFIG_CHANGED`。\n\n与平台配置那条 PUT 同一条纪律：**运行时不听文件变化**，改了不生效是设计而不是 bug。\n所以\"生效\"这一步必须显式做，不许留给下一次启动。",
+        "operationId": "update_schedule_api_schedule_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Schedule",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/schedule/run-now": {
+      "post": {
+        "description": "立刻排队一次该平台的采集，参数用定时任务那一套（`collect_limit`）。\n\n202 说的只是\"已排队\"，不是\"已采到\"。参数校验失败 / 平台被关掉 → `submit` 抛\n`ValidationError` / `TaskRejected`，交全局异常处理器翻成 422 —— 不在这里 catch，\n否则每个入口都要抄一遍映射（V1 §7.10 那一族）。",
+        "operationId": "run_now_api_schedule_run_now_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunNowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunNowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Now",
+        "tags": [
+          "schedule"
         ]
       }
     },

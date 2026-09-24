@@ -116,9 +116,7 @@ describe("useTaskEvents", () => {
   });
 
   it("全局流（无 taskId）重连不发 since —— 后端只有 task_id 分支才回放，发了是死参数", () => {
-    renderHook(() =>
-      useTaskEvents({ source: FakeEventSource as unknown as typeof EventSource }),
-    );
+    renderHook(() => useTaskEvents({ source: FakeEventSource as unknown as typeof EventSource }));
     const first = FakeEventSource.instances[0];
     act(() =>
       first?.emit("task.log", event({ type: "task.log", timestamp: "2026-09-23T11:22:33+00:00" })),

@@ -204,9 +204,12 @@ ignore = [
                 # 不是 B001 想防的"默认值里做有副作用的函数调用"（每次调用都构造对象是框架契约）。
     "PLR0917",  # 路由把 query/body 摊成多个带默认值的形参是 FastAPI 的形状，"参数太多"在这里没意义。
 ]
-# main：uvicorn / apscheduler 故意延迟导入（各自一 import 就拉起一堆子模块/线程），
-# 这个代价不该压进模块加载期；`create_app` 在函数里 import apscheduler 是有意的。
+# main / core.collect_jobs：uvicorn 与 apscheduler 故意延迟导入（各自一 import 就拉起
+# 一堆子模块/线程），这个代价不该压进模块加载期；`create_app` 在函数里 import apscheduler
+# 是有意的。`collect_jobs.parse_collect_trigger` 同一个理由 —— 它是 apscheduler 的
+# **唯一**接触点，全模块其余部分（平台名单、cron 字符串的语义）都不该被那个可选依赖绑住。
 "src/intelligence_hub_v2/main.py" = ["PLC0415"]
+"src/intelligence_hub_v2/core/collect_jobs.py" = ["PLC0415"]
 # ported：**未适配的 V1 搬运区**，见 ADR-0018。这里的豁免一律走文件级的 `# ruff: noqa`
 # （每份搬进来的文件第一行就是它），不写进本文件 —— 配置里挂一条目录级豁免，
 # 下一个加文件进来的人连"这里被豁免过"都不知道；而文件第一行藏不住这件事。
