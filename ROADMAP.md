@@ -19,13 +19,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ## 里程碑
 
-### V2.0「骨架可用」 — 代码全部落地：16 条判据里 11 条已勾，剩 5 条全卡在"真机/真 CI 那一跑"
+### V2.0「骨架可用」 — 代码全部落地：16 条判据里 12 条已勾，剩 4 条全卡在"真机/真 CI 那一跑"
 
 > 2026-09-23：Task 8-16 全落（后端 + 七个前端页面 + 契约测试 + 迁移 + CI 与全栈冒烟）。
-> **没打 tag**。剩下五条没有一条是代码缺口：抖音 Adapter 与 B站 Adapter 的
-> 真采一跑（要桥 + 已登录 Chrome + shell 侧看得见的 ffmpeg）、
-> `cdp_bridge_server.py` 还没移植进 V2、`make ci-local` / GitHub Actions 那条从未真跑过
-> （本机连 `make` 都没有，`AGENTS.md §4` 已改）。
+> 2026-09-24（V2.1 的 T0.1）：**CDP 桥已移植进 V2 并真机验过**（`bridge/server.py` + 真 Chrome），
+> "桥"那一条整条勾上。**没打 tag**。剩下四条没有一条是代码缺口：抖音 Adapter 与 B站 Adapter 的
+> 真采一跑（要已登录的 Chrome + shell 侧看得见的 ffmpeg）、
+> `make ci-local` / GitHub Actions 那条从未真跑过
+> （本机连 `make` 都没有，`AGENTS.md §4` 已改）、live `data/` 那一次迁移要不要点头。
 
 **完成判据**（每条都要真机验过才算）：
 
@@ -60,6 +61,8 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   —— 代码与契约测试已完成（Task 6：`platforms/douyin/`，91 条用例，§7.1/§7.2/§7.3 各有看护）。
   **整条不勾，因为"真机验过"这一半还没有**：跑通需要本机 CDP 桥 + 一个已登录的 Chrome，
   本会话没有那个状态（见 `docs/progress/2026-09-22.md` Task 6 的"未验证"清单）。
+  **前置已解一半**：桥在 2026-09-24 的 T0.1 移完并真机验过（见上面"CDP 桥"那一格），
+  剩下来的是人的那一步 —— 在桥拉起的 Chrome 里扫码登录一次。
 - [ ] **B站 Adapter**：移植 V1 `download_bili_following_latest.py`，含 cookie 三档（§7.15）、DASH 未合并分片处理（§7.21）、字幕优先
   —— 代码与 169 条用例完成（Task 7）。**已真机验过的部分**（2026-09-22 本机，匿名）：
   `x/web-interface/view` / `x/player/v2` / `x/web-interface/card` 三个接口的真响应形状
@@ -68,19 +71,28 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `yt-dlp --flat-playlist` 匿名那句真 `Request is blocked by server (412)`。
   **未验**：带登录 cookie 的实际媒体下载、非空字幕轨（两者都要有效会话 cookie，
   而 V2 的 `data/cookies/` 现在没有）。整条不勾。
-- [ ] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
+- [x] **CDP 桥**：移植 V1 `cdp_bridge_server.py`（保留只绑回环约束）+ `BridgeClient` 包装 + 桥健康检查 + 自愈逻辑（§7.20）
+  —— 2026-09-24（V2.1 T0.1）落 `src/intelligence_hub_v2/bridge/server.py`；客户端在
+  `infra/cdp_bridge.py`（Task 5 就有），默认 profile 与重建冷却改成从 `config/app.yaml` 取，
+  `make bridge` 从 `false` 占位改成真命令。**真机跑过**（本机 Chrome，`pytest -m real_network`
+  7.6 秒）：`python -m intelligence_hub_v2.bridge.server --headless` 起服务 → `BridgeClient`
+  真连 → `/health` 200 `ok:true` → `/navigate` 到本机一页 → `/evaluate () => document.title`
+  取回 `cdp-bridge-probe` → `/cookies` 回列表。**自愈也真验了**：杀掉桥拉起的 8 个 chrome 进程后
+  `/health` 回 503（`page_url` 空、`last_page_url` 只当线索），下一条 `/evaluate` 2.1 秒用
+  **同一个 profile** 重建并成功，`restarts=1`（所以 `BROWSER_DEAD_MARKERS` 那几句原文在
+  Playwright 1.63 上仍然认得）。**未验**：扫码登录后的真采集 —— 那是 T3.1/T3.2，不欠在桥这一条上。
 - [ ] **任务调度**：`TaskRegistry` + 6 个核心任务（preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess）+ 平台级 Semaphore 限流 + CancelToken + 超时 + 清单双写（文件 + SQLite，强制终态）
   —— **真机已经通了不带平台的那一半**：2026-09-23 全栈冒烟里从 `#/tasks` 点「跑一次」，
   `preflight` 真起了一条 run，事件按 `task.started → manifest.written → task.finished`
   落地、清单文件真在磁盘上、summary 说实话（`platforms_ok=0 degraded=2`）。
-  采集类（`douyin_collect`/`bilibili_collect`）仍缺桥 + 已登录 Chrome + shell 侧的 ffmpeg。
+  采集类（`douyin_collect`/`bilibili_collect`）仍缺**登录态**与 shell 侧看得见的 ffmpeg（桥本身 2026-09-24 已通）。
   —— 代码 + 离线用例完成（Task 8：`core/task_runner.py` / `core/task_registry.py` /
   `tasks/`）。12 个任务全登记、V2.0 只给 6 个真 handler（其余 6 个 `implemented=False`，
   不进 `/api/tasks`、点名运行红在 `NotImplementedError`）。`TaskRunner` 五条退出路径
   （成功/partial/报告失败/抛异常/取消/超时）都在 `manifest_writer` 上落终态 + 发对应事件，
   `TaskScheduler` 收口平台开关门 + 全局/每平台 Semaphore + 协作式 `CancelToken`。
   **整条不勾，因为"真机验过"这一半还没有**：采集类任务（douyin_collect/bilibili_collect）
-  跑通仍需本机 CDP 桥 + 已登录 Chrome + ffmpeg，与 Task 6/7 同一前置。Task 9 通了之后
+  跑通仍需登录态的 Chrome + ffmpeg（桥那一段 T0.1 已通），与 Task 6/7 同一前置。Task 9 通了之后
   随抖音/B站 里程碑一起补那一跑。
 - [x] **前端骨架**：React 19 + TS 5.9 + Vite 8 + Tailwind v4 装好，孟菲斯设计令牌落盘
   —— 措辞按实际改过两处：**没有 shadcn/ui 也没有 `tailwind.config.ts` / `postcss.config.js`**
@@ -227,7 +239,8 @@ cd E:/08-Codework/Intelligence-Hub-V2
   → 过一条 ADR，再补"探测之后镜像列非 NULL"的集成用例，并把那句注释改成实话。
   总览页目前的做法是**不画健康灯**（见 `docs/lessons.md` 经验 40）
 - [ ] `_check_requires`：要先有一份缓存的能力快照（preflight 结果 + TTL + 失效点）→ ADR-0014
-- [ ] `cdp_bridge_server.py` 移植时考虑是否拆出独立仓库（V1 / V2 / V3 共用同一个桥服务）
+- [ ] 桥服务要不要拆成独立仓库（V2 已移植在 `src/intelligence_hub_v2/bridge/server.py`；
+  拆出去的好处是 V1 / V2 / 采集脚本共用同一个提供方，代价是多一个发布面）
 - [ ] 暗色模式的设计令牌（孟菲斯暗色版色板需要单独调）
 - [ ] Visual regression 测试方案（本地 `make screenshots` 抓基线 + PR 人眼比对，不上 Chromatic/Percy）
 - [ ] 多语言 UI（V1 全中文，V2 暂时也全中文，i18n 留 V2.x）

@@ -11,7 +11,7 @@ V1（`E:/08-Codework/Intelligence-Hub`）的 `AGENTS.md` 是这份的前身，**
 
 ## 0. 一句话架构
 
-FastAPI（`src/intelligence_hub_v2/`，回环 `127.0.0.1:8789`）+ React/Vite 前端（`frontend/`，开发时 `:5173`，构建产物由 FastAPI serve）+ SQLite（`data/intelligence_hub.sqlite3`，WAL）+ 四平台 `PlatformAdapter` 实现（`src/intelligence_hub_v2/platforms/{douyin,bilibili,xiaohongshu,youtube}/`）+ CDP 桥独立服务（`cdp_bridge_server.py`，回环 `127.0.0.1:3457`）+ sherpa-onnx ASR。
+FastAPI（`src/intelligence_hub_v2/`，回环 `127.0.0.1:8789`）+ React/Vite 前端（`frontend/`，开发时 `:5173`，构建产物由 FastAPI serve）+ SQLite（`data/intelligence_hub.sqlite3`，WAL）+ 四平台 `PlatformAdapter` 实现（`src/intelligence_hub_v2/platforms/{douyin,bilibili,xiaohongshu,youtube}/`）+ CDP 桥独立服务（`src/intelligence_hub_v2/bridge/server.py`，回环 `127.0.0.1:3457`）+ sherpa-onnx ASR。
 
 **所有边界都是 `typing.Protocol` + Pydantic 模型**，V3 重写时换实现、不换契约。契约清单见 [`docs/architecture.md`](docs/architecture.md#v2-contract-listing)。
 
@@ -22,7 +22,7 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 ## 1. 三条硬约束（V1 §1 延续，违反就等于返工）
 
 1. **`data/` 永不入库**。里面有 `cookies/*.txt`（有效会话凭证）、`intelligence_hub.sqlite3`、`config/feishu.yaml`（真实 token）、CDP 浏览器 profile、真实博主的视频与口播稿、ASR 模型（233 MB）。`.gitignore` 已经排除整个目录与敏感配置，**不要为了"方便复现"往里加例外或反向放开**。
-2. **CDP 桥只绑回环**。它会在你已登录的浏览器里执行任意 JS，暴露到局域网等于交出账号。`cdp_bridge_server.py` 默认拒绝非回环地址，`--allow-non-loopback` 是明知故犯的开关，别写进默认配置。
+2. **CDP 桥只绑回环**。它会在你已登录的浏览器里执行任意 JS，暴露到局域网等于交出账号。`bridge/server.py` 默认拒绝非回环地址（`make_server`，用例 `test_the_bind_guard_refuses_a_non_loopback_host_unless_told_otherwise`），`--allow-non-loopback` 是明知故犯的开关，别写进默认配置。客户端那一侧同样只认回环：`BridgeClient` 连非回环地址直接抛（`infra/cdp_bridge.py::_is_loopback_host`，字面判定不查 DNS）。
 3. **不许臆造成功**。缺依赖（whisper / yt-dlp / lark-cli / 桥没起 / 网络不通）时的正确行为是：如实失败、把原因写进清单和事件流，**不要**把 `failed` 记成 0、不要把 dry-run 的产物当真数据、不要为了让看板变绿而伪造 `transcript_status`。V1 的历史问题就是"看起来在跑"。
 
 补充：SQL 全部参数化（SQLAlchemy Core 天然如此）；React 天然 HTML 转义，后端模板（如有）走 Jinja2 autoescape；昵称/标题/评论/口播稿都是**外部输入**；删除文件用精确路径，禁止通配符 `rm`；所有用户输入的路径走 `safe_filename()` + 限制在 `data/` 下。
@@ -59,11 +59,10 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `src/intelligence_hub_v2/storage/` | SQLAlchemy Core schema + Repository + Alembic 迁移 |
 | `src/intelligence_hub_v2/tasks/` | TaskDefinition / TaskRegistry / runner / context / 清单上下文管理器 |
 | `src/intelligence_hub_v2/asr/` | sherpa-onnx 封装（SenseVoice + 静音切句补标点） |
-| `src/intelligence_hub_v2/bridge/` | CDP 桥客户端（包装 `http://127.0.0.1:3457`） |
-| `cdp_bridge_server.py` | CDP 桥服务（V1 移植，保留只绑回环 + 自愈逻辑） |
+| `src/intelligence_hub_v2/bridge/` | CDP 桥服务（`server.py`：Playwright + Chrome 持久化 profile，只绑 `127.0.0.1:3457`；**客户端**在 `infra/cdp_bridge.py`） |
 | `frontend/` | React + Vite + TS 源；`frontend/src/pages/` 七页，`components/memphis/` 自定义组件，`styles/tokens.css` 设计令牌 |
 | `tools/migrate_from_v1.py` | V1 → V2 一次性迁移脚本（只读 V1 SQLite） |
-| `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie（V1 移植） |
+| `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie（**还没移植**，V2.1 的 T0.2；V2 侧已有的部分是 `infra/cookies.py::CookieManager.refresh_from_bridge`） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
 | `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试 |
 | `docs/adr/` | 架构决策记录（0001~0010，背景/选项/决定/后果） |
@@ -120,8 +119,8 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 V1 那 25 条陷阱（`Intelligence-Hub/AGENTS.md` §7）在 V2 的状态分三类：
 
 - **结构性消除**（V2 设计让它不可能再发生）：§7.4 整行覆盖、§7.6 LocalCreatorStore 参数、§7.7 双源、§7.10 路由靠记忆、§7.11 三种命名、§7.12 预检主库错位、§7.17 head 接常驻服务、§7.23 用时抖动门禁、§7.25 墓碑散落
-- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
-- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.9 SenseVoice 标点（ASR 在 V2.1）、§7.18 桥 profile 登录态跨会话持久（`cdp_bridge_server.py` 还没移植进 V2）、§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，只有 preflight 报 `tools_missing`）、§7.22 按位扫描（V2.1 的 Backfill）
+- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.18 桥重建沿用同一个 profile、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
+- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.9 SenseVoice 标点（ASR 在 V2.1）、§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，只有 preflight 报 `tools_missing`）、§7.22 按位扫描（V2.1 的 Backfill）
 
 > 这三栏由 `tests/contracts/test_contract_guard_index.py` 逐条核：§7.1–§7.25 每条必须有归属、
 > 表里点名的用例必须真的存在且真的会跑、本节的"结构性消除"那一行必须与测试里的分桶一致。

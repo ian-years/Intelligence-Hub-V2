@@ -1801,6 +1801,127 @@ AGENTS.md §4 里就是这么写的）→ 后台任务**退出码 1**。但紧�
 
 ---
 
+#### 经验 44 · 提供方与消费方各写一半契约：移植 V1 的桥之前，先拿 V2 的解析代码对形状（T0.1）
+
+**现象**：`docs/plans/v2.1-migration-plan.md` 说 T0.1 是"直接搬 V1 的 `cdp_bridge_server.py`"。
+差一步就搬完了：V2 的 `BridgeClient.cookies()`（Task 5 就存在）是这样读响应的 ——
+
+```python
+items = body.get("cookies")
+if not isinstance(items, list):
+    raise BridgeError("bridge", "store", "桥的 /cookies 返回里缺 cookies 列表")
+```
+
+而 V1 那个端点交出的是 `{"ok", "count", "domain", "netscape"}`，**没有 `cookies` 这个键**。
+照搬的结果不是"少个便利"，是 cookie 那条路**恒抛**：`CookieManager.refresh_from_bridge()`
+每一次都失败，而它失败长得很像"桥里没这个域的 cookie（你没登录）"—— 那句正是它隔壁
+`if not cookies:` 分支的文案。第一跑就会被引到"去登录"上，而登录与否根本无关。
+
+**解法**：桥只回 `cookies` 原始列表，`netscape` 文本不再回。渲染器在 V2 只有一处
+（`infra/cookies.py::_render_netscape`，那里连"Playwright 给会话 cookie 的 `-1` 在 Netscape
+里必须写 0"都有用例），桥里再抄一份就是第二处真相（§7.11 那一族）。
+再加两条**跨模块同源**看护，全部跑在真 HTTP 上：
+
+- `tests/integration/test_bridge_health.py::test_cookies_survive_the_wire_and_feed_the_renderer`：
+  真服务端 → 真 `BridgeClient.cookies()` → 真 `CookieManager.write_netscape()` → 落到文件内容。
+- `test_the_clients_default_wait_until_is_the_servers_one`：`inspect.signature(BridgeClient.navigate)`
+  的默认值 == 服务端白名单里的那个 `DEFAULT_WAIT_UNTIL`；
+  外加 `MAX_JS_LENGTH < MAX_BODY_BYTES`（客户端允许注入的上限要是比服务端请求体上限还大，
+  采集会在半途吃到一个 413）。
+
+**判据**：搬"提供方"之前，先把**消费方读它的那几行**读一遍 ——
+提供方与消费方各写一半时，契约漂移不体现在任何一侧的代码里，只体现在两侧之间。
+这一条与 2026-09-24 的 P0 #1（yt-dlp 的 `-J` 输出整体一个对象，而解析器逐行读 → B站 枚举恒空）
+是**同一族的第二次**：形状不匹配的两侧各自都完全自洽。
+
+**看护**：上面三条 + `test_cookies_returns_the_raw_list_the_v2_client_needs`（单元那一级也钉住键名）。
+变异验证：把服务端返回改回 `{"netscape": "x"}` → 两条红（单元 + 集成），报错直指缺键。
+
+---
+
+#### 经验 45 · 常驻服务内部是"单线程执行器 + 一条队列"时，别让它的页面回头请求它自己（真机 45 秒超时）
+
+**现象**：真机第一跑（`pytest -m real_network`）里 `/health` 已经回 200、真 Chrome 确实起来了，
+但 `POST /navigate {"url": "<桥自己的 /health>"}` 45 秒后回
+`Page.goto: Timeout 45000ms exceeded`。把导航目标换成同机上另一个端口的小 HTTP 服务，
+同一份代码 0.08 秒就 200。
+
+**根因**：桥按 V1 的形状把浏览器关在**一条线程 + 一个 `queue.Queue`** 里（Playwright 同步 API
+不线程安全）。于是：`/navigate` 占着 worker 线程等页面加载完成 → 页面加载要向桥发一条 HTTP
+请求 → 那条请求被 `BridgeHandler` 接住后又去 `worker.submit()`，排在正等着它的那条作业后面。
+单线程执行器 + "作业之间会回调自己"= 自引用互锁。`submit()` 有 `timeout + 30` 兜底，
+所以症状是**每条这种请求超时 45 秒**，不是永久挂死 —— 更难看出来。
+
+**解法**：不改架构（单线程是刻意的）。把约束写进 `bridge/server.py` 的模块 docstring，
+并让真机用例去请求一个**独立端口上的静态页**（`tests/integration/test_bridge_health.py::_static_page`，
+docstring 里记着这件事）。真实的采集路径本来就不会踩到：适配器导航的是抖音/小红书/B站 的页面。
+
+**判据**：给"内部有单线程执行器"的服务写端到端用例时，先问一句
+**"被驱动的那一侧会不会反过来调用这台服务"**。会 —— 就要么换执行器，要么换一个不会被回收的目标。
+写探针脚本单独量一次（本机 8 秒就能分辨），比在测试框架里试错快。
+
+---
+
+#### 经验 46 · 这台机器上 `httpx.Client()` 每次要 ~2 秒（Windows 证书库）；测试要复用，且别用 `verify=False` 绕
+
+**现象**：新增的 13 条桥集成用例跑了 33 秒，而 30 多条单元用例只 0.9 秒。`--durations` 显示
+每条用例都固定花 ~1.8-2.5 秒。
+
+**量出来的结论**（本机 2026-09-24）：`httpx.AsyncClient()` / `httpx.Client()` **构造**一次
+1.97 秒；服务端与网络都不是瓶颈（裸 socket 一个来回 0.024 秒）。
+`ssl.create_default_context()` 本身 0.15 秒 —— 慢在 httpx 默认 transport 往里灌系统受信根。
+
+**解法**：测试里共用/显式给一个 transport。第一版写的是 `verify=False`，被安全钩子当场拦下
+（"禁用证书校验会把 TLS 变成 MITM 的靶子"）—— 它是对的，而且有更干净的等价写法：
+
+```python
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)   # 校验开着，只是没有受信根
+httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(verify=context))   # 构造 0.048s
+```
+
+对着 `https://example.com` 验过它仍然**失败关闭**（`CERTIFICATE_VERIFY_FAILED`），
+所以这不是"把校验关了"，是"别去加载那本证书簿"。13 条用例 33 秒 → 3.3 秒。
+生产代码一行没动（`BridgeClient` 自己建的仍是默认 transport）。
+
+**判据**：
+- 套件变慢先 `--durations=6` 再猜，别先归因给"网络/子进程"。
+- 绕过一个安全检查的**成本**要写成注释（这里是被拦下的那一次），
+  并且优先找"保持失败关闭"的等价写法，而不是 `verify=False` + 一句"反正是测试"。
+- 同源推论：一台机器上"每条用例新建一个 client"这种写法，性能问题的量级取决于
+  构造成本，而构造成本取决于**它加载了什么系统资源** —— 这不是代码里能读出来的东西。
+
+---
+
+#### 经验 47 · 靠字符串认"浏览器没了"的守卫，必须真机量一次（假句柄永远验不到措辞变了）
+
+**现象/风险**：桥的自愈只在一句话上 —— `browser_dead(message)` 拿
+`BROWSER_DEAD_MARKERS`（从 V1 抄来的 6 条 Playwright 原文）去 `in` 匹配。
+Playwright 换了措辞，代码里不会有任何一处变红：症状变成"每条请求都报浏览器没了，
+但永远不重建"，也就是**静默退化回 V1 §7.20 之前那个状态**。
+假句柄的用例对此完全无感 —— 它们喂的就是那几个字符串。
+
+**真机量法（2026-09-24，本机 Chrome + Playwright 1.63）**：起 `python -m
+intelligence_hub_v2.bridge.server --headless`，`/navigate` 一页成功，然后用
+`Get-CimInstance Win32_Process` 按 profile 路径捞出并 `Stop-Process` 掉桥拉起的 **8 个 chrome 进程**：
+
+- `/health` → **503**、`ok:false`、`page_url:""`，`last_page_url` 仍留着上一页（缓存值只当线索）；
+- 下一条 `/evaluate` → **2.1 秒**成功，`restarts` 变成 **1**，两次 `/health` 里的
+  `profile` 路径**逐字符相同** → §7.18「沿用同一个 profile」在真浏览器上成立；
+- `/cookies?domain=probe.invalid` → `{"cookies": []}`（真 context 交出的就是列表）。
+
+**判据**：凡是"匹配外部世界抛来的原文"的守卫（这里的 markers、`infra/ffmpeg.py` 判断
+"缺二进制"的那几句、yt-dlp 的 `[Merger] Merging formats into`），都要求一条**真外部进程**参与的路径；
+写不进 CI 就在 `docs/progress/` 记下命令与数字，并标日期与版本号（"Playwright 1.63"这一项
+就是下次措辞变更时的对照物）。假句柄用例负责形状，真机一跑负责"这个世界还按这些字说话吗"。
+
+**看护**：`tests/integration/test_bridge_health.py::test_a_real_chrome_round_trip_through_the_client`
+（`real_network`，`make test-real` 跑）+ 离线那一半
+`test_the_first_real_request_revives_a_closed_browser`、`test_a_relaunch_reuses_the_same_profile_dir`（§7.18）。
+"杀掉真浏览器"这一步刻意**没有**写成常驻用例 —— 它要按命令行匹配进程，机器相关且会 rot；
+代价记在这里，判据留在上面这条。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

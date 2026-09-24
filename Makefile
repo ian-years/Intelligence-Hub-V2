@@ -193,8 +193,11 @@ migrate-v1-dry:  ## dry-run（不写盘）
 # CDP 桥
 # ---------------------------------------------------------------------------
 .PHONY: bridge bridge-cookies
-bridge:  ## 起 CDP 桥（V2 还没移植，见 docs/lessons.md 待办）
-	@echo "✗ cdp_bridge_server.py 还没从 V1 移植进 V2（AGENTS §3 列了它，那是纸面的）。" && false
+bridge:  ## 起 CDP 桥（Playwright + Chrome 持久化 profile，只绑 127.0.0.1:3457）
+# 首次跑要带窗口：`make bridge` 弹一个 Chrome，人工扫码登录一次；
+# 登录态存在 data/cdp-bridge-profile/（凭证，不入 git），之后可以 `--headless` 后台跑。
+# 加参数：$(PYTHON) -X utf8 -m intelligence_hub_v2.bridge.server --headless
+	$(PYTHON) -X utf8 -m intelligence_hub_v2.bridge.server
 
 bridge-cookies:  ## 从桥导出 cookie（同上，未移植）
 	@echo "✗ tools/refresh_bridge_cookies.py 还没从 V1 移植进 V2。" && false

@@ -44,6 +44,8 @@ _VIDEOS_REPO = f"{_UNIT_STORAGE}/test_videos_repo.py"
 _CREATORS_REPO = f"{_UNIT_STORAGE}/test_creators_repo.py"
 _PLATFORMS_REPO = f"{_UNIT_STORAGE}/test_platforms_repo.py"
 _FILES = f"{_UNIT_STORAGE}/test_files.py"
+_BRIDGE_SERVER = "tests/unit/test_bridge_server.py"
+_BRIDGE_HTTP = "tests/integration/test_bridge_health.py"
 
 #: 每条 V2.0 契约看护的代表用例，`(文件, 用例名)`。**文件限定**是重点（见模块 docstring）。
 #: 一条陷阱可以点多个文件 —— §7.4 同时护 creators 与 videos。
@@ -75,8 +77,13 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
     "§7.16 兜底未实现如实红": (
         (_BILI, "test_search_fallback_is_refused_rather_than_silently_skipped"),
     ),
+    "§7.18 桥重建必须沿用同一个 profile（登录态跨重启）": (
+        (_BRIDGE_SERVER, "test_a_relaunch_reuses_the_same_profile_dir"),
+    ),
     "§7.20 桥 503=浏览器没了": (
         ("tests/unit/infra/test_cdp_bridge.py", "test_503_means_browser_dead_not_bridge_down"),
+        # 客户端那一侧判对了还不够：503 得真是服务端在浏览器没了时给的（T0.1 真机量过）。
+        (_BRIDGE_HTTP, "test_a_dead_browser_is_503_not_bridge_down"),
     ),
     "§7.20 测不到≠正常": ((_PLATFORMS_REPO, "test_is_healthy_only_trusts_an_explicit_ok"),),
     "§7.21 DASH 认音频轨": (
@@ -96,7 +103,6 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
 #: 漏掉和漏实现看起来一样，所以它们也必须进 §7 编号的完整覆盖检查。
 NOT_YET_GUARDED: tuple[str, ...] = (
     "§7.9 SenseVoice 标点注入（ASR 在 V2.1）",
-    "§7.18 桥 profile 登录态跨会话持久（`cdp_bridge_server.py` 还没移植进 V2）",
     "§7.19 注册表 PATH 合并（`prepare_runtime_environment()` 从未实现，今天只有"
     " preflight 的 `shutil.which`；`contract-tests.md §3` 那一行点名的用例也不存在）",
     "§7.22 按位抓取不退化全库扫描（V2.1）",
