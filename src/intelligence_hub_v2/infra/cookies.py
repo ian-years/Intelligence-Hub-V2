@@ -140,6 +140,9 @@ class CookieManager:
         temp = path.with_name(f"{path.name}.tmp")
         try:
             temp.write_text(COOKIE_FILE_HEADER + "".join(rendered), encoding="utf-8")
+            # 先收到 0600 再 replace：凭证文件不该存在"有一瞬间是 0o644"的那一段。
+            # Windows 上 POSIX 位只是建议性的，真正的保护是 `data/` 在 .gitignore 里。
+            temp.chmod(0o600)
             temp.replace(path)  # 原子替换
         finally:
             if temp.exists():

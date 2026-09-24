@@ -199,8 +199,11 @@ bridge:  ## 起 CDP 桥（Playwright + Chrome 持久化 profile，只绑 127.0.0
 # 加参数：$(PYTHON) -X utf8 -m intelligence_hub_v2.bridge.server --headless
 	$(PYTHON) -X utf8 -m intelligence_hub_v2.bridge.server
 
-bridge-cookies:  ## 从桥导出 cookie（同上，未移植）
-	@echo "✗ tools/refresh_bridge_cookies.py 还没从 V1 移植进 V2。" && false
+bridge-cookies:  ## 从桥导出 Netscape cookie 到 data/cookies/（凭证，不入 git）
+# 前提：桥在跑（`make bridge`）而且人已经在那个 Chrome 里登录过一次。
+# 桥里没有该域的 cookie 时这条 target 红着退出，不会落一个只有表头的空文件
+# （那种文件被 --cookies 传出去之后 yt-dlp 不报错，只是匿名 —— V1 §7.15）。
+	$(PYTHON) -X utf8 tools/refresh_bridge_cookies.py
 
 # ---------------------------------------------------------------------------
 # 工具

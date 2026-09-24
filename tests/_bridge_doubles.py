@@ -95,11 +95,16 @@ class FakeContext:
         self.new_pages = 0
 
     def cookies(self, urls: list[str]) -> list[dict[str, Any]]:
-        """`dead` 非空 = 复现"浏览器被关掉之后 context 上的每个调用都抛"。"""
+        """按 URL 过滤本地 cookie —— 真 Playwright 就是这么做的，不滤就会把
+        抖音的 cookie 当成 B站 的交出去（症状是"B站 登录档"看着生效，画质却还是匿名的）。
+
+        `dead` 非空 = 复现"浏览器被关掉之后 context 上的每个调用都抛"。
+        """
         self.probe_urls.extend(urls)
         if self.dead:
             raise RuntimeError(self.dead)
-        return self._cookies
+        hosts = [_url_host(url) for url in urls]
+        return [row for row in self._cookies if _domain_matches(row.get("domain"), hosts)]
 
     def new_page(self) -> FakePage:
         self.new_pages += 1
@@ -109,6 +114,21 @@ class FakeContext:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _url_host(url: str) -> str:
+    text = str(url or "").strip().lower()
+    if "://" in text:
+        text = text.split("://", 1)[1]
+    return text.split("/", 1)[0].split(":", 1)[0]
+
+
+def _domain_matches(cookie_domain: object, hosts: list[str]) -> bool:
+    """cookie 的 `domain` 带前导点时表示"这个域及其子域"。"""
+    scope = str(cookie_domain or "").lstrip(".").lower()
+    if not scope:
+        return False
+    return any(host == scope or host.endswith(f".{scope}") for host in hosts)
 
 
 class FakePlaywright:

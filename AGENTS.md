@@ -62,7 +62,7 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `src/intelligence_hub_v2/bridge/` | CDP 桥服务（`server.py`：Playwright + Chrome 持久化 profile，只绑 `127.0.0.1:3457`；**客户端**在 `infra/cdp_bridge.py`） |
 | `frontend/` | React + Vite + TS 源；`frontend/src/pages/` 七页，`components/memphis/` 自定义组件，`styles/tokens.css` 设计令牌 |
 | `tools/migrate_from_v1.py` | V1 → V2 一次性迁移脚本（只读 V1 SQLite） |
-| `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie（**还没移植**，V2.1 的 T0.2；V2 侧已有的部分是 `infra/cookies.py::CookieManager.refresh_from_bridge`） |
+| `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie 到 `data/cookies/<域名>.txt`（走 `CookieManager.refresh_from_bridge`，渲染器只有那一处；T0.2，2026-09-24） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
 | `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试 |
 | `docs/adr/` | 架构决策记录（0001~0010，背景/选项/决定/后果） |

@@ -1922,6 +1922,41 @@ intelligence_hub_v2.bridge.server --headless`，`/navigate` 一页成功，然�
 
 ---
 
+#### 经验 48 · 假件不还原"它会过滤什么"，测试就会为错误的理由绿（T0.2 改共用假件）
+
+**现象**：写 T0.2 的 CLI 用例时，我拿 T0.1 那份 `FakeContext` 起了个真 HTTP 桥，
+请求 `--domain bilibili.com`。期望是"桥里没有 B站 的 cookie → 红着退出"，
+实际是 **exit 0 并且真落了一个 `bilibili.com.txt`**。
+
+**根因不在工具**，在假件：`FakeContext.cookies(urls)` 原来是无条件返回
+`self._cookies`，而真 Playwright 的签名是 `context.cookies(urls)` —— **按 URL 过滤**。
+那份假 cookie 只有 `.douyin.com` 的两条，B站 的请求也拿得到它们，于是
+`write_netscape()` 有内容可写、`refresh_from_bridge()` 不抛，全绿。
+更糟的是绿的理由：文件内容其实是**别人域的会话**，而用例在断言"这条路成功了"。
+
+**解法**：给假件补上真语义（`_url_host` + cookie domain 带前导点 = 含子域），
+再让用例去断那条真实后果。补完之后同一句断言立刻变成一条有效的看护：
+`test_main_exits_one_when_the_bridge_has_no_cookie_for_that_domain`。
+变异验证：把假件的过滤退回"无条件返回"→ 那条红（`assert 0 == 1`），
+说明它现在真的在把关。
+
+**判据**：
+- 抄一个外部 API 的假件时，**签名里的筛选参数 must 参与行为**。留着参数却不读它，
+  等价于把"这个调用会拿到什么"从测试里摘掉 —— 症状就是"为错误的理由绿"。
+  这一条与 §7.4（`update_fields` 不许整行覆盖）、P0 #1（`-J` 与逐行解析器）是同一族：
+  **形状对了不代表语义对了**。
+- 共享假件被改动时，要把**所有用它的人**重跑一遍（这里 `tests/unit/test_bridge_server.py`
+  与 `tests/integration/test_bridge_health.py` 都用它），不要只跑自己新写的那个文件。
+- 写"空结果应当失败"这一类用例时，先确认失败**不是因为**夹具没数据。
+  分辨方法：把夹具灌满，用例必须仍然红（灌满之后仍红 = 红在对的地方）。
+
+**看护**：`tests/tools/test_refresh_bridge_cookies.py` 的
+`test_a_live_bridge_writes_one_file_per_domain`（断两个域名的内容互不串台）+
+`test_main_exits_one_when_the_bridge_has_no_cookie_for_that_domain`。
+假件本身在 `tests/_bridge_doubles.py::FakeContext`。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。
