@@ -10,7 +10,7 @@ V1 §7.25 看护：is_hidden 列内化墓碑，list_visible() 自动过滤。
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field, HttpUrl
 from typing_extensions import TypedDict
@@ -102,6 +102,12 @@ class VideoFilters(BaseModel):
     is_hidden: bool | None = False  # 默认只返回可见
     since: datetime | None = None
     search: str | None = None
+    #: 排序方式。`recent` 是今天的行为（发布时间倒序）；`benchmark` 按点赞数倒序，
+    #: 服务 T6.6 的"爆款回溯"。为什么不是"按快照表的峰值排"：`videos.like_count`
+    #: 存的本来就是**最近一次入库的读数**，而点赞只涨不跌，所以它已经是已知最高水位；
+    #: 快照表回答的是另一个问题（"发布 24 小时到没到千"这种增长形状）。
+    #: NULL（平台没给点赞数）排在最后，而不是当 0 —— 0 赞与"读不出赞数"是两件事。
+    sort: Literal["recent", "benchmark"] = "recent"
 
 
 class Page(BaseModel):

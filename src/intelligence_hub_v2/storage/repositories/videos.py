@@ -90,9 +90,7 @@ class VideoRepository(BaseRepository):
         total = await self.count(filters=effective)
 
         stmt = select(_T).where(*_filter_clauses(effective))
-        # published_at 可能为 NULL（平台没给发布时间）。SQLite 在 DESC 下把 NULL 排最后，
-        # 再用 id DESC 做稳定 tiebreak —— 否则同一秒发布的作品每次刷新顺序都可能变。
-        stmt = stmt.order_by(_T.c.published_at.desc(), _T.c.id.desc())
+        stmt = stmt.order_by(*_order_clauses(effective))
         stmt = stmt.limit(paging.size).offset(paging.offset)
 
         async with self._scope() as session:
@@ -271,3 +269,17 @@ def _filter_clauses(filters: VideoFilters) -> list[Any]:
             _T.c.title.like(pattern, escape="\\") | _T.c.description.like(pattern, escape="\\")
         )
     return clauses
+
+
+def _order_clauses(filters: VideoFilters) -> list[Any]:
+    """排序。两种顺序**都必须有稳定的 tiebreak**，否则同一批数据每次刷新顺序会漂。
+
+    - `recent`：发布时间倒序。`published_at` 可以是 NULL（平台没给），SQLite 在 DESC 下
+      把 NULL 排最后，但那是方言行为，所以显式 `nulls_last()`。
+    - `benchmark`：点赞数倒序（T6.6 爆款回溯）。同样是 NULL 最后 —— **不是当 0 处理**：
+      "0 赞"与"这条没读到赞数"是两件事，把后者当成前者会让它排进爆款列表的中部，
+      而它其实一点信息都没有。（同一口径见 ADR-0020 对快照读数 NULL ≠ 0 的判据。）
+    """
+    if filters.sort == "benchmark":
+        return [_T.c.like_count.desc().nulls_last(), _T.c.id.desc()]
+    return [_T.c.published_at.desc().nulls_last(), _T.c.id.desc()]

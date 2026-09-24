@@ -21,6 +21,15 @@ export type VideoFilter = NonNullable<
 export const VIDEO_HIDDEN_MODES = ["visible", "hidden", "all"] as const;
 export type VideoHiddenMode = (typeof VIDEO_HIDDEN_MODES)[number];
 
+/** `/api/videos?sort=` 的全部取值（与快照逐字核，见 `schema.spec.ts`）。
+ *  这一份不是"为测试维护的名单"：`BENCHMARK_SORT` 那个常量就是它的一个消费方，
+ *  而爆款回溯面板发出去的正是它 —— 字面量只出现在这一处。 */
+export const VIDEO_SORT_MODES = ["recent", "benchmark"] as const;
+export type VideoSortMode = (typeof VIDEO_SORT_MODES)[number];
+
+/** 「按点赞数从大到小」那一种：T6.6 的爆款回溯入口用的就是它。 */
+export const BENCHMARK_SORT: VideoSortMode = "benchmark";
+
 // 用 `type` 而不是 `interface`：只有 type alias 才有隐式索引签名（`Query` 要的是那个）。
 
 /** `filter` 整个进 queryKey：漏一个键就是"改了筛选但界面不重取"，

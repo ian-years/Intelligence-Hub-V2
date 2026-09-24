@@ -8,6 +8,7 @@ import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { ExportLinks } from "@/components/shared/ExportLinks";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { CreatorCard } from "@/components/shared/CreatorCard";
+import { CreatorBenchmarks } from "@/components/shared/CreatorBenchmarks";
 import { PageShell } from "@/components/shared/PageShell";
 import { QueryState } from "@/components/shared/QueryState";
 import { useSettings } from "@/stores/settings";
@@ -170,15 +171,22 @@ export function Creators(): JSX.Element {
 }
 
 /** 一位博主一行，开关那笔写入归这一行自己：共享一个 mutation 会让所有行的
- *  「写入中…」一起亮，而 `variables` 只有一个，分不清是哪家在飞。 */
+ *  「写入中…」一起亮，而 `variables` 只有一个，分不清是哪家在飞。
+ *
+ *  爆款面板的展开态同样**按行**存：全部一起展开等于对每个博主各发一次 `/api/videos`。 */
 function ToggleRow({ creator }: { creator: Creator }): JSX.Element {
   const toggle = useSetTracking(creator.id);
+  const [openBenchmarks, setOpenBenchmarks] = useState(false);
   return (
     <CreatorCard
       creator={creator}
       busy={toggle.isPending}
       onToggleTracking={(next) => toggle.mutate(next)}
-    />
+      onToggleBenchmarks={() => setOpenBenchmarks((open) => !open)}
+      benchmarksOpen={openBenchmarks}
+    >
+      {openBenchmarks && <CreatorBenchmarks creator={creator} />}
+    </CreatorCard>
   );
 }
 

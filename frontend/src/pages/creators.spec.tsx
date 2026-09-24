@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Creators } from "@/pages/Creators";
 import { useSettings } from "@/stores/settings";
-import { makeCreator } from "@/test/fixtures";
+import { makeCreator, makeVideo } from "@/test/fixtures";
 
 const list = [
   makeCreator({ id: 3, name: "阿婆主甲", platform: "bilibili", is_tracking: true }),
@@ -31,7 +31,24 @@ const calls: string[] = [];
 const posts: { url: string; body: string }[] = [];
 const patches: { url: string; body: string }[] = [];
 
-function stub(options: { addStatus?: number; addDetail?: unknown } = {}): void {
+const EMPTY_PAGE = { items: [], total: 0, page: 1, size: 5 };
+
+/** `PagedResult[Video]` 的那一形状。`items` 按**给进来的顺序**原样交出：
+ *  爆款那几条用例要的正是"面板画的顺序 == 后端给的顺序"，所以这里刻意不按赞数排。 */
+function videosPage(...titles: string[]): unknown {
+  return {
+    items: titles.map((title, index) =>
+      makeVideo({ id: index + 1, title, like_count: 10 * (index + 1) }),
+    ),
+    total: titles.length,
+    page: 1,
+    size: 5,
+  };
+}
+
+function stub(
+  options: { addStatus?: number; addDetail?: unknown; videosBody?: unknown } = {},
+): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -43,6 +60,9 @@ function stub(options: { addStatus?: number; addDetail?: unknown } = {}): void {
           status,
           headers: { "Content-Type": "application/json" },
         });
+      if (url.startsWith("/api/videos")) {
+        return json(200, options.videosBody ?? EMPTY_PAGE);
+      }
       if (method === "POST") {
         posts.push({ url, body: String(init?.body ?? "") });
         const status = options.addStatus ?? 202;
@@ -150,6 +170,55 @@ describe("Creators 的列表", () => {
     );
     renderPage();
     await screen.findByText("主库被另一个进程锁住");
+  });
+});
+
+describe("爆款回溯入口（T6.6）", () => {
+  it("默认不展开：一个 /api/videos 请求都不发", async () => {
+    stub();
+    renderPage();
+    await screen.findByText("阿婆主甲");
+    expect(calls.filter((call) => call.startsWith("GET /api/videos"))).toHaveLength(0);
+  });
+
+  it("展开要的是「这一位的 + 按赞数排的那一条请求」，画出来的顺序就是后端给的顺序", async () => {
+    // 后端桩给的是**赞数升序**：面板要是自己在前端排一遍，顺序会反过来 → 红。
+    // （后端排序与前端排序各一份，迟早不一致 —— V1 §7.10 那一族。）
+    stub({ videosBody: videosPage("低赞那条", "中赞那条", "高赞那条") });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "爆款回溯 阿婆主甲" }));
+
+    await screen.findByText("低赞那条");
+    const request = calls.find((call) => call.startsWith("GET /api/videos"));
+    expect(request).toBeDefined();
+    expect(request).toContain("creator_id=3");
+    expect(request).toContain("sort=benchmark");
+
+    const rows = screen.getAllByRole("listitem").map((item) => item.textContent ?? "");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("低赞那条");
+    expect(rows[2]).toContain("高赞那条");
+  });
+
+  it("这一位还没有作品：说「先跑一次采集」，不是一片空白也不是错误卡", async () => {
+    stub({ videosBody: EMPTY_PAGE });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "爆款回溯 阿婆主甲" }));
+    await screen.findByText(/这一位库里还没有作品/);
+    expect(screen.queryByText(/读不到/)).toBeNull();
+  });
+
+  it("每一位只展开自己那一行", async () => {
+    stub({ videosBody: videosPage("只有一条") });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "爆款回溯 阿婆主甲" }));
+    await screen.findByText("只有一条");
+    // 展开态是**按行**存的，不是页面级一个 bool：另一位仍是收起的。
+    // 断 `aria-expanded` 而不是按钮文案 —— 文案会被 aria-label 盖掉，测的其实是同一件事的两面。
+    const states = screen
+      .getAllByRole("button", { name: /爆款回溯/ })
+      .map((button) => button.getAttribute("aria-expanded"));
+    expect(states).toEqual(["true", "false"]);
   });
 });
 

@@ -25,6 +25,10 @@ router = APIRouter(tags=["videos"])
 
 _HIDDEN_MODES = Literal["visible", "hidden", "all"]
 
+#: `/api/videos?sort=` 的全部取值。与 `models/video.py:VideoFilters.sort` 同一份名单，
+#: 加一种顺序要**两处同时改**（模型那一处没有它就不会真的生效）。
+_SORT_MODES = Literal["recent", "benchmark"]
+
 
 class HideRequest(BaseModel):
     reason: str
@@ -41,10 +45,16 @@ def _filters(
     since: datetime | None,
     search: str | None,
     hidden: str,
+    sort: Literal["recent", "benchmark"] = "recent",
 ) -> VideoFilters:
     is_hidden: bool | None = {"visible": False, "hidden": True, "all": None}.get(hidden, False)
     return VideoFilters(
-        platform=platform, creator_id=creator_id, since=since, search=search, is_hidden=is_hidden
+        platform=platform,
+        creator_id=creator_id,
+        since=since,
+        search=search,
+        is_hidden=is_hidden,
+        sort=sort,
     )
 
 
@@ -56,11 +66,24 @@ async def list_videos(
     since: datetime | None = None,
     search: str | None = None,
     hidden: _HIDDEN_MODES = Query(default="visible"),
+    sort: _SORT_MODES = Query(default="recent"),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=200),
 ) -> PagedResult[Video]:
+    """分页列作品。`sort=benchmark` 是"按点赞数从大到小"（T6.6 的爆款回溯入口用）。
+
+    为什么是一个 `sort` 值而不是 `min_likes` 阈值参数：入口要回答的是"这个人历史上
+    水花最大的几条"，而"多少算爆款"各家平台差一个数量级（抖音十万赞是日常，
+    B 站一千算爆款）—— 阈值放进筛选器会伪装成一个平台无关的常量。排序 + `size`
+    就是"取前 N 条"，要收紧就在界面上少列几条。
+    """
     filters = _filters(
-        platform=platform, creator_id=creator_id, since=since, search=search, hidden=hidden
+        platform=platform,
+        creator_id=creator_id,
+        since=since,
+        search=search,
+        hidden=hidden,
+        sort=sort,
     )
     return await state.storage.videos.list_visible(filters=filters, page=Page(page=page, size=size))
 
