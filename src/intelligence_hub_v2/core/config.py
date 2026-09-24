@@ -142,6 +142,13 @@ class LoggingSection(BaseModel):
     rotate_backup_count: int = Field(default=5, ge=1)
 
 
+_CRON_FIELDS = 5
+"""五段：分 时 日 月 周。APScheduler 的 `from_crontab` 要的就是这个形状。"""
+
+_CRON_CHARS = frozenset("0123456789*,-/?:LW#")
+"""五段 cron 允许出现的字符集（够用且宁窄勿宽：写错要响，不是猜）。"""
+
+
 class SchedulerSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -159,12 +166,84 @@ class SchedulerSection(BaseModel):
 
     health_check_interval_seconds: int = Field(default=300, ge=10)
 
+    collect_cron: str | None = None
+    """**定时采集**的 cron 表达式（五段：`分 时 日 月 周`），None = 不开。
+
+    为什么是一个 cron 串而不是 `daily_at: "08:00"`：一个需求只留一个旋钮
+    （V1 §7.11 那一族 —— 同一件事有两种写法，早晚只改一边）。`0 8 * * *` 就是
+    "每天 08:00"，而 cron 还能表达"工作日 07:30"这类，APScheduler 原生解析，
+    不需要我们自己写一个解析器。Settings 页（第二片）可以给时间选择器，
+    但它写出来的**仍然是这一串**。
+
+    为什么放配置而不是建一张 `schedules` 表：这份配置本来就是"这台机器要怎么跑"
+    的真源（`scheduler.*` 其余字段同段），而表要引入迁移与第二份口径 ——
+    一个只有一份、按平台数量不超过个位数的东西不需要数据库。
+    理由与判据见 `docs/adr/0017`。
+
+    **写错要在启动时就炸**：一条解析不出来的 cron 如果只记一条 warning，
+    症状是"服务绿着，采集永远不来"，而这正是 V1 的历史问题（§1.3）。
+    """
+
+    collect_platforms: list[str] = Field(default_factory=list)
+    """cron 触发时给哪些平台跑。空 = **所有启用的平台**（`platforms.yaml` 里 enabled 的）。
+
+    元素必须是已知平台名，写错启动就红 —— 与 `task_timeout_seconds` 的 key 校验同一口径。
+    关掉的平台即使写在这里也不会被排 job（与"关掉平台=它的任务消失"那条镜像一致）。
+    """
+
+    collect_limit: int | None = Field(default=None, ge=1)
+    """每位博主每次最多收几条，进 `CollectParams.limit`。None = 用平台配置的
+    `videos_per_creator`（也就是不在定时任务里另立一套默认值）。"""
+
     task_timeout_seconds: dict[str, int] = Field(default_factory=dict)
     """每类任务的超时（秒），key 必须是 `TaskKind` 的取值。
 
     缺某一项 = 该类任务不限时（`TaskDefinition.timeout_seconds = None`）。
     超时记 `status='timeout'` 并**写终态清单**（V1 §2 契约二）。
     """
+
+    @field_validator("collect_cron")
+    @classmethod
+    def _validate_cron(cls, value: str | None) -> str | None:
+        """五段、每段非空、字符集限定在 cron 的那几个符号里。
+
+        这里**不**用 apscheduler 的解析器：`core/config.py` 不该依赖一个可选装进来的包
+        （`--extra bridge` 那一族），而装没装 apscheduler 不该改变"这份配置对不对"的答案。
+        真正的语义解析在排 job 那一刻由 APScheduler 做，它抛错同样红在启动。
+        """
+        if value is None or not str(value).strip():
+            return None
+        fields = str(value).split()
+        if len(fields) != _CRON_FIELDS:
+            msg = (
+                f"scheduler.collect_cron 要的是五段 cron（分 时 日 月 周），"
+                f"实际是 {value!r}（{len(fields)} 段）"
+            )
+            raise ValueError(msg)
+        bad = sorted({token for token in fields for ch in token if not _CRON_CHARS.issuperset(ch)})
+        if bad:
+            msg = f"scheduler.collect_cron 里有不认识的字符：{bad}（来自 {value!r}）"
+            raise ValueError(msg)
+        return " ".join(fields)
+
+    @field_validator("collect_platforms")
+    @classmethod
+    def _validate_platform_names(cls, value: list[str]) -> list[str]:
+        """拼错一个平台名 = 那个平台永远不被定时采集，而库里看不出异常。
+
+        校验的是**配置词汇表**（有哪几个平台），不是"哪几个平台的采集任务已经实现" ——
+        后者在 `core/task_registry.py` 那边，配置层不引入它（会成环）。
+        所以"配了一个已注册但还没实现的平台"红在排 job 那一刻（`_add_collect_jobs`），
+        同样红在启动，只是晚一步。
+        """
+        unknown = sorted({name for name in value if name not in PLATFORM_CONFIG_SCHEMAS})
+        if unknown:
+            msg = (
+                f"scheduler.collect_platforms 里有 V2 不认识的平台: {', '.join(unknown)}。"
+                f"可选：{', '.join(sorted(PLATFORM_CONFIG_SCHEMAS))}"
+            )
+            raise ValueError(msg)
+        return value
 
     @field_validator("task_timeout_seconds")
     @classmethod

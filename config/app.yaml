@@ -56,6 +56,12 @@ scheduler:
   # 启动时跑一次 preflight（缺依赖就如实报红，不臆造成功 —— V1 §1.3）
   health_check_on_startup: true
   health_check_interval_seconds: 300              # 5 分钟
+  # 定时采集（ADR-0017）。默认整段不开：装了 V2 的人不该在没同意的情况下，
+  # 让服务定时拿他的登录态去动平台配额。打开就是取消注释——
+  # "每天 08:00 各采一次已启用的平台，每位博主最多 20 条"：
+  #   collect_cron: "0 8 * * *"          # 五段：分 时 日 月 周；写错启动就红（两层校验）
+  #   collect_platforms: [douyin, bilibili]   # 省略/留空 = 所有已启用的平台
+  #   collect_limit: 20                  # 省略 = 用各平台自己的 videos_per_creator，不另立默认
   # 每类任务的超时（秒）。超时记 status='timeout' 并写终态清单（V1 §2 契约二）。
   # key 必须是 TaskKind 的取值，写错启动就报 ConfigError。
   task_timeout_seconds:

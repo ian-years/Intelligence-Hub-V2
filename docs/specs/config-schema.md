@@ -92,6 +92,17 @@ class SchedulerSection(BaseModel):
     max_concurrent_per_platform: int = Field(default=2, ge=1)
     max_concurrent_global: int = Field(default=4, ge=1)
 
+    # --- 定时采集（ADR-0017，2026-09-24 加）---------------------------------
+    collect_cron: str | None = None       # 五段 cron；None = 不排任何采集
+    collect_platforms: list[str] = []     # 空 = 所有**已启用**的平台
+    collect_limit: int | None = Field(default=None, ge=1)  # None = 用平台的 videos_per_creator
+
+
+> **定时采集那三键的形状校验分两层**（ADR-0017）：`core/config.py` 只验"五段 + 字符集"，
+> 语义（`99 99 * * *` 这种越界值）由 `main._add_collect_jobs` 里的 `CronTrigger.from_crontab`
+> 拒收并抛 `ConfigError`。**默认是 None**：装了 V2 的人不该在没同意的情况下
+> 让服务定时拿他的登录态去动平台配额。`collect_platforms` 的名字按
+> `PLATFORM_CONFIG_SCHEMAS` 校验（写错平台名 = 那个平台永远不被定时采集，而库里看不出来）。
 
 class BridgeSection(BaseModel):
     url: HttpUrl = HttpUrl("http://127.0.0.1:3457")

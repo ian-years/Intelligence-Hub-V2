@@ -287,6 +287,10 @@ cd E:/08-Codework/Intelligence-Hub-V2
   少翻一页得到的是一份"看起来完整"的 CSV）。文件名不含任何请求输入（防 header injection）。
   数字：`export.py` 语句覆盖 100%，新用例后端 17 条 + 前端 4 条，全量 1556 passed / 93.57%。
 - [ ] 定时任务调度 UI（V2.0 后端有 APScheduler，但前端没暴露）
+  —— **第一片已落（2026-09-24，T6.3）**：`scheduler.collect_cron` 那一族配置真的会排 cron job，
+  并且有用例证明"到点真起任务"（真 APScheduler，不 mock 时钟）。剩下的是 UI 那一半：
+  `api/v1/schedule.py`（列 job / 改配置 / `action: run_now`）+ Settings 上那块开关。
+  现在改 cron 要编辑 YAML + 重启 —— 所以这一条**没勾上**，别当成已完。`docs/adr/0017`。
 
 ---
 

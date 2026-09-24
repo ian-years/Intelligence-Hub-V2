@@ -2211,6 +2211,42 @@ docstring 写着"给需要写自定义查询的调用方"，但没说"要自己�
 
 ---
 
+#### 经验 54 · 定时器响了、任务永远不出现：APScheduler 的同步 job 会掉进线程池（T6.3 第一片）
+
+**现象**：`test_the_cron_job_actually_fires_and_submits_the_task` 红在
+`assert 'douyin_collect' in []` —— 秒级 cron 真的到了点，`task_runs` 里却一行都没有。
+第一反应是"等待时间不够"或"APScheduler 在 CI 上不可靠"。两个都错。
+
+**根因**：`_add_collect_jobs` 注册的回调写成了同步 `def _fire()`。
+`AsyncIOExecutor` 对**非协程**的 job 不 `await`，而是丢进**默认线程池**跑；
+那个线程里没有 running loop，于是 `TaskScheduler.submit` 里的 `asyncio.create_task`
+当场 `RuntimeError: no running event loop`。异常被 APScheduler 自己的 job 处理器吞成一条
+日志 —— 所以线上表现不是崩，是**"服务绿着、定时器每天都响、任务永远不出现"**。
+
+**解法**：回调改成 `async def`。协程函数会被 executor 直接 `await` 在事件循环线程里，
+`submit` 要的 loop 就在那儿。
+
+**判据**：凡是从 APScheduler 里往 `TaskScheduler.submit` 递东西的回调，**必须是协程函数**。
+这条不写进用例就看不见 —— 单元测试直接调 `_fire()` 是同步调用，`get_running_loop()`
+在测试的事件循环里成立，怎么测都绿。只有"真经过 executor 派发"才会暴露。
+看护因此刻意不 mock 时钟：`test_the_cron_job_actually_fires_and_submits_the_task`
+用 `CronTrigger(second="*/1")` 真等一次触发（原计划写的是"mock 时间"，
+mock 就把 trigger 解析 / job 注册 / **executor 派发**整段跳过了，而这个 bug 恰好在派发那一环）。
+做过变异检查：把 `async def _fire` 改回 `def` → 这条立刻红。
+
+**同一条用例还牵出第二件事**：这个文件一度"整文件跑必红一条、单跑那条又绿"。
+根因不在红的那条 —— 前面几条用例建了 `SqliteStorage` 却没关，它的 aiosqlite 连接
+在**下一条**用例执行期间才被 GC，`ResourceWarning: ... deleted before being closed`
+撞上 `filterwarnings = ["error"]`，锅由无辜的下一条背。
+所以：`_close()` 里顺序是 **scheduler → http → storage**（先停还在跑的任务，再抽库），
+并且每条用例自己 `try/finally`。中途试过 autouse 的 async 收尸 fixture，
+结果把文件里那条**同步**用例一起拖垮（async fixture 套不上同步测试）—— 那也不算坏消息，
+它说明"统一收口"和"用例能同步能异步"这两件事在这个文件里是冲突的，选了后者。
+
+**看护**：`tests/integration/test_scheduler.py`（10 条）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。
