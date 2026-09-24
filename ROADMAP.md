@@ -149,8 +149,15 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   （带逐句时间戳），抽音频仍走 `infra/ffmpeg.extract_audio()`。**真机量过**：真权重 +
   一支 67 秒真口播 → 7.5 秒转完、11 句 / 538 字、9.0× 实时，每行以标点收尾。
   还差下一格：`postprocess` 把它接进任务链（T1.2），"输出 speech-clean.txt"那一步在今晚之后。
-- [ ] `PostprocessTask` 跨平台统一（废 V1 三份 postprocess_*）
+- [x] `PostprocessTask` 跨平台统一（废 V1 三份 postprocess_*）
+  —— 2026-09-24（T1.2）：`tasks/postprocess.py` 现在真的跑 ASR（抽音频 → 切句转写 →
+  归一 → `speech-clean.txt` + `segments.json` + `reference.md` → `transcripts` 行）。
+  V1 的两份脚本（platform / bili）合成一份；DASH 未合并时喂 ffmpeg 的是音频轨（§7.21）。
+  产物三份，V1 的 `speech-raw.txt` 不落（与 clean 只差空白折叠）。
+  **拆出一条**：摘要/要点这两样今天只在磁盘上，进 DB 要改 `data-model.md` → 见
+  `docs/plans/v2.1-migration-plan.md` 的 T1.2b（含"V1 那两列迁移时会静默丢掉"这条账）。
 - [ ] 字幕优先路径（B站 / YouTube）
+  —— B站 那条"问了字幕说没有轨 → 回落到听音频"是 T1.3，还没做（现在记 `no_subtitle`）。
 - [ ] 前端 Video Detail 页（视频播放 + metadata + 口播稿时间戳跳转）
   —— V2.0 已有最小版（`pages/VideoDetail.tsx`：metadata + 口播稿全文，**无播放器**，
   页面上写明了）。这一条要的是播放器与时间戳跳转，别从零再建一遍。

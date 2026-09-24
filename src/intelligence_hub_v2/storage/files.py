@@ -282,6 +282,23 @@ class FileStorage:
         """切句结果（时间戳 + 文本），给前端逐句高亮用。"""
         return self.transcript_dir(media_dir) / "segments.json"
 
+    def reference_path(self, media_dir: Path) -> Path:
+        """本地抽取式参考材料。V1 那个文件叫 `summary.md`，这里换了名字并写清了性质：
+        它是**抽取**出来的原文片段，不是摘要生成结果（`tasks/reference.py`）。
+
+        与 `speech-clean.txt` 同住 `transcript/`：两个文件说的是同一份稿子，
+        分开放会让人以为它们是两件事。
+        """
+        return self.transcript_dir(media_dir) / "reference.md"
+
+    def asr_audio_path(self, media_dir: Path) -> Path:
+        """ASR 的中间产物：16k 单声道 WAV（`infra/ffmpeg.extract_audio` 的产物）。
+
+        放 `audio/` 而不是 `transcript/`：V1 §7.21 踩过"中间产物被当成源媒体，
+        一条作品转两遍"，所以中间产物与成品必须分家（见 `audio_dir`）。
+        """
+        return self.audio_dir(media_dir) / "speech-16k.wav"
+
     def audio_dir(self, media_dir: Path) -> Path:
         """抽出来的音频（转写中间产物）。
 

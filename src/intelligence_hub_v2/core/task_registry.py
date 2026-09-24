@@ -132,7 +132,10 @@ TASKS: dict[str, TaskDefinition] = {
         kind=TaskKind.POSTPROCESS,
         params_schema=PostprocessParams,
         platforms=(),
-        # V2.0 只做字幕轨，不碰本地 ASR；ffmpeg/asr_engine 是 V2.1 这条任务的 requires，届时补。
+        # T1.2 起这条路真跑本地 ASR（字幕优先不变）。`requires` 仍留空：调度器执行前
+        # 检查 requires 的那道闸还没实现（`_check_requires` 要一份带 TTL 的能力快照，
+        # 见 ROADMAP 待办池与 ADR-0014），现在声明它等于声明一道纸面防护。
+        # 引擎缺位由 handler 自己如实报红（`asr_blocked` + AsrUnavailable failure）。
         requires=(),
         timeout_seconds=900,
         cancellable=True,

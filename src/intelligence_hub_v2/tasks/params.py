@@ -62,7 +62,7 @@ class SingleLinkParams(BaseModel):
 
 
 class PostprocessParams(BaseModel):
-    """后处理（`postprocess`）。V2.0 只做字幕优先那条路；本地 ASR 留 V2.1。"""
+    """后处理（`postprocess`）：字幕优先，没有字幕轨的平台走本地 ASR（T1.2）。"""
 
     model_config = ConfigDict(extra="ignore")
 
