@@ -9,6 +9,7 @@ import { Creators } from "@/pages/Creators";
 import { Dashboard } from "@/pages/Dashboard";
 import { Feed } from "@/pages/Feed";
 import { Tasks } from "@/pages/Tasks";
+import { Topics } from "@/pages/Topics";
 import { VideoDetail } from "@/pages/VideoDetail";
 import { Preflight } from "@/pages/Preflight";
 import { Settings } from "@/pages/Settings";
@@ -50,6 +51,7 @@ export default function App(): JSX.Element {
         <Route path="video/:id" element={<VideoDetail />} />
         <Route path="creators" element={<Creators />} />
         <Route path="tasks" element={<Tasks />} />
+        <Route path="topics" element={<Topics />} />
         <Route path="settings" element={<Settings />} />
         <Route path="preflight" element={<Preflight />} />
         <Route path="tokens" element={<TokenSheet />} />

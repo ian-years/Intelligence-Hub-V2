@@ -25,9 +25,11 @@ import pytest
 from sqlalchemy import DateTime as SADateTime
 from sqlalchemy import create_engine, insert, select
 
+from intelligence_hub_v2.models.draft import DRAFT_STATUS_VALUES
 from intelligence_hub_v2.models.platform import HEALTH_STATUSES as MODEL_STATUSES
 from intelligence_hub_v2.storage.db import run_migrations
 from intelligence_hub_v2.storage.schema import (
+    DRAFT_STATUSES,
     HEALTH_STATUSES,
     MEDIA_SOURCES,
     TASK_STATUSES,
@@ -181,6 +183,8 @@ def migrated_checks(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
         ("transcripts_engine_enum", "engine", TRANSCRIPT_ENGINES),
         ("transcripts_summary_method_enum", "summary_method", TRANSCRIPT_SUMMARY_METHODS),
         ("task_runs_status_enum", "status", TASK_STATUSES),
+        # drafts（T5.5 / ADR-0021）：这一条的取值同时是 `DraftStatus` 这个 Literal
+        ("drafts_status_enum", "status", DRAFT_STATUSES),
     ],
 )
 def test_migrated_check_lists_exactly_the_model_constants(
@@ -240,6 +244,8 @@ EXPECTED_CHECKS: frozenset[str] = frozenset(
         "transcripts_summary_method_enum",
         # video_metric_snapshots（ADR-0020：随 create_table 下发，autogenerate 看得见）
         "video_metric_snapshots_checkpoint_enum",
+        # drafts（ADR-0021 / T5.5：同一条链，建表时随 metadata 下发）
+        "drafts_status_enum",
         # task_runs
         "task_runs_status_enum",
         "task_runs_progress_range",
@@ -272,3 +278,18 @@ def test_the_platform_health_statuses_are_one_tuple_not_two() -> None:
     V2.1 加平台健康状态时改一处是不够的。
     """
     assert MODEL_STATUSES == HEALTH_STATUSES
+
+
+def test_the_draft_statuses_are_one_tuple_not_two() -> None:
+    """`models.draft.DraftStatus`（Python 层的 Literal）与
+    `storage.schema.DRAFT_STATUSES`（DB 层的 CHECK）必须是同一份清单。
+
+    为什么不是冗余（这一条与上一条同形，但**上面那条的参数化用例已经比过
+    `migrated_checks` 与 schema 常量**，两处加起来才是完整的三角）：
+    - 只漂 models 那一侧：API 收得下 `status="drafted"`（Pydantic 那份清单放宽了），
+      写库时被 CHECK 拒 → 一句 500 的 `StorageError`，用户看不出是自己传错了。
+    - 只漂 schema 那一侧：新取值在 Pydantic 就 422，CHECK 里那一项永远用不上，
+      而 spec §2.9 的注释与迁移里的字面量各说一套。
+    两条路都通不了，但症状都不指向"两份清单漂了"这个原因 —— 所以要在这里钉住。
+    """
+    assert DRAFT_STATUS_VALUES == DRAFT_STATUSES

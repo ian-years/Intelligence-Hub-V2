@@ -431,6 +431,64 @@ video_metric_snapshots_table = Table(
 
 
 # ---------------------------------------------------------------------------
+# 2.8 topics（选题金矿：一条选题就是一个词，不挂作品）
+# ---------------------------------------------------------------------------
+
+topics_table = Table(
+    "topics",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    # 唯一键就是这一张表的全部身份判定：`name` 空串在 UNIQUE 里是**合法值**，
+    # 收下它的后果与 `video_comments.platform_comment_id` 那一坑同形 ——
+    # 第一条空名占住键，之后所有空名撞在同一条上，症状是"存不下第二选题"且不报错。
+    # 所以拒收在模型层（`TopicDraft.model_post_init`），这里只留约束。
+    Column("name", _Text, nullable=False),
+    Column("description", _Text, nullable=True),
+    Column("created_at", UTCDateTime, nullable=False, default=_now),
+    # spec §2.8 写的是行内 `name TEXT NOT NULL UNIQUE`；这里用具名唯一索引表达同一件事，
+    # 与 `creators` / `videos` / `video_comments` 的既有写法一致（行内 UNIQUE 在 SQLite 的
+    # DDL 里没有名字，`downgrade()` 想撤掉一条约束时 drop 不掉 —— 见本模块 NAMING_CONVENTION）。
+    Index("uq_topics_name", "name", unique=True),
+)
+
+
+# ---------------------------------------------------------------------------
+# 2.9 drafts（草稿：人写出来的东西，删源作品不能连带删掉它）
+# ---------------------------------------------------------------------------
+
+DRAFT_STATUSES = ("draft", "published", "archived")
+"""草稿状态的合法取值。与 `models/draft.DraftStatus` 是同一份清单的两处定义
+（Python 层校验与 DB 层 CHECK），同源判据见 `_enum_check` 的 docstring，
+看护在 `tests/unit/storage/test_schema_types.py`。"""
+
+drafts_table = Table(
+    "drafts",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("title", _Text, nullable=False),
+    # 整篇正文入库而不是只存文件路径：草稿是**编辑中的**文本，转写稿才是落盘的产物。
+    Column("content", _Text, nullable=False),
+    # ON DELETE SET NULL 而不是 CASCADE：`content` 是人写出来的东西，
+    # 它的价值不依赖源作品还在不在。删一条作品换来一批草稿消失，
+    # 是这一层能造成的最贵的一次数据损失（与 `videos.creator_id` 同一口径）。
+    Column(
+        "source_video_id",
+        Integer,
+        ForeignKey("videos.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("status", String(16), nullable=False, server_default="draft"),
+    # 两个时间戳都有真用途：列表按 updated_at 排（最近在写哪篇），
+    # created_at 回答"这篇稿子搁了多久"。合成一列的话第一列就废了。
+    Column("created_at", UTCDateTime, nullable=False, default=_now),
+    Column("updated_at", UTCDateTime, nullable=False, default=_now, onupdate=_now),
+    _enum_check("status", "status_enum", DRAFT_STATUSES, nullable=False),
+    Index("idx_drafts_status", "status"),
+    Index("idx_drafts_updated", "updated_at"),
+)
+
+
+# ---------------------------------------------------------------------------
 # 表名 → Table 的映射（给 Alembic 漂移检查与 preflight 用）
 # ---------------------------------------------------------------------------
 
@@ -441,16 +499,23 @@ ALL_TABLES: tuple[Table, ...] = (
     transcripts_table,
     video_comments_table,
     video_metric_snapshots_table,
+    topics_table,
+    drafts_table,
     task_runs_table,
     task_events_table,
     manifests_table,
 )
 """建库与漂移看护读的这份清单。
 
-编号跟着 `data-model.md`：2.8-2.10 是 V2.2 预留的三张（今天没有表），
-所以评论与快照是 §2.11 / §2.12，不是接在 2.7 后面。
+编号跟着 `data-model.md`：§2.8 / §2.9（topics / drafts）与 §2.11 / §2.12（评论 / 快照）
+都在 V2.1 才落地，所以它们**排在 §2.7 manifests 之前**是刻意的 —— 清单顺序是
+"平台 → 内容域 → 选题/草稿 → 任务运行域"，不是 spec 的章节顺序。
+顺序变了 `test_run_migrations_creates_every_table` 也不会红（它比的是集合），
+真正盯着这份清单的是 `TABLE_NAMES` 那两条相等判据。
 
-V2.2 的 topics / drafts / feishu_sync_state 仍不在里面，它们的迁移和模型一起加
-（`data-model.md §2.8-§2.10`）。"""
+§2.10 `feishu_sync_state` 仍不在里面：飞书同步域（T6.x）没开工，
+建一张今天没有任何读写方的表就是 `docs/lessons.md` 反对的那种预建空列。
+§2.8 的第二张关联表 `video_topics` 同理不在 —— 选题与作品的连线由 V2.2 的分析层
+（T5.x 爆款拆解）来写，今天建它等于建一张永远 0 行的表。两条都记在 ADR-0021。"""
 
 TABLE_NAMES: frozenset[str] = frozenset(t.name for t in ALL_TABLES)

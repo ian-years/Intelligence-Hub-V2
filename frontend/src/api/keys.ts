@@ -14,6 +14,11 @@ export const keys = {
   video: (id: number) => ["videos", "detail", id] as const,
   transcript: (id: number) => ["videos", id, "transcript"] as const,
   tasks: ["tasks"] as const,
+  /** 选题与草稿（T5.5）。前缀分两半是刻意的：`["topics"]` 一次 invalidate 能把
+   *  列表与详情一起作废，`drafts` 同理；两者**不共享**前缀，因为改一条选题
+   *  不该让草稿列表重取（它们除了同一个页面之外没有关系）。 */
+  topics: (search?: string) => ["topics", search ?? null] as const,
+  drafts: (status?: string) => ["drafts", status ?? null] as const,
   taskSchema: (name: string) => ["tasks", name, "schema"] as const,
   runs: (status?: string) => ["runs", status ?? null] as const,
   run: (id: string) => ["runs", id] as const,

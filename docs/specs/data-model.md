@@ -299,7 +299,7 @@ CREATE TABLE video_metric_snapshots (
   于是 `video_ids_missing` 永远不再看这条作品 —— 一次失败的抓取换来一个永久盲点。
 - `videos` 那一行从此是"插入那一刻的读数"，历史在这一张表里。
 
-### 2.8 `topics`（V2.2 实施）
+### 2.8 `topics`（V2.2 T5.5 已实施，ADR-0021）
 
 ```sql
 CREATE TABLE topics (
@@ -316,7 +316,22 @@ CREATE TABLE video_topics (
 );
 ```
 
-### 2.9 `drafts`（V2.2 实施）
+**实施状态（2026-09-24，T5.5）—— 这一节里只落了第一张表**：
+
+- `topics` 已落（`storage/schema.py:topics_table`，Alembic 0004）。
+- `video_topics` **未落**。理由不是忘了：这一版没有任何一方会往里写
+  （选题与作品的连线是 T5.x 分析层的产出），建一张今天必然 0 行的表
+  就等于 §6 末尾那条判据反对的"给前端一个永远为空的字段"。
+  它的 DDL 留在这里不动，等写入方落地的那一格一起建（ADR-0021「决定三」）。
+- 实物与本节的 DDL 抄本有**一处表达方式不同**：`name` 的唯一性由具名唯一索引
+  `uq_topics_name` 实现，不是行内 `UNIQUE`。约束本身等价，
+  区别是行内 UNIQUE 在 SQLite 的 `sqlite_master` 里没有名字，
+  `downgrade()` drop 不掉（`schema.py:NAMING_CONVENTION` 的立起来理由）。
+  `creators` / `videos` / `video_comments` 三张表从第一天起就是同一个写法，本节是唯一的例外。
+- `name` 空白与首尾空格在**模型层**处理（`models/topic.py:TopicDraft`：空即拒、非空先 strip）。
+  库里没加 CHECK —— 那是本节 DDL 没有的东西，实现不偷偷加（AGENTS §6）。
+
+### 2.9 `drafts`（V2.2 T5.5 已实施，ADR-0021）
 
 ```sql
 CREATE TABLE drafts (
@@ -330,6 +345,15 @@ CREATE TABLE drafts (
     CHECK (status IN ('draft','published','archived'))
 );
 ```
+
+**实施状态（2026-09-24，T5.5）**：列、约束、默认值与本节逐字一致
+（`storage/schema.py:drafts_table`，Alembic 0004，CHECK 名 `ck_drafts_status_enum`）。
+两条实现侧的补充，都不改变本节的契约：
+
+- `title` / `content` 的"不许只有空白字符"在 Python 层判（`models/draft.py:assert_non_blank_text`，
+  POST 与 PATCH 两条路共用那一处）。NOT NULL 拦不住空格，而库里没有这一条 CHECK。
+- `updated_at` 由 `DraftRepository.update_fields()` 在每次字段级更新时刷新；
+  `created_at` 没有任何写入口（`DraftUpdatableFields` 里没有它）。
 
 ### 2.10 `feishu_sync_state`（V2.2 实施）
 

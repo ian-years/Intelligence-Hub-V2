@@ -94,6 +94,12 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>({ method: "PUT", ...withBody(body) }, path),
   patch: <T>(path: string, body?: unknown) =>
     request<T>({ method: "PATCH", ...withBody(body) }, path),
+  /** DELETE。本仓库第一个用它的地方是 T5.5 的选题/草稿（`/api/topics/{id}`、
+   *  `/api/drafts/{id}`）：那两个端点回 204 无 body，`request` 已经把 204 翻成
+   *  `undefined`，所以调用方拿到的是 `undefined`，**不许**去读它的字段。
+   *  默认类型参数写成 `undefined` 而不是 `void`：`void` 在赋值处会被当成
+   *  "可以忽略任何返回值"，于是一个忘了 `await` 的删除不会报错。 */
+  del: <T = undefined>(path: string) => request<T>({ method: "DELETE" }, path),
 };
 
 /** 给"点了就下载"的链接用的地址：**复用同一个 query 归一化**（空串与 null 不进 URL），

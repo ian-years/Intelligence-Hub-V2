@@ -39,11 +39,13 @@ from intelligence_hub_v2.errors import MigrationError, StorageError
 from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.storage.repositories.comments import VideoCommentRepository
 from intelligence_hub_v2.storage.repositories.creators import CreatorRepository
+from intelligence_hub_v2.storage.repositories.drafts import DraftRepository
 from intelligence_hub_v2.storage.repositories.events import EventRepository
 from intelligence_hub_v2.storage.repositories.manifests import ManifestRepository
 from intelligence_hub_v2.storage.repositories.metrics import MetricSnapshotRepository
 from intelligence_hub_v2.storage.repositories.platforms import PlatformRepository
 from intelligence_hub_v2.storage.repositories.task_runs import TaskRunRepository
+from intelligence_hub_v2.storage.repositories.topics import TopicRepository
 from intelligence_hub_v2.storage.repositories.transcripts import TranscriptRepository
 from intelligence_hub_v2.storage.repositories.videos import VideoRepository
 from intelligence_hub_v2.storage.schema import metadata
@@ -426,6 +428,14 @@ class SqliteStorage:
         return self._repositories.metrics
 
     @property
+    def topics(self) -> TopicRepository:
+        return self._repositories.topics
+
+    @property
+    def drafts(self) -> DraftRepository:
+        return self._repositories.drafts
+
+    @property
     def sessionmaker(self) -> async_sessionmaker[AsyncSession]:
         """给需要写自定义查询的调用方（分析层、迁移脚本）。"""
         return self._require_sessionmaker()
@@ -471,3 +481,5 @@ class _Repositories:
         self.manifests = ManifestRepository(session_factory)
         self.video_comments = VideoCommentRepository(session_factory)
         self.metrics = MetricSnapshotRepository(session_factory)
+        self.topics = TopicRepository(session_factory)
+        self.drafts = DraftRepository(session_factory)
