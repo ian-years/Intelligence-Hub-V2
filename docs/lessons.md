@@ -2332,6 +2332,34 @@ mock 就把 trigger 解析 / job 注册 / **executor 派发**整段跳过了，�
 
 ---
 
+### 经验：保存状态是**算出来的**，不是在 effect 里 setState 出来的
+
+**现象**：工坊页的自动保存第一版写成 `useEffect(() => { setState("dirty"); setTimeout(...) })`，
+`eslint --max-warnings=0` 直接两条 `react-hooks/set-state-in-effect` 错误。
+
+**根因**：这条规则不是洁癖。"dirty" 完全由 `(当前稿子, 上一次落库成功的那一份)` 决定，
+存成状态就有了第二个真相：渲染顺序、StrictMode 的双跑、effect 的执行时机都能让它与真值漂移一秒
+到几分钟。而这个仓库恰好反复栽在"第二处真相"上（三份配置快照、两份名单、两处默认值）。
+
+**解法**：`const dirty = isDirty(draft, saved) && !sameAs(draft, inFlight)`，effect 里**只**起定时器。
+`phase` 只留三档（`idle | saving | error`），全部由事件/回调路径设置。
+
+**判据**：任何"能从别的状态推出来的显示值"都不许进 state。写 `setState(x)` 之前先问
+"x 是不是某个纯函数的返回值" —— 是就调那个函数，别存它。
+（同一条纪律在 `Dashboard` 的 `stateOf(platform)`、`Settings` 的 `hasChanges(draft, base)` 上已经付过学费。）
+
+**看护**：`src/lib/workshop.spec.ts` 的 `isDirty / shouldAutosave` 那三条 +
+`src/pages/workshop.spec.tsx` 的"保存失败不显示已保存"那条。
+
+**另一件顺手学到的**：提词器那格第一版用 `split(/[。！？；
+]+/)` 断句，
+句号被 split 吃掉、"快！"到了界面上变成"快。" —— 那是把稿子的语气改了。
+改用 `match(/[^。！？；
+]+[。！？；]?/g)` 保留原标点。断句规则的唯一定义处在
+`lib/workshop.ts::promptLinesOf`，用例钉的是"每一句都以标点收尾且不改原标点"。
+
+---
+
 ### 经验：并行子代理会同时做同一件事，"谁拥有哪个目录"要在派活时划清
 
 **现象**：派出去的第二份 T4.6（B 站外部浏览器清单）落地时，`bilibili/adapter.py:320`

@@ -232,6 +232,11 @@
   详情页 `<video>` 与逐句时间轴跳转
 - **T6.6** · `/api/videos?sort=benchmark` 与博主页的「爆款回溯」面板
 - **T6.8** · `CollectParams.metrics_only`（V1"仅采集数据"的真形状）
+- **T4.7** · `pages/Workshop.tsx` 创作工坊：选对标 → 拆解与逐字稿（只读）→ 每 1.6 秒自动保存的
+  编辑器 → 四视图（正文 / 分镜 / 提词器 / 截图包）。派生规则与保存判据住在 `lib/workshop.ts`
+  （`beatsOf` / `promptLinesOf` / `shouldAutosave` / `isDirty`），`useAnalysis.ts` 是两个分析端点的
+  第一批消费方，`template_key` 那份名单由 `schema.spec.ts` 与请求体枚举双向核。
+  "截图包"那一格说的是"V2 没有这一步"，不是一个空网格
 
 ### Changed（同批）
 
