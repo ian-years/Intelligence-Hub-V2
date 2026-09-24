@@ -84,8 +84,12 @@ test-contracts:  ## 仅 L2 适配器契约测试
 test-real:  ## 真机烟雾测试（手动跑，要 cookie + 桥 + Chrome）
 	$(PYTEST) -m real_network -v
 
-e2e:  ## Playwright E2E（L6）
-	$(PLAYWRIGHT) test
+e2e:  ## Playwright E2E（L6，真 Chromium；适配器与外网全是替身）
+# 以前这一行是 `$(PLAYWRIGHT) test` —— 那是 **Node** 版 `@playwright/test` 的子命令，
+# 而这里装的是 Python 的 playwright（`pyproject.toml` 的 dev 依赖），它没有 `test`。
+# 于是 `make e2e` 从来没跑过任何东西却"看着是个 target"（`tests/e2e/` 到 T5.7 才是空的）。
+# 现在按本仓库的形状来：pytest + `sync_playwright`，标记 `e2e` 单独一档、CI 不跑。
+	$(PYTEST) -m e2e tests/e2e
 
 coverage:  ## 生成 HTML coverage 报告
 	$(PYTEST) --cov=src/intelligence_hub_v2 --cov=tools --cov-report=html --cov-report=term-missing

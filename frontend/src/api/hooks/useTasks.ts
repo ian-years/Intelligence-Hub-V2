@@ -34,10 +34,26 @@ export function useRunTask(name: string) {
   });
 }
 
+/** 有任务在跑时，运行历史隔这一会儿问一次。 */
+const RUNNING_POLL_MS = 1_000;
+
+/** 这一列里还有没有"正在跑"的行。纯函数是为了让那条判据能被单独测到（见 hooks.spec）。 */
+export function anyRunning(runs: readonly { status: string }[] | undefined): boolean {
+  return (runs ?? []).some((run) => run.status === "running");
+}
+
 export function useRuns(status?: string) {
   return useQuery({
     queryKey: keys.runs(status),
     queryFn: () => api.get<TaskRunRecord[]>("/tasks/runs", { status, limit: 50 }),
+    /** 有 running 就轮询，没有就不轮。
+     *
+     * 为什么不是"SSE 事件到了 invalidate 一次"：那一层已经有（`useTaskEvents` 驱动实时事件流
+     * 那一栏），但把 query-cache 的依赖塞进事件钩子里，三个页面都会跟着多一层隐式失效 ——
+     * 那条路更长。而**没有这一条**的症状是 T5.7 的 e2e 撞出来的：点完"跑一次"，
+     * 实时事件在滚，运行历史那一列永远停在"正在跑"，要刷新页面才认账。
+     * `useRunTask.onSuccess` 那一次 invalidate 只发生在提交当场，救不了后面。 */
+    refetchInterval: (query) => (anyRunning(query.state.data) ? RUNNING_POLL_MS : false),
   });
 }
 

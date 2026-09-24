@@ -12,7 +12,15 @@ import {
   useUnhideVideo,
   useVideos,
 } from "./hooks/useVideos";
-import { useCancelRun, useManifests, useRuns, useRunTask, useTasks } from "./hooks/useTasks";
+import {
+  anyRunning,
+  useCancelRun,
+  useManifests,
+  useRuns,
+  useRunTask,
+  useTasks,
+  type TaskRunRecord,
+} from "./hooks/useTasks";
 import { resolveRef } from "./json-schema";
 
 const seen: string[] = [];
@@ -260,5 +268,18 @@ describe("json-schema.resolveRef", () => {
     });
     expect(resolveRef(schema, { allOf: [{ $ref: "#/$defs/Missing" }] })).toBeNull();
     expect(resolveRef(schema, { type: "boolean" })).toBeNull();
+  });
+});
+
+describe("anyRunning（运行历史要不要继续轮询的唯一判据）", () => {
+  it("有一行 running 就要轮，全终态就停", () => {
+    expect(anyRunning([{ status: "running" } as TaskRunRecord])).toBe(true);
+    expect(
+      anyRunning([{ status: "success" } as TaskRunRecord, { status: "running" } as TaskRunRecord]),
+    ).toBe(true);
+    expect(anyRunning([{ status: "success" } as TaskRunRecord])).toBe(false);
+    expect(anyRunning([])).toBe(false);
+    // 还没拿到数据时不轮：不然首屏会一直问，而那一列本来就是空的
+    expect(anyRunning(undefined)).toBe(false);
   });
 });

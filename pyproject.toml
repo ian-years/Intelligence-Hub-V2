@@ -292,6 +292,14 @@ addopts = [
     # basetemp 钉在仓库内：见 .gitignore 那段注释与 AGENTS.md §4。
     # pytest 会**清空**这个目录再跑，所以它必须是 gitignore 的专用 scratch 目录。
     "--basetemp=.scratch/pytest",
+    # **默认不跑 e2e**。不只是"慢"：那一档起的是真 Chromium + 真 uvicorn 线程，
+    # Playwright 与 uvicorn 都会碰进程级的事件循环 policy，之后 pytest-asyncio 给每条
+    # async 用例建的 loop 就炸（2026-09-25 实测：裸跑 `pytest` 时 tests/integration
+    # 整片报 "Cannot run the event loop while another loop is running"）。
+    # 命令行上的 `-m` 会覆盖这一条（addopts 永远排在最前），所以 `make e2e` 照旧跑得动。
+    # 两个列表项而不是 `'-m "…"'`：那种写法会把引号一起交给 marker 解析器（当场爆炸）。
+    "-m",
+    "not real_network and not e2e",
 ]
 markers = [
     "real_network: 真机测试（CI 跳过，需 cookie + 桥 + Chrome）",
