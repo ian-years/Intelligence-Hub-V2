@@ -264,6 +264,9 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-fail-under=80",
+    # basetemp 钉在仓库内：见 .gitignore 那段注释与 AGENTS.md §4。
+    # pytest 会**清空**这个目录再跑，所以它必须是 gitignore 的专用 scratch 目录。
+    "--basetemp=.scratch/pytest",
 ]
 markers = [
     "real_network: 真机测试（CI 跳过，需 cookie + 桥 + Chrome）",

@@ -114,6 +114,14 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 2026-09-23 实测不成立）。没装 make 时照 `ci-local` 的 recipe 逐条直接跑，
 并且**自己打退出码** —— `make ci-local 2>&1 | tail -60` 报的是 `tail` 的 0。
 
+**所有 scratch 一律放仓库内的 `.scratch/`（E 盘），不许往 C: 的 `%TEMP%` 写。**
+本机 C: 只剩几个 G，而"顺手放 Temp"真出过事：一次验证用的假 V1 迁移把 4.5 GB
+拷进 `AppData/Local/Temp`（跨卷 hardlink 退 copy），把 C: 填到 100%。
+pytest 的默认 `tmp_path` 本来也落在 C: 的 `pytest-of-<user>`，一次全量跑攒 800 M ——
+现在 `addopts` 里钉了 `--basetemp=.scratch/pytest`，**默认就落在 E 盘**（pytest 每次会清空它）。
+自己写临时库/临时树时也用这个前缀：`INTELLIGENCE_HUB_DATA_DIR="$PWD/.scratch/<用例>"`、
+alembic 的空库 `.scratch/mig.sqlite3`。`--media-strategy` 那条相关判据在 `docs/lessons.md` 经验 52。
+
 **改了任何代码都要重启 `make dev`**：uvicorn `--reload` 只盯 `src/`，前端 Vite HMR 只盯 `frontend/src/`，配置文件改了要重启后端（运行时不监听文件变化，只通过 API 写）。
 
 ---

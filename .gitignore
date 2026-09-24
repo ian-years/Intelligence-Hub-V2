@@ -36,6 +36,12 @@ MANIFEST
 # === uv ===
 .uv/
 
+# === 本地 scratch（pytest basetemp、alembic 临时库、验证用的假 V1 树）===
+# **一律留在仓库目录里**：这台机器的 C: 只剩几个 G，而 pytest 默认的
+# tmp_path 落在 `%LOCALAPPDATA%\Temp\pytest-of-<user>`，一次全量跑能攒下 800 M。
+# 规则见 AGENTS.md §4。
+.scratch/
+
 # === pytest / coverage ===
 .pytest_cache/
 .coverage
