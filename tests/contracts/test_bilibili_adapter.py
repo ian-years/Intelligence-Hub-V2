@@ -923,14 +923,24 @@ def choose_lan(tracks: Sequence[Any]) -> str:
 
 
 def _reply_row(
-    cid: object = "111", *, message: str = "写得好", uname: str = "某人"
+    comment_id: object = "111", *, message: str = "写得好", uname: str = "某人"
 ) -> dict[str, Any]:
+    """一行评论，键名按**现网真响应**（`rpid_str` / `like`，2026-09-25 捕获）。
+
+    原来这里写的是 `idstr` 与 `like_count` —— 与 `parse_reply_rows` 一起编、一起自洽地绿，
+    真接口一来 100% 丢行（见 `docs/lessons.md` 那条「合成 fixture 会把猜测钉成契约」）。
+    键名的权威是 `tests/fixtures/bilibili/reply_page.json`，不是这份 helper。
+    """
     return {
-        "idstr": cid,
+        "rpid_str": str(comment_id),
+        "rpid": comment_id,
         "content": {"message": message},
         "member": {"uname": uname, "mid": 4242},
-        "like_count": 7,
+        "like": 7,
+        "rcount": 0,
         "ctime": 1_719_000_000,
+        "root": 0,
+        "parent": 0,
     }
 
 

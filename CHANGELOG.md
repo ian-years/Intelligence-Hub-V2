@@ -296,6 +296,38 @@
   `task-runner.md`（注册表那一格顺手对齐到今天的 13/9，原来停在 V2.0 的"12 里挑 6"）、
   `contract-tests.md §4.1`（新增那条通用契约）、ADR-0020 的"分期"改为已落
 
+### 真机（Phase 3 · 2026-09-25 晚，用户登录后当场跑）
+
+- **T3.1 抖音真采通**：`add_creator` → `douyin_collect` 落 2 条，`downloaded=2 / failed=0`，
+  两条真 `media.mp4`（57.7 MB / 37.4 MB，`ffprobe` 认出 h264+aac）。§7.2 第一次在真数据上成立：
+  `media_source` 全 `page_play_url`，`yt_dlp_error` 留着阶梯两档各自的 exit 1 原文
+- **T3.4 转写闭环通**：`speech-clean.txt` 1402 字 / 35 句，`engine=sherpa_sense_voice`、
+  `summary_method=local-extractive`、`content_summary` 有值（T1.2b 两列第一次吃真数据）；
+  权重经 `SENSEVOICE_MODEL_DIR` 指 V1 目录，只读、不拷 233 MB
+- **截图包在真 ffmpeg + 真媒体上验完**：4 帧全出（178–281 KB）、版本串带回
+  `ffmpeg version 9.0.1-full_build`、第二次 `cached=true` 且一帧不重截、
+  **四帧 sha256 互不相同**（真 seek 的证据，替身层给不出这一条）
+- **T3.5 live 迁移执行完**：dry-run 与真跑逐格对账（`videos=19 + 已存在跳过=2 = 21`、
+  `reference=21`、`missing=0`、exit 0）；按计划钉的 `--media-strategy reference`，
+  没自作主张换成更省空间的 `hardlink`
+- **B站 读数的真机一路已通**（顺路）：`fetch_metrics` 打真 `view`，
+  `view=1428/like=49/reply=11/share=4` 落进 `72h` 快照，`coin`/`favorite` 进 metadata
+
+### Fixed（真机那一批挖出来的）
+
+- **B站 评论抓取从来没有成功过一次**：`parse_reply_rows` 读的身份键 `idstr` 与点赞键
+  `like_count` **在真响应里都不存在**（现网是 `rpid_str`/`rpid` 与 `like`）—— 于是每一行都
+  "没身份"而被正当规则丢掉，症状是 `comments_new: 0` 且 `failures` 为空，
+  而同一条作品的快照里 `comment_count` 明明写着 11。键名是从合成 fixture 来的，
+  所以"实现"与"看护它的测试"共享同一个错误、一起全绿。修完真机数字：`comments_new=3`，
+  再跑一次 `0 新增 / 3 更新`
+- 同一处的 `metadata_json` 读的 `liked`/`reply_tag`/`floor` 三个键也都不存在
+  （那一列因此永远写成 `{}`），换成真有的 `up_action`/`root`/`parent`/`invisible`；
+  `_author_id` 按 V1 生产代码的顺序补上顶层 `mid_str`/`mid`
+- 新增两道看护，各自红什么都量过：① 真捕获 fixture（`tests/fixtures/bilibili/reply_page.json`）
+  + "三行必须出三条草稿"；② **接口给了 N 行而解析出 0 条 → 抛**（"这是接口换了字段名，
+  不是这条作品没人评论"）。变异实测：键名改回旧的 → 8 条红（含①）；只拆② → 恰好 1 条红
+
 ### Fixed（同日补完）
 
 - `tests/e2e/conftest._stub_adapter` 造的产物写的是 `media_source="e2e_stub"`，

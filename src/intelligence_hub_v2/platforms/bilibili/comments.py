@@ -102,11 +102,19 @@ def _as_aware(value: object) -> datetime | None:
 def parse_reply_rows(rows: object) -> list[VideoCommentDraft]:
     """接口 `data.replies` → 草稿列表。
 
+    **键名以现网真响应为准**（`tests/fixtures/bilibili/reply_page.json`，2026-09-25 捕获）：
+    身份是 `rpid_str`（字符串形状，优先）或 `rpid`（同一值的 int 形状），点赞是 `like`，
+    楼中楼条数是 `rcount`。这里曾经读的是 `idstr` 与 `like_count` —— **那两个键名是编的**，
+    于是真接口一来每条行都没身份、全被丢掉，症状是"抓到 0 条评论"而接口 `code=0`，
+    同一条作品的 `stat.reply` 明明写着 11。合成 fixture 挡不住它，因为它自己就是照
+    那份猜测写的（这一条已进 `docs/lessons.md`）。
+
     两条判据分开，因为要做的动作不同：
-    - **一条评论没有 `id`/`idstr` → 整条丢掉并计数**。它进不了唯一键（`ADR-0020` 决定一
-      第 1 条会把后面的没 id 评论全撞上），所以宁可不收。
+    - **一条评论没有 `rpid_str`/`rpid` → 整条丢掉并计数**。它进不了唯一键（`ADR-0020`
+      决定一第 1 条会把后面的没 id 评论全撞上），所以宁可不收。
+      "整批都没收"是另一件事，由 `fetch_top_level_comments` 那道闸响出来。
     - 内容空（被删/被折叠）→ **保留**，它是"这条作品下有 N 条评论"里的一条。
-      丢掉会让计数与平台的 `data.cursor.all_count` 对不上，那个差值是有信息量的。
+      丢掉会让计数与平台的 `data.page.count` 对不上，那个差值是有信息量的。
 
     返回的顺序就是接口给的顺序（`sort` 由调用方决定，这里不重排 —— 重排等于替调用方
     做了一个它没做的决定）。
@@ -117,7 +125,7 @@ def parse_reply_rows(rows: object) -> list[VideoCommentDraft]:
     for item in rows:
         if not isinstance(item, dict):
             continue
-        comment_id = str(item.get("idstr") or item.get("id") or "").strip()
+        comment_id = str(item.get("rpid_str") or item.get("rpid") or "").strip()
         if not comment_id:
             continue
         member = _dict_of(item.get("member"))
@@ -126,9 +134,9 @@ def parse_reply_rows(rows: object) -> list[VideoCommentDraft]:
                 platform=PLATFORM,
                 platform_comment_id=comment_id,
                 content=_plain_text(item.get("content")),
-                author_platform_id=_author_id(member),
+                author_platform_id=_author_id(member, item),
                 author_name=str(member.get("uname") or ""),
-                like_count=_as_int(item.get("like_count")),
+                like_count=_as_int(item.get("like")),
                 reply_count=_as_int(item.get("rcount")),
                 published_at=_as_aware(item.get("ctime")),
                 metadata_json=_metadata_of(item),
@@ -148,23 +156,41 @@ def _plain_text(content: object) -> str:
     return str(content or "")
 
 
-def _author_id(member: dict[str, Any]) -> str | None:
-    """评论作者的 mid。`mid` 与 `userid` 两种键都见过，`mid` 优先（它是平台内稳定身份）。"""
-    mid = member.get("mid")
-    if mid is not None and str(mid).strip():
-        return str(mid).strip()
-    user_id = member.get("userid")
-    return str(user_id).strip() if str(user_id or "").strip() else None
+def _author_id(member: dict[str, Any], item: dict[str, Any]) -> str | None:
+    """评论作者的 mid。**顶层 `mid`/`mid_str` 优先，`member.mid` 兜底**（V1 生产代码同序）。
+
+    顶层那两个是真响应里有的（`mid_str` 是字符串形状，避开 19 位 mid 过 int 的写法分歧），
+    而 `member` 里那一份在某些折叠行上会缺 —— 只读一处的话作者身份会静默变 NULL，
+    而"这条评论是谁说的"一旦为 NULL，跨平台身份归并那一族就再也接不上了。
+    """
+    for source in (item.get("mid_str"), item.get("mid"), member.get("mid"), member.get("userid")):
+        if source is not None and str(source).strip():
+            return str(source).strip()
+    return None
 
 
 def _metadata_of(item: dict[str, Any]) -> str:
-    """留几条"平台说了但我们没有列去放"的信息：是否点赞、是否主楼、回复类型。"""
-    payload = {
-        "liked": _as_int(item.get("liked")),
-        "is_author": _as_int(item.get("reply_tag")),
-        "floor": _as_int(item.get("floor")),
-    }
-    return json.dumps({k: v for k, v in payload.items() if v is not None}, sort_keys=True)
+    """留几条"平台说了但我们没有列去放"的信息，**全部取现网真有的键**。
+
+    - `up_action`：UP 主是否回复/点赞过这条（真响应里是个对象，不是布尔）。
+      它的价值是"这条是 UP 亲自回过的"，看热评排序时想跳过它跳不过。
+    - `root` / `parent`：楼中楼归属。顶层列表里 `root=0` 就是主楼，
+      但折叠上来的子行不是 —— 没有这两项，"11 条"与"库里 3 条"的差值解释不了。
+    - `invisible`：平台标了不可见（删/折叠），仍然保留这一条，理由同 docstring 第二条。
+
+    原来这三项写的是 `liked` / `reply_tag` / `floor` —— 现网**一个都不存在**，
+    于是这一列永远写成 `{}`，看起来像"没有附加信息"，实际是字段名错了。
+    只留有值的几项；全空时留 `{}` 而不是 `null`（读的一侧两种写法会炸）。
+    """
+    up_action = item.get("up_action")
+    payload: dict[str, object] = {}
+    if isinstance(up_action, dict) and any(up_action.values()):
+        payload["up_action"] = {str(k): bool(v) for k, v in sorted(up_action.items())}
+    for key in ("root", "parent", "invisible"):
+        value = item.get(key)
+        if value not in (None, 0, "", False):
+            payload[key] = value
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 async def fetch_top_level_comments(
@@ -188,6 +214,8 @@ async def fetch_top_level_comments(
     page_size = max(1, min(MAX_PAGE_SIZE, limit))
     drafts: list[VideoCommentDraft] = []
     pages: list[dict[str, Any]] = []
+    rows_seen = 0
+    # 接口给过的行数总和（不论能不能解析）。它只为下面那道"全丢"闸存在。
     for page_no in range(1, MAX_PAGES + 1):
         payload = await _get_page(
             http,
@@ -210,9 +238,21 @@ async def fetch_top_level_comments(
                 else 0,
             }
         )
+        rows_seen += pages[-1]["rows"]
         drafts.extend(parse_reply_rows(data.get("replies")))
         if not pages[-1]["rows"] or len(drafts) >= limit:
             break
+    if rows_seen and not drafts:
+        # **接口给了行、我们一条都没认出身份 → 这是解析器坏了，不是"这条作品没评论"。**
+        # 少了这道闸，形状就是 2026-09-25 那次：真响应的键名从 `idstr` 变成 `rpid_str`
+        # 之后，每一批行都被静默丢掉，清单上只留 `comments_new: 0` 且 failures 为空 ——
+        # 而同一轮写的快照里 `comment_count` 明明是 11。AGENTS.md §1.3 禁的就是这个形状。
+        msg = (
+            f"评论接口给了 {rows_seen} 行，但一条都没有可入库的身份"
+            f"（`rpid_str`/`rpid` 全为空，bvid={bvid}）："
+            "这是接口换了字段名，不是这条作品没人评论"
+        )
+        raise CommentApiError(PLATFORM, "comment", msg)
     return drafts[:limit], pages
 
 

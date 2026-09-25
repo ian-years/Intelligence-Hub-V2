@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -29,6 +30,8 @@ from intelligence_hub_v2.platforms.bilibili.comments import (
 )
 from intelligence_hub_v2.storage.db import SqliteStorage
 
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "bilibili"
+
 pytestmark = pytest.mark.integration
 
 
@@ -41,13 +44,31 @@ def _row(
     like: object = 7,
     ctime: object = 1_719_000_000,
 ) -> dict[str, Any]:
-    return {
-        "idstr": comment_id,
+    """一行评论，**按 2026-09-25 现网真响应的键名写**。
+
+    这里原来是 `"idstr"` + `"like_count"` —— 那两个键名是**编的**（真接口给的是
+    `rpid`/`rpid_str` 与 `like`）。合成 fixture 把猜测钉成了契约：解析器读编的键、
+    用例喂编的键，两边自洽地全绿，而真接口一来就 100% 丢行。
+    现在这份的键名以 `tests/fixtures/bilibili/reply_page.json`（真捕获）为准。
+
+    `comment_id=None` 与 `""` 要落成**空串**而不是 `"None"`：`str(None)` 是个非空字符串，
+    用它当 id 等于替"没有身份的那一行"编一个身份，而这一族用例的存在理由就是
+    "没身份的行必须被丢掉"（第一版就栽在这里，症状是"该丢的没丢"）。
+    """
+    sid = "" if comment_id is None else str(comment_id)
+    row: dict[str, Any] = {
+        "rpid": int(sid) if sid.isdigit() else sid,
+        "rpid_str": sid,
         "content": {"message": content},
         "member": {"uname": uname, "mid": mid},
-        "like_count": like,
+        "like": like,
+        "rcount": 0,
         "ctime": ctime,
+        "root": 0,
+        "parent": 0,
+        "up_action": {"like": False, "reply": False},
     }
+    return row
 
 
 def _transport(pages: list[dict[str, Any]]) -> tuple[httpx.AsyncClient, list[str]]:
@@ -82,7 +103,7 @@ def test_a_row_without_an_id_is_dropped_and_the_rest_survive() -> None:
     挡不住"顺手把没有 id 的也收了" —— 而那正是会撞唯一键的那一类（ADR-0020 决定一）。
     """
     rows = [_row("a"), _row(""), _row(None), _row("b"), {"content": {"message": "没身份"}}]
-    with_id = sum(1 for item in rows if str(item.get("idstr") or "").strip())
+    with_id = sum(1 for item in rows if str(item.get("rpid_str") or "").strip())
     drafts = parse_reply_rows(rows)
     assert len(drafts) == with_id == 2
 
@@ -95,8 +116,8 @@ def test_the_platform_s_two_content_shapes_both_land_as_plaintext() -> None:
     """
     drafts = parse_reply_rows(
         [
-            {"idstr": "1", "content": {"message": "对象形状"}},
-            {"idstr": "2", "content": "字符串形状"},
+            {"rpid_str": "1", "content": {"message": "对象形状"}},
+            {"rpid_str": "2", "content": "字符串形状"},
         ]
     )
     assert [item.content for item in drafts] == ["对象形状", "字符串形状"]
@@ -104,9 +125,10 @@ def test_the_platform_s_two_content_shapes_both_land_as_plaintext() -> None:
 
 def test_a_missing_count_stays_none_and_does_not_become_zero() -> None:
     """ "平台没回这个字段"与"这个字段是 0"是两个答案。"""
-    drafts = parse_reply_rows([{"idstr": "1", "content": "x", "like_count": 0}])
+    # 键名是 `like`（真响应），不是 `like_count`：读错键的 symptoms 是"永远 None"。
+    drafts = parse_reply_rows([{"rpid_str": "1", "content": "x", "like": 0}])
     assert drafts[0].like_count == 0
-    without = parse_reply_rows([{"idstr": "2", "content": "x"}])
+    without = parse_reply_rows([{"rpid_str": "2", "content": "x"}])
     assert without[0].like_count is None
     assert without[0].reply_count is None
 
@@ -177,6 +199,42 @@ async def test_it_stops_paging_once_a_page_returns_nothing() -> None:
         drafts, pages = await fetch_top_level_comments(client, aid="1", bvid="BV1xx", limit=50)
     assert [item.platform_comment_id for item in drafts] == ["a"]
     assert len(seen) == len(pages) == 2
+
+
+def test_the_real_reply_payload_produces_real_drafts() -> None:
+    """现网真响应（`reply_page.json`，2026-09-25 捕获）→ 三条草稿，身份是 `rpid_str`。
+
+    这一条是那个 bug 的直接看护：真响应的键名是 `rpid`/`rpid_str`/`like`，
+    解析器读错键不会红在语法上、只会红在这里 —— 所以**必须有一份真捕获**，
+    合成件挡不住（它自己就是照错的键名编的）。
+    断言写成"与 fixture 里的行数/值逐项相等"，不写死数字：换一份捕获它还在看同一件事。
+    """
+    payload = json.loads((FIXTURES / "reply_page.json").read_text(encoding="utf-8"))
+    rows = payload["data"]["replies"]
+    drafts = parse_reply_rows(rows)
+
+    assert len(drafts) == len(rows) == 3, "真响应三行、草稿三条，一条都不许丢"
+    assert [d.platform_comment_id for d in drafts] == [str(r["rpid_str"]) for r in rows]
+    assert [d.like_count for d in drafts] == [r["like"] for r in rows]
+    assert all(d.content.strip() for d in drafts), "正文要落在 content.message，不是空串"
+    assert all(d.author_name for d in drafts)
+    assert drafts[0].published_at is not None and drafts[0].published_at.tzinfo is not None
+
+
+async def test_a_page_whose_rows_all_lack_an_identity_is_a_failure_not_a_zero() -> None:
+    """接口给了行、我们一条身份都认不出来 → **抛**，不许回"0 条，一切正常"。
+
+    这一条就是那个 bug 的第二次机会。原来的形状是：行有 3 条、草稿 0 条、
+    清单上 `comments_new: 0` 且 failures 为空 —— 而同一轮的 stat 明明写着 11 条评论。
+    那是 AGENTS.md §1.3 说的"看起来在跑"：唯一的处置是把这种"全丢"变成一条响的失败。
+    """
+    rows = [{"content": {"message": "有正文但没身份"}, "like": 0} for _ in range(3)]
+    client, _seen = _transport([{"code": 0, "data": {"replies": rows, "page": {"count": 3}}}])
+    async with client:
+        with pytest.raises(CommentApiError) as caught:
+            await fetch_top_level_comments(client, aid="1", bvid="BV1xx", limit=5)
+    text = str(caught.value)
+    assert "3" in text, f"要把丢掉的行数说出去：{text}"
 
 
 # --------------------------------------------------------------------------- #
@@ -260,5 +318,7 @@ def test_the_metadata_column_only_keeps_what_has_a_purpose() -> None:
     drafts = parse_reply_rows([_row("1")])
     payload = json.loads(drafts[0].metadata_json)
     assert isinstance(payload, dict)
-    empty = parse_reply_rows([{"idstr": "2", "content": "x"}])
+    # 只有身份与正文的一行：现网的 `up_action` 全 False、root/parent 都是 0
+    # → 一个都不留，而必须是 `{}` 不是 `null`。
+    empty = parse_reply_rows([{"rpid_str": "2", "content": "x", "up_action": {"like": False}}])
     assert json.loads(empty[0].metadata_json) == {}

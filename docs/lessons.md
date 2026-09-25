@@ -2485,6 +2485,64 @@ policy 干净、`_local._loop` 干净、没有循环真在跑 —— 三样全�
 
 ---
 
+### 经验：合成 fixture 会把猜测钉成契约——B站 评论的身份键名是编的，真接口一来 100% 丢行
+
+**现象**（2026-09-25，Phase 3 第一次真跑 `enrich_metrics`）：一条 B站 作品同一轮写的快照里
+`comment_count = 11`，而 `video_comments` 落库 **0 行**；任务 `status=success`、
+`comments_new: 0`、`failures: []`。**没有任何一处报错。**
+
+**根因**：`parse_reply_rows` 取身份用的是 `item.get("idstr") or item.get("id")`，
+点赞用 `like_count`。真响应（`x/v2/reply`，2026-09-25 本机匿名捕获）里
+**这两个键名都不存在** —— 身份在 `rpid_str` / `rpid`，点赞在 `like`。
+于是每一行都"没有身份"→ 被"没身份就不收"那条正当规则丢掉 → 0 条。
+键名是从哪来的？**从合成 fixture 来的**：`tests/integration/test_bili_comments.py` 里的
+`_row()` 造的就是 `idstr`/`like_count`，解析器读同一份编出来的形状，
+于是"实现"和"看护它的测试"**共享同一个错误**，全绿。
+同一段代码从 T4.1 落地起就没真跑过一次，因为这一路唯一的调用方（`enrich_metrics`）
+也从来没在真数据上跑过。
+（V1 生产代码 `normalize_reply()` 用的正是 `reply.get("rpid")` —— 答案一直在隔壁仓库里。）
+
+**解法**：
+1. 键名全部改成真响应的（`rpid_str` 优先、`rpid` 兜底；`like`；`rcount`）；
+   `_author_id` 也按 V1 的顺序补上顶层 `mid_str`/`mid`。
+2. `_metadata_of` 原来读的 `liked`/`reply_tag`/`floor` 三个键**一个都不存在**
+   （所以那一列永远写成 `{}`，看起来像"没有附加信息"），换成真有的
+   `up_action`/`root`/`parent`/`invisible`。
+3. 补一份**真捕获** fixture（`tests/fixtures/bilibili/reply_page.json`），并加一条
+   "真响应三行 → 草稿三条，逐项与 fixture 相等"的用例 —— 合成件挡不住键名漂移，
+   因为它自己就是漂移的来源。
+4. 加那道**响亮失败**的闸：接口给了 N 行而解析出 0 条草稿 → 抛
+   `CommentApiError`，消息带上 N 与 bvid，明说"这是接口换了字段名，不是这条作品没人评论"。
+   只修键名是不够的：下一次再漂移，症状还是一句"0 条，一切正常"。
+
+**判据**：
+- **凡是"对面说了算"的形状（第三方接口的字段名），看护它的用例里至少要有一份真捕获。**
+  合成 fixture 可以补充边界（空 id、脏值、被删行），但不能是唯一的一份 ——
+  否则测试证明的是"代码与我的想象一致"。本仓库对这条早有自觉（B站 那批 fixture 的
+  `_comment` 就写了"没取到真样本"），这次是在**评论那一路没做到**。
+- "0 条结果"必须能区分三种事实：平台真的没有 / 我们认不出来 / 我们没问。
+  前两种之间没有一道闸，就是一种假绿。
+- 修完之后**当场做两次变异**，两次各抓一道闸（各红什么、各绿什么是量出来的）：
+  1. 把身份键名改回 `idstr` → **8 条用例红**，其中包含那条真-fixture 用例
+     （红在"三行只解析出 0 条"）。而那条"全丢必须响"的用例**反而是绿的** ——
+     这不是漏洞，是它的正确行为：键名错的时候"全丢"这个事实确实被闸接住了。
+  2. 只把闸拆掉（`if False and rows_seen ...`）→ **恰好 1 条红**，就是那条闸自己的用例。
+  两道闸各管一段：真-fixture 用例管"键名对不对"，闸管"下一次漂移别再静默"。
+  只写其中一道都留了一个方向没人看。
+- **改完当天它就抓到了第二处**：全量跑红了一条
+  `test_bilibili_adapter.py::TestCommentsAndReadings::test_comments_ask_view_first_...` ——
+  那个文件里另有一份合成 `_reply_row`，也写着 `idstr`/`like_count`。
+  也就是说**同一个编造的形状在这一批测试里存在过两份**，第一份修完，第二份立刻被真解析器
+  顶出来。这条不是"运气好又发现一个"，而是：一处编造的键名通常不会只有一处，
+  因为写第二份的人参照的就是第一份。 grep 键名（`idstr` / `like_count`）比"再检查一遍"可靠。
+
+**看护**：`tests/integration/test_bili_comments.py::test_the_real_reply_payload_produces_real_drafts`
+与 `::test_a_page_whose_rows_all_lack_an_identity_is_a_failure_not_a_zero`。
+真机一侧的数字（`comments_new: 3` → 第二次 `0 新增 / 3 更新`）记在
+`docs/progress/2026-09-25.md` §9。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

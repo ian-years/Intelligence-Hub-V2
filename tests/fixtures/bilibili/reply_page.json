@@ -1,0 +1,222 @@
+{
+  "_comment": "2026-09-25 本机匿名打 api.bilibili.com/x/v2/reply 的真响应，裁过：留 _KEEP_ROW 那些键，content.message 截到 60 字并另存 length。顶层 aid 与 bvid 由 _meta 记（真响应里没有，是我们从 view 接口拿的）。评论正文与昵称是平台上公开的外部用户内容，刻意保留真文本而不是编一份 —— 这一份的存在理由就是键名不能凭印象。",
+  "_meta": {
+    "aid": 117308072724407,
+    "bvid": "BV1Jthi6UEvq",
+    "sort": 2,
+    "ps": 3,
+    "captured_at": "2026-09-25"
+  },
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": {
+    "page": {
+      "num": 1,
+      "size": 3,
+      "count": 11,
+      "acount": 11
+    },
+    "replies": [
+      {
+        "rpid": 318209224272,
+        "rpid_str": "318209224272",
+        "oid": 117308072724407,
+        "type": 1,
+        "mid": 3706959318485732,
+        "mid_str": "3706959318485732",
+        "root": 0,
+        "parent": 0,
+        "dialog": 0,
+        "count": 1,
+        "rcount": 1,
+        "like": 3,
+        "ctime": 1790045455,
+        "attr": 514,
+        "state": 0,
+        "invisible": false,
+        "up_action": {
+          "like": false,
+          "reply": true
+        },
+        "member": {
+          "mid": "3706959318485732",
+          "uname": "吴恩达Agents",
+          "sign": "助力技术人的每一次成长｜提供晚间免费直播课！欢迎咨询：人工智能基础课程/大模型课程/论文发表"
+        },
+        "content": {
+          "message": "[蹲蹲]本视频笔记/大模型入门教程/学习大纲/全套面试真题都整理在这里啦：\n请[热词系列_三连]自取：https://w",
+          "length": 115
+        },
+        "replies": [
+          {
+            "rpid": 318209307088,
+            "rpid_str": "318209307088",
+            "oid": 117308072724407,
+            "type": 1,
+            "mid": 3706959318485732,
+            "mid_str": "3706959318485732",
+            "root": 318209224272,
+            "parent": 318209224272,
+            "dialog": 318209307088,
+            "count": 0,
+            "rcount": 0,
+            "like": 1,
+            "ctime": 1790045472,
+            "attr": 0,
+            "state": 0,
+            "invisible": false,
+            "up_action": {
+              "like": false,
+              "reply": false
+            },
+            "member": {
+              "mid": "3706959318485732",
+              "uname": "吴恩达Agents",
+              "sign": "助力技术人的每一次成长｜提供晚间免费直播课！欢迎咨询：人工智能基础课程/大模型课程/论文发表"
+            },
+            "content": {
+              "message": "[打call][打call]希望能帮助到大家呀",
+              "length": 23
+            },
+            "replies": []
+          }
+        ]
+      },
+      {
+        "rpid": 318371436848,
+        "rpid_str": "318371436848",
+        "oid": 117308072724407,
+        "type": 1,
+        "mid": 3546723653782003,
+        "mid_str": "3546723653782003",
+        "root": 0,
+        "parent": 0,
+        "dialog": 0,
+        "count": 1,
+        "rcount": 1,
+        "like": 1,
+        "ctime": 1790175721,
+        "attr": 768,
+        "state": 0,
+        "invisible": false,
+        "up_action": {
+          "like": true,
+          "reply": true
+        },
+        "member": {
+          "mid": "3546723653782003",
+          "uname": "bili_48781415067",
+          "sign": ""
+        },
+        "content": {
+          "message": "已经关注了",
+          "length": 5
+        },
+        "replies": [
+          {
+            "rpid": 318399580016,
+            "rpid_str": "318399580016",
+            "oid": 117308072724407,
+            "type": 1,
+            "mid": 3706959318485732,
+            "mid_str": "3706959318485732",
+            "root": 318371436848,
+            "parent": 318371436848,
+            "dialog": 318399580016,
+            "count": 0,
+            "rcount": 0,
+            "like": 0,
+            "ctime": 1790212619,
+            "attr": 0,
+            "state": 0,
+            "invisible": false,
+            "up_action": {
+              "like": false,
+              "reply": false
+            },
+            "member": {
+              "mid": "3706959318485732",
+              "uname": "吴恩达Agents",
+              "sign": "助力技术人的每一次成长｜提供晚间免费直播课！欢迎咨询：人工智能基础课程/大模型课程/论文发表"
+            },
+            "content": {
+              "message": "好的，已丝信",
+              "length": 6
+            },
+            "replies": []
+          }
+        ]
+      },
+      {
+        "rpid": 318197968032,
+        "rpid_str": "318197968032",
+        "oid": 117308072724407,
+        "type": 1,
+        "mid": 487154221,
+        "mid_str": "487154221",
+        "root": 0,
+        "parent": 0,
+        "dialog": 0,
+        "count": 1,
+        "rcount": 1,
+        "like": 1,
+        "ctime": 1790034494,
+        "attr": 768,
+        "state": 0,
+        "invisible": false,
+        "up_action": {
+          "like": true,
+          "reply": true
+        },
+        "member": {
+          "mid": "487154221",
+          "uname": "果儿爸09",
+          "sign": ""
+        },
+        "content": {
+          "message": "已关注，学习",
+          "length": 6
+        },
+        "replies": [
+          {
+            "rpid": 318204732544,
+            "rpid_str": "318204732544",
+            "oid": 117308072724407,
+            "type": 1,
+            "mid": 3706959318485732,
+            "mid_str": "3706959318485732",
+            "root": 318197968032,
+            "parent": 318197968032,
+            "dialog": 318204732544,
+            "count": 0,
+            "rcount": 0,
+            "like": 0,
+            "ctime": 1790041573,
+            "attr": 0,
+            "state": 0,
+            "invisible": false,
+            "up_action": {
+              "like": false,
+              "reply": false
+            },
+            "member": {
+              "mid": "3706959318485732",
+              "uname": "吴恩达Agents",
+              "sign": "助力技术人的每一次成长｜提供晚间免费直播课！欢迎咨询：人工智能基础课程/大模型课程/论文发表"
+            },
+            "content": {
+              "message": "右上角已丝信，你去看看哦[抱拳]",
+              "length": 16
+            },
+            "replies": []
+          }
+        ]
+      }
+    ],
+    "top": null,
+    "upper": {
+      "mid": 3706959318485732
+    }
+  }
+}
