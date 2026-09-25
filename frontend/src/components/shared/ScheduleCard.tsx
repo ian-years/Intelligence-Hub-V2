@@ -115,6 +115,16 @@ function Editor({ status, draft, onDraft, save, run }: EditorProps): JSX.Element
             名单里的平台都被关掉了，所以这次一个都不排：{status.skipped_platforms.join("、")}
           </p>
         )}
+        {/* 另一种"一条都不排"：名单是空的（= 所有启用的平台）而**总闸**关着（ADR-0025）。
+            这一句必须单独有，因为上面那一支在这里不成立 —— `collect_platforms` 是空的、
+            `skipped_platforms` 也是空的，于是界面会显示"cron 08:00，下次明天早上"
+            而一家都不会跑。规矩 2 说的就是这一格：静默少排平台。 */}
+        {!status.master_enabled && (
+          <p className="memphis-border mt-1 border-ink-black bg-lemon-yellow p-2 text-body-sm">
+            平台总闸现在是关着的，所以四家一家都不排 —— 与这一栏的 cron 无关。
+            去上面的「平台总闸」那一格打开。
+          </p>
+        )}
         <ul className="flex flex-wrap gap-4">
           {listed.map((platform) => (
             <li key={platform} className="flex items-center gap-2 text-body-md">

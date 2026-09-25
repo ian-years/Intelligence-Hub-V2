@@ -244,6 +244,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform-control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Platform Control
+         * @description 四家共用的那一个总闸。
+         */
+        get: operations["get_platform_control_api_platform_control_get"];
+        /**
+         * Update Platform Control
+         * @description 写 `app.yaml` 的 `platform_control` 段 → 当场生效 → 重排采集 job → 发事件。
+         *
+         *     与两条平台配置 PUT 同一条纪律：**运行时不听文件变化**，所以"生效"必须显式做。
+         *     这里比它们少一步：没有需要推的快照 —— 注册表拿的是总闸的**闭包**、
+         *     调度器与 runner 握着的是同一个 `AppConfig` 实例，而 `write_platform_control`
+         *     原地换的就是那个实例上的字段（换指针会让没跟着换的持有者继续用旧值，
+         *     症状是"设置页说总闸已开，任务列表还是空的"）。
+         *
+         *     重排采集 job 必须在写盘**之后**：`reschedule_collect_jobs` 读的就是那份配置。
+         */
+        put: operations["update_platform_control_api_platform_control_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platforms": {
         parameters: {
             query?: never;
@@ -391,7 +423,7 @@ export interface paths {
         };
         /**
          * List Tasks
-         * @description 当前可运行的任务（平台开关 + `implemented` 过滤后）。
+         * @description 当前可运行的任务（平台开关 + 总闸 + `implemented` 过滤后）。
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -1191,8 +1223,40 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** PlatformControlStatus */
+        PlatformControlStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /** Shadowed By Env */
+            shadowed_by_env?: string[];
+        };
+        /**
+         * PlatformControlUpdate
+         * @description PUT 的请求体。只有一个字段，所以不搞 `exclude_unset` 那套"没写的保持原值" ——
+         *     那套是为了一张表里多个字段准备的，这里只会让人以为可以省略。
+         */
+        PlatformControlUpdate: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** PlatformControlUpdateResponse */
+        PlatformControlUpdateResponse: {
+            /** Changed Fields */
+            changed_fields?: string[];
+            platform_control: components["schemas"]["PlatformControlStatus"];
+            /**
+             * Requires Restart
+             * @default false
+             */
+            requires_restart: boolean;
+        };
         /** PlatformSummary */
         PlatformSummary: {
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "available" | "own_off" | "master_off" | "absent";
             /** Display Name */
             display_name: string;
             /** Enabled */
@@ -1210,6 +1274,11 @@ export interface components {
         };
         /** PlatformsResponse */
         PlatformsResponse: {
+            /**
+             * Master Enabled
+             * @default true
+             */
+            master_enabled: boolean;
             /** Platforms */
             platforms: components["schemas"]["PlatformSummary"][];
         };
@@ -1253,6 +1322,11 @@ export interface components {
             effective_platforms?: string[];
             /** Jobs */
             jobs?: components["schemas"]["CollectJobInfo"][];
+            /**
+             * Master Enabled
+             * @default true
+             */
+            master_enabled: boolean;
             /** Scheduler Enabled */
             scheduler_enabled: boolean;
             /**
@@ -2143,6 +2217,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManifestRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_platform_control_api_platform_control_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformControlStatus"];
+                };
+            };
+        };
+    };
+    update_platform_control_api_platform_control_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformControlUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformControlUpdateResponse"];
                 };
             };
             /** @description Validation Error */

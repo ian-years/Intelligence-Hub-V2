@@ -900,8 +900,77 @@
         "title": "PagedResult[Video]",
         "type": "object"
       },
+      "PlatformControlStatus": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "shadowed_by_env": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shadowed By Env",
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "PlatformControlStatus",
+        "type": "object"
+      },
+      "PlatformControlUpdate": {
+        "additionalProperties": false,
+        "description": "PUT 的请求体。只有一个字段，所以不搞 `exclude_unset` 那套\"没写的保持原值\" ——\n那套是为了一张表里多个字段准备的，这里只会让人以为可以省略。",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "PlatformControlUpdate",
+        "type": "object"
+      },
+      "PlatformControlUpdateResponse": {
+        "properties": {
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Fields",
+            "type": "array"
+          },
+          "platform_control": {
+            "$ref": "#/components/schemas/PlatformControlStatus"
+          },
+          "requires_restart": {
+            "default": false,
+            "title": "Requires Restart",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "platform_control"
+        ],
+        "title": "PlatformControlUpdateResponse",
+        "type": "object"
+      },
       "PlatformSummary": {
         "properties": {
+          "availability": {
+            "enum": [
+              "available",
+              "own_off",
+              "master_off",
+              "absent"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -957,6 +1026,7 @@
           "name",
           "display_name",
           "enabled",
+          "availability",
           "implemented"
         ],
         "title": "PlatformSummary",
@@ -964,6 +1034,11 @@
       },
       "PlatformsResponse": {
         "properties": {
+          "master_enabled": {
+            "default": true,
+            "title": "Master Enabled",
+            "type": "boolean"
+          },
           "platforms": {
             "items": {
               "$ref": "#/components/schemas/PlatformSummary"
@@ -1083,6 +1158,11 @@
             },
             "title": "Jobs",
             "type": "array"
+          },
+          "master_enabled": {
+            "default": true,
+            "title": "Master Enabled",
+            "type": "boolean"
           },
           "scheduler_enabled": {
             "title": "Scheduler Enabled",
@@ -2799,6 +2879,68 @@
         ]
       }
     },
+    "/api/platform-control": {
+      "get": {
+        "description": "四家共用的那一个总闸。",
+        "operationId": "get_platform_control_api_platform_control_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformControlStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Platform Control",
+        "tags": [
+          "config"
+        ]
+      },
+      "put": {
+        "description": "写 `app.yaml` 的 `platform_control` 段 → 当场生效 → 重排采集 job → 发事件。\n\n与两条平台配置 PUT 同一条纪律：**运行时不听文件变化**，所以\"生效\"必须显式做。\n这里比它们少一步：没有需要推的快照 —— 注册表拿的是总闸的**闭包**、\n调度器与 runner 握着的是同一个 `AppConfig` 实例，而 `write_platform_control`\n原地换的就是那个实例上的字段（换指针会让没跟着换的持有者继续用旧值，\n症状是\"设置页说总闸已开，任务列表还是空的\"）。\n\n重排采集 job 必须在写盘**之后**：`reschedule_collect_jobs` 读的就是那份配置。",
+        "operationId": "update_platform_control_api_platform_control_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformControlUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformControlUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Platform Control",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/api/platforms": {
       "get": {
         "operationId": "list_platforms_api_platforms_get",
@@ -3093,7 +3235,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "当前可运行的任务（平台开关 + `implemented` 过滤后）。",
+        "description": "当前可运行的任务（平台开关 + 总闸 + `implemented` 过滤后）。",
         "operationId": "list_tasks_api_tasks_get",
         "responses": {
           "200": {

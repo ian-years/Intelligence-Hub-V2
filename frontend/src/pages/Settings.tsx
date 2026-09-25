@@ -5,6 +5,7 @@ import { PlatformBadge } from "@/components/memphis/PlatformBadge";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
 import { PageShell } from "@/components/shared/PageShell";
+import { PlatformControlCard } from "@/components/shared/PlatformControlCard";
 import { ScheduleCard } from "@/components/shared/ScheduleCard";
 import { ApiError } from "@/api/client";
 import {
@@ -55,6 +56,11 @@ export function Settings(): JSX.Element {
         <Notice tone="danger">读不到平台清单：{detailOf(platforms.error)}</Notice>
       )}
       {platforms.isPending && !platforms.isPaused && !platforms.isError && <Notice>读取中…</Notice>}
+
+      {/* 总闸在"每一家的表单"之前：它是四行共用的那一位，而这一页下面的按钮逐个通向
+          单家的表单。顺序倒了的话，人先看到四个能点的开关，就会以为"全关"= 点四次 ——
+          那正是 ADR-0025 不要的那个实现。 */}
+      <PlatformControlCard />
 
       <div className="flex flex-wrap gap-3">
         {list.map((platform) => (

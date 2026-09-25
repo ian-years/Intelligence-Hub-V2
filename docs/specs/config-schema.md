@@ -104,6 +104,22 @@ class SchedulerSection(BaseModel):
 > 让服务定时拿他的登录态去动平台配额。`collect_platforms` 的名字按
 > `PLATFORM_CONFIG_SCHEMAS` 校验（写错平台名 = 那个平台永远不被定时采集，而库里看不出来）。
 
+class PlatformControlSection(BaseModel):
+    """四家共用的**总闸**（ADR-0025）。`scheduler.enabled` 管"调度器要不要起"，
+    这一段管"这四家还可不可以用" —— 后者也管手动点的那一次，所以不是同一件事。"""
+
+    enabled: bool = True
+
+
+> **这一位是 AND 的另一半，不是"批量写四次"。** 关掉它**不改写任何一家自己的 `enabled`**：
+> 那种实现会在"重新打开总闸"时把用户之前单独关掉的某一家悄悄复原，而界面上分不出
+> "你自己关的"与"被总闸盖住的"。判据与四态（`available / own_off / master_off / absent`）
+> 的唯一定义在 `platforms/base.py::resolve_platform_availability`，
+> 四个消费者（`/api/tasks` 的过滤、跑前那道门、平台注册表、cron 名单）都调它。
+> **默认必须是 `True`**：新增一道闸门把现网所有平台静默关掉，比没有这道闸门更糟。
+> `config/app.yaml` 里这一段是**注释掉**的（写死 `false` 会变成"新克隆下来四家全不可用"），
+> 看护在 `tests/unit/core/test_config.py::test_the_shipped_app_yaml_carries_the_master_switch_as_a_comment`。
+
 class BridgeSection(BaseModel):
     url: HttpUrl = HttpUrl("http://127.0.0.1:3457")
     enabled: bool = True
@@ -145,6 +161,7 @@ class AppConfig(BaseSettings):
     storage: StorageSection = StorageSection()
     logging: LoggingSection = LoggingSection()
     scheduler: SchedulerSection = SchedulerSection()
+    platform_control: PlatformControlSection = PlatformControlSection()
     cdp_bridge: BridgeSection = BridgeSection()
     asr: AsrSection = AsrSection()
     http_client: HttpSection = HttpSection()
@@ -386,6 +403,34 @@ async def update_platform_config(
 - 配置文件仍写盘的原因：审计、备份、可进 git
 - 敏感字段（token）走 `config/feishu.yaml`（gitignore），不进 `platforms.yaml`
 
+### 5.1 `GET/PUT /api/platform-control`（ADR-0025，2026-09-25 加）
+
+```python
+class PlatformControlStatus(BaseModel):
+    enabled: bool                 # 当前生效值（env 压着时是 env 那一份）
+    shadowed_by_env: list[str]    # 这些键下次启动会被环境变量盖回去
+
+@router.get("/api/platform-control")   -> PlatformControlStatus
+@router.put("/api/platform-control")   # body: {"enabled": bool}（只有这一个键，不多不少）
+    -> {platform_control, changed_fields, requires_restart}
+```
+
+与 `PUT /api/platforms/{name}/config` 的三点不同，每点都是"两处代码会漂"的那种：
+
+1. **写的是 `app.yaml`**（`platform_control` 段），因此 `platforms.yaml` 的逐家审计边界不变。
+2. **没有热重载订阅者**：`write_platform_control` 与 `write_scheduler` 一样**原地换共享
+   `AppConfig` 上的那个字段**，而不是重读一份新的再换指针 —— 换指针会造出第二个实例，
+   没跟着换引用的持有者继续用旧配置（症状："设置页显示总闸已开，任务列表还是空的"）。
+   注册表拿的是 `master_enabled` **闭包**，所以它现读现算，同样不需要失效动作。
+3. **改完要重排采集 job**（`reschedule_collect_jobs`）：可用名单一次变了四家。
+   `apscheduler is None` 时返回空清单而不抛，这一句由 `scheduler_running` 显示。
+
+`GET /api/platforms` 同步长出两处：根上的 `master_enabled`（四行共用的那一个事实），
+与每一行的 `availability`（四态）。行的 `availability` 取自**注册表**而不是配置文件 ——
+界面要报告的是"运行期那道门会怎么判"，不是"文件里怎么写的"。
+`GET /api/schedule` 也补了 `master_enabled`：名单空着（= 所有启用的平台）时
+`skipped_platforms` 也是空的，于是"cron 明早 08:00"配着"一家都不排"没有任何一栏解释原因。
+
 > **实施期修订（2026-09-23）· 上面那条"可进 git"要配两个限定。**
 >
 > 1. **注释活不过第一次 `PUT`。** `yaml.safe_dump` 不保留注释，实测首写就抹掉
@@ -415,6 +460,7 @@ async def update_platform_config(
 | `INTELLIGENCE_HUB_APP__PORT` | `app.port` |
 | `INTELLIGENCE_HUB_LOGGING__LEVEL` | `logging.level` |
 | `INTELLIGENCE_HUB_CDP_BRIDGE__URL` | `cdp_bridge.url` |
+| `INTELLIGENCE_HUB_PLATFORM_CONTROL__ENABLED` | `platform_control.enabled`（四家总闸，ADR-0025）|
 | `SENSEVOICE_MODEL_DIR` | `asr.model_dir`（兼容 V1） |
 | `SHERPA_ONNX_MODEL_DIR` | `asr.model_dir`（兼容 V1） |
 | `DOUYIN_YTDLP_COOKIES_FILE` | `platforms.douyin.cookies_file`（兼容 V1）**目前由适配器读**，见下 |

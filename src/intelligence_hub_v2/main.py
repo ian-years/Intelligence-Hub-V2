@@ -78,7 +78,13 @@ def build_components(
         http=http,
         logger=get_logger("tasks.deps"),
     )
-    registry = PlatformRegistry(configs, deps_factory)
+    registry = PlatformRegistry(
+        configs,
+        deps_factory,
+        # 闭包：总闸翻的时候这里要跟着变，而装配只做一次。
+        # 为什么不是把 bool 传进去、翻转时重建注册表 —— 见 `PlatformRegistry` 的 docstring。
+        master_enabled=lambda: config.platform_control.enabled,
+    )
     runner = TaskRunner(
         storage=storage,
         events=events,

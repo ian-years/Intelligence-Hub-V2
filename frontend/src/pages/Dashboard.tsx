@@ -13,6 +13,7 @@ import { QueryState, type QueryGate } from "@/components/shared/QueryState";
 import { TaskTimeline } from "@/components/shared/TaskTimeline";
 import { VideoRow } from "@/components/shared/VideoRow";
 import { formatTime } from "@/lib/formatters";
+import { platformStateOf } from "@/lib/platform-state";
 import { cn } from "@/lib/utils";
 
 /** 总览页一次问后端"最新几条"。不是分页大小，是这一屏的密度。 */
@@ -149,7 +150,7 @@ function HealthLine({ health }: { health: QueryGate<Health> }): JSX.Element {
 }
 
 function PlatformCard({ platform }: { platform: PlatformSummary }): JSX.Element {
-  const state = stateOf(platform);
+  const state = platformStateOf(platform);
   return (
     <HardShadowCard className="flex flex-col gap-2">
       <PlatformBadge platform={platform.name} label={platform.display_name} />
@@ -195,16 +196,6 @@ const HEALTH_TONES: Record<string, string> = {
   unreachable: "bg-coral-red",
   unknown: "bg-lemon-yellow",
 };
-
-/** 三种状态分开给：`enabled` 与 `implemented` 是两件事 ——
- *  配置里开着但 V2 没有实现，症状是"任务列表里没有这个平台的采集"，
- *  涂成"已启用"就是骗人。 */
-function stateOf(platform: PlatformSummary): { label: string; tone: string } {
-  if (!platform.enabled) return { label: "已关闭", tone: "bg-grey-mist" };
-  if (!platform.implemented)
-    return { label: "开着，但 V2 没实现这个平台", tone: "bg-lemon-yellow" };
-  return { label: "已启用", tone: "bg-mint-green" };
-}
 
 function SectionTitle({
   children,

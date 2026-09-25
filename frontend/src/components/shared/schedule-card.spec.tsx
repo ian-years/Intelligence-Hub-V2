@@ -20,6 +20,8 @@ function status(over: Partial<ScheduleStatus> = {}): ScheduleStatus {
     collect_limit: 5,
     jobs: [{ id: "collect:douyin", platform: "douyin", next_run_time: NEXT_RUN }],
     scheduler_running: true,
+    // 总闸（ADR-0025）。默认开着 —— 下面有用例把它改成 false 来测那一句话。
+    master_enabled: true,
     shadowed_by_env: [],
     ...over,
   };
@@ -134,6 +136,23 @@ describe("定时采集那块卡片", () => {
     renderCard();
     const line = await screen.findByText(/环境变量里也设着/);
     expect(line.textContent).toContain("collect_cron");
+  });
+
+  it("总闸关着时说清'一家都不排是因为总闸'，不让 cron 那一栏独自好看", async () => {
+    // 名单空（= 所有启用的平台）+ 总闸关着 ⇒ `skipped_platforms` 也是空的，
+    // 于是"名单里都被关掉了"那一支不成立。没有这一句，界面就是
+    // "cron 0 8 * * *、下次明早"而一家都不会跑 —— 与 `api/v1/schedule.py`
+    // 文件头规矩 2 同一件事：静默少排平台。
+    serve(status({ master_enabled: false, collect_platforms: [], effective_platforms: [] }));
+    renderCard();
+    expect(await screen.findByText(/平台总闸现在是关着的/)).toBeTruthy();
+  });
+
+  it("总闸开着时不出现那句（否则那条用例在'永远印这句话'的实现下也绿）", async () => {
+    serve(status());
+    renderCard();
+    await screen.findByRole("heading", { name: "定时采集" });
+    expect(document.body.textContent).not.toMatch(/平台总闸现在是关着的/);
   });
 
   it("没排在调度器上的平台说'没排上'，不替它编一个下次时间", async () => {

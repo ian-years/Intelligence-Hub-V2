@@ -52,8 +52,24 @@ const current = {
 };
 
 const platforms = {
-  platforms: [{ name: "douyin", display_name: "抖音", enabled: true, implemented: true }],
+  platforms: [
+    {
+      name: "douyin",
+      display_name: "抖音",
+      enabled: true,
+      availability: "available",
+      implemented: true,
+    },
+  ],
+  // 根上这一位与下面 `platformControl` 那份是同一个事实的两个出口
+  // （清单里每一行的 `availability` 已经把它算进去了）。
+  master_enabled: true,
 };
+
+/** 总闸那一格的现状（ADR-0025）。Settings 页现在挂着 `PlatformControlCard`，
+ *  这一份不打桩的话，`ok()` 的兜底会把**平台清单**当成总闸状态喂进去，
+ *  于是 `shadowed_by_env.length` 当场炸 —— 那一炸看起来像实现的错，其实是桩没打全。 */
+const platformControl = { enabled: true, shadowed_by_env: [] };
 
 /** 定时采集那块卡片的现状。Settings 页现在挂着 `ScheduleCard`，
  * 这一份不打桩的话，`ok()` 的兜底分支会把**平台清单**当成排期数据喂进去，
@@ -74,6 +90,7 @@ const schedule = {
     },
   ],
   scheduler_running: true,
+  master_enabled: true,
   shadowed_by_env: [],
 };
 
@@ -96,12 +113,18 @@ function serve(handler: (url: string, method: string) => [number, unknown]): voi
                 changed_fields: ["collect_cron"],
                 requires_restart: false,
               }
-            : {
-                platform: "douyin",
-                config: current.config,
-                changed_fields: [],
-                requires_restart: false,
-              }
+            : url.includes("/platform-control")
+              ? {
+                  platform_control: { ...platformControl, enabled: false },
+                  changed_fields: ["platform_control.enabled"],
+                  requires_restart: false,
+                }
+              : {
+                  platform: "douyin",
+                  config: current.config,
+                  changed_fields: [],
+                  requires_restart: false,
+                }
           : body;
     return new Response(JSON.stringify(responseBody), {
       status,
@@ -125,6 +148,10 @@ const ok = (url: string): [number, unknown] => {
   if (url.includes("/schema")) return [200, schema];
   if (url.includes("/config")) return [200, current];
   if (url.includes("/schedule")) return [200, schedule];
+  // 总闸那一格（ADR-0025）。必须排在这一句的**兜底之前**：`ok()` 的 else 返回平台清单，
+  // 那份形状里没有 `shadowed_by_env`，卡片读它就会炸在 `.length` 上 ——
+  // 看起来是实现坏了，其实是桩没打全。
+  if (url.includes("/platform-control")) return [200, platformControl];
   return [200, platforms];
 };
 
@@ -223,6 +250,10 @@ describe("Settings 页", () => {
     serve((url) => {
       if (url.includes("/config")) return [500, { detail: "配置层还没起来" }];
       if (url.includes("/schema")) return [200, schema];
+      // 这一句必须在兜底之前：少了它，总闸那一格收到的是**平台清单**那份形状，
+      // 于是 `shadowed_by_env.length` 炸在这里 —— 报出来的栈指向实现，
+      // 而坏的是这个桩。
+      if (url.includes("/platform-control")) return [200, platformControl];
       return [200, platforms];
     });
     renderPage();

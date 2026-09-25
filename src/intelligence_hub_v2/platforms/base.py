@@ -58,6 +58,7 @@ __all__ = [
     "MediaSource",
     "MetricReadings",
     "PlatformAdapter",
+    "PlatformAvailability",
     "PlatformConfig",
     "RateLimitConfig",
     "SingleFileArtifact",
@@ -66,6 +67,7 @@ __all__ = [
     "VideoCommentDraft",
     "VideoMeta",
     "audio_path_of",
+    "resolve_platform_availability",
     "total_size_bytes",
 ]
 
@@ -207,6 +209,42 @@ class PlatformConfig(BaseModel):
     而 `DouyinAdvanced` 不是 `dict[str, Any]` 的子类型，
     那样写 mypy 会按 Liskov 判覆盖不兼容。见 docs/lessons.md 实施期教训。
     """
+
+
+PlatformAvailability = Literal["available", "own_off", "master_off", "absent"]
+"""一家平台"为什么不能用"的四种答案（ADR-0025）。**不能压成一个 bool**：四句要的动作不同。
+
+- `available` → 能用。
+- `own_off` → 去 Settings 打开这一家（或 `platforms.yaml` 里那一段的 `enabled`）。
+- `master_off` → 去开总闸。这时候 `platforms.yaml` 里写的还是 `enabled: true`，
+  所以"已被关掉（config/platforms.yaml 的 enabled: false）"这句在这里是**谎话** ——
+  它会把人支去改一个本来就开着的字段。异常文案与界面必须说是被总闸盖住。
+- `absent` → 没有配置对象。是装配漏了一环，不是任何人碰过开关。
+"""
+
+
+def resolve_platform_availability(
+    config: PlatformConfig | None,
+    *,
+    master_enabled: bool,
+) -> PlatformAvailability:
+    """那一道 **AND** 唯一定义处：`总闸 AND 该家自己的开关`。
+
+    为什么放在 `platforms/base.py` 而不是 `core/config.py`：四个消费者
+    （`ConfigManager` / `PlatformRegistry` / `task_is_available` / `TaskScheduler._gate_platforms`）
+    全都在 config 的**下游**，`core/config.py` 又正 import 着 `platforms/` —— 放那边等于
+    让下层回引上层。判据本身只用到 `PlatformConfig`，形状也属于契约层。
+
+    `master_enabled` 是**入参而不是在这里读配置**：这四个持有者各自拿到的东西不同
+    （manager 有 `AppConfig`、注册表只有一个 `Callable[[], bool]`、调度器握着共享的
+    `AppConfig` 实例），把"从哪读"留给他们，把"怎么算"收在这里。
+    分叉成两份算法的症状是 `/api/tasks` 里没这个按钮、点名跑却跑得起来。
+    """
+    if config is None:
+        return "absent"
+    if not master_enabled:
+        return "master_off"
+    return "available" if config.enabled else "own_off"
 
 
 ComponentStatus = Literal["ok", "degraded", "unreachable"]

@@ -63,3 +63,38 @@ export function useUpdatePlatformConfig(platform: string) {
 export function restartNeeded(response: ConfigUpdateResponse | undefined): boolean {
   return response?.requires_restart ?? false;
 }
+
+export type PlatformControlStatus = Schemas["PlatformControlStatus"];
+export type PlatformControlUpdateResponse = Schemas["PlatformControlUpdateResponse"];
+
+/** 四家共用的总闸（ADR-0025）。 */
+export function usePlatformControl() {
+  return useQuery({
+    queryKey: keys.platformControl,
+    queryFn: () => api.get<PlatformControlStatus>("/platform-control"),
+  });
+}
+
+/**
+ * 翻总闸之后要作废的清单比平台配置那次 PUT **更长**：它一次改变了四个页面的按钮、
+ * 定时名单与每一家的三态。少失效一处 = 那一处继续显示旧状态，
+ * 而"旧状态"在这格里恰恰是"看着还能采"。
+ *
+ * 排期（`keys.schedule`）也在里面：后端 PUT 之后会重排采集 job，
+ * 前端不重取的话，设置页会留着"明天 08:00 采四家"而实际一条都没排。
+ */
+export function useUpdatePlatformControl() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put<PlatformControlUpdateResponse>("/platform-control", { enabled }),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: keys.platformControl }),
+        client.invalidateQueries({ queryKey: keys.platforms }),
+        client.invalidateQueries({ queryKey: keys.tasks }),
+        client.invalidateQueries({ queryKey: keys.schedule }),
+      ]);
+    },
+  });
+}

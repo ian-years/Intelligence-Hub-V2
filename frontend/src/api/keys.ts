@@ -6,6 +6,10 @@ export const keys = {
   health: ["health"] as const,
   preflight: ["preflight"] as const,
   platforms: ["platforms"] as const,
+  /** 平台总闸（ADR-0025）。单独一个键而不是挂在 `platforms` 下面：
+   *  它是 `app.yaml` 里的一段，与那份**逐家**的清单是两个端点，
+   *  混在一个键下的话"翻了总闸"要连平台清单一起重取才生效 —— 那是缓存策略在替后端撒谎。 */
+  platformControl: ["platform-control"] as const,
   platformSchema: (platform: string) => ["platforms", platform, "schema"] as const,
   platformConfig: (platform: string) => ["platforms", platform, "config"] as const,
   creators: (platform?: string) => ["creators", platform ?? null] as const,

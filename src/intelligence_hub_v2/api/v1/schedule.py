@@ -82,6 +82,14 @@ class ScheduleStatus(BaseModel):
     jobs: list[CollectJobInfo] = Field(default_factory=list)
     scheduler_running: bool = False
     """APScheduler 实例在不在。`false` 时 `jobs` 必空，而配置可以看着完全正常。"""
+    master_enabled: bool = True
+    """平台总闸（ADR-0025）。这一栏是**补上"为什么空"那块信息**的，不是装饰：
+
+    `skipped_platforms` 只在 `collect_platforms` 点过名的时候才有内容，而默认那份是空的
+    （"空 = 所有启用的平台"）。于是关掉总闸会得到 `effective_platforms: []` 且
+    `skipped_platforms: []` —— cron 还写着 08:00，一条都不排，而没有任何一栏说原因。
+    与本文件规矩 2 同一件事：静默少排平台，症状是"那位博主永远不更新而配置看着没问题"。
+    """
     shadowed_by_env: list[str] = Field(default_factory=list)
     """这些键在**环境变量**里也设着，所以下一次启动会盖掉盘上这一份。
 
@@ -139,6 +147,7 @@ def _status(state: AppState) -> ScheduleStatus:
         collect_limit=section.collect_limit,
         jobs=jobs,
         scheduler_running=state.apscheduler is not None,
+        master_enabled=state.config_manager.app.platform_control.enabled,
         shadowed_by_env=state.config_manager.scheduler_keys_shadowed_by_env(section),
     )
 

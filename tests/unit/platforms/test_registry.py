@@ -43,6 +43,14 @@ from intelligence_hub_v2.platforms.registry import PLATFORMS, PlatformRegistry, 
 from intelligence_hub_v2.storage.files import FileStorage
 
 
+def _master_on() -> bool:
+    """总闸开着（ADR-0025）。命名它而不是每处写 `lambda: True`：
+    这三处构造点关心的全是自洽性/缓存，与开关无关 —— 但**必须**表个态，
+    因为 `PlatformRegistry` 故意不给这个参数默认值（漏传等于新调用点静默忽略总闸）。
+    """
+    return True
+
+
 def _capabilities(**overrides: object) -> Capabilities:
     payload: dict[str, object] = {
         "needs_browser": True,
@@ -147,15 +155,22 @@ def _deps(tmp_path: Path) -> AdapterDeps:
 
 @pytest.fixture
 def registry_factory(tmp_path: Path):
-    """造一个只认 `fake` 的注册表（不污染全局 `PLATFORMS`）。"""
+    """造一个只认 `fake` 的注册表（不污染全局 `PLATFORMS`）。
+
+    `master` 这一格是总闸（ADR-0025）：默认开着，于是这个 fixture 的既有含义不变 ——
+    "这一家可用吗"只看它自己的开关。**必须**能传，否则总闸那几条用例只能另起炉灶，
+    而两套装配方式漂移出来的红没有任何信息量。
+    """
 
     def _make(**overrides: object) -> PlatformRegistry:
         classes = {"fake": _Adapter}
         configs = {"fake": _config(bool(overrides.get("enabled", True)))}
+        master = bool(overrides.get("master", True))
         return PlatformRegistry(
             configs,
             lambda name: _deps(tmp_path),
             classes=classes,  # type: ignore[arg-type]
+            master_enabled=lambda: master,
         )
 
     return _make
@@ -215,6 +230,74 @@ def test_a_disabled_platform_is_rejected_with_an_actionable_message(
         registry.get("fake")
 
 
+# ---------------------------------------------------------------------------
+# 总闸（ADR-0025）：三种红各说一句
+# ---------------------------------------------------------------------------
+
+
+def test_the_master_switch_hides_a_platform_that_says_it_is_on(
+    registry_factory: object,
+) -> None:
+    """总闸关掉时 `enabled_platforms()` 必须是空 —— 哪怕这一家自己写着 `enabled: true`。
+
+    这是"整库/定时"那一族消费点（`preflight` 的探测名单、`dispatch` 认平台、
+    启动日志）唯一的入口，所以它漏掉总闸就等于那三处一起漏。
+    """
+    registry = registry_factory(master=False)  # type: ignore[operator]
+    assert registry.availability("fake") == "master_off"
+    assert registry.enabled_platforms() == []
+    # 没实现的那一家不能因为"总闸开着"就冒出来（两份判据是 AND，不是一选一）
+    open_master = registry_factory()  # type: ignore[operator]
+    assert open_master.enabled_platforms() == ["fake"]
+
+
+def test_the_master_off_message_does_not_blame_the_platform_switch(
+    registry_factory: object,
+) -> None:
+    """这一句是本次改动的全部理由。
+
+    原来那句"已被关掉（config/platforms.yaml 的 enabled: false）"在总闸关掉时是**谎话**：
+    文件里写的还是 true。人照那句去做，得到的是"我打开了，还是这一句"，
+    于是开始怀疑代码 —— 而正确动作在另一个地方。所以这里既断"说了总闸"，
+    也断"没把那句谎话留下来"。
+    """
+    registry = registry_factory(master=False)  # type: ignore[operator]
+    with pytest.raises(TaskRejected) as caught:
+        registry.get("fake")
+    message = str(caught.value)
+    assert "总闸" in message, message
+    assert "platform_control.enabled" in message, message
+    assert "config/platforms.yaml 的 enabled: false" not in message, message
+    # 顺带说清"不是它自己关的"，否则第一个动作仍然是去翻那个文件
+    assert "enabled: true" in message, message
+
+
+def test_two_switches_down_says_both(registry_factory: object) -> None:
+    """两道闸都拉着时报两句：只报总闸会让人开完总闸再吃一次同样的红。"""
+    registry = registry_factory(enabled=False, master=False)  # type: ignore[operator]
+    with pytest.raises(TaskRejected) as caught:
+        registry.get("fake")
+    message = str(caught.value)
+    assert "总闸" in message and "也是关着的" in message, message
+
+
+def test_a_missing_config_is_still_wiring_when_the_master_is_off(tmp_path: Path) -> None:
+    """`absent` 排在 `master_off` 前面：去开总闸治不好装配漏了一环。
+
+    与 `test_a_missing_config_is_diagnosed_as_wiring_not_as_disabled`（review P1-4）
+    同一件事，只是这次是在有了总闸之后再看一眼顺序还成不成立。
+    """
+    registry = PlatformRegistry(
+        {},
+        lambda name: _deps(tmp_path),
+        classes={"fake": _Adapter},  # type: ignore[arg-type]
+        master_enabled=lambda: False,
+    )
+    assert registry.availability("fake") == "absent"
+    with pytest.raises(PlatformError, match="装配漏了一环"):
+        registry.get("fake")
+
+
 def test_an_unimplemented_platform_says_what_is_available(registry_factory: object) -> None:
     """与"被关掉"分开：这里要的动作是"这个版本没移植"，翻配置没用。"""
     registry = registry_factory()  # type: ignore[operator]
@@ -233,6 +316,7 @@ def test_a_missing_config_is_diagnosed_as_wiring_not_as_disabled(tmp_path: Path)
         {},  # 配置字典是空的：类在、配置不在
         lambda name: _deps(tmp_path),
         classes={"fake": _Adapter},  # type: ignore[arg-type]
+        master_enabled=lambda: True,
     )
     with pytest.raises(PlatformError, match="装配漏了一环"):
         registry.get("fake")
@@ -282,6 +366,7 @@ def test_inconsistencies_are_reported_not_raised(registry_factory: object) -> No
         {"fake": _config(), "ghost": _config()},
         lambda name: None,  # type: ignore[arg-type,return-value]
         classes={"fake": _Adapter},  # type: ignore[dict-item]
+        master_enabled=lambda: True,
     )
     problems = registry.inconsistencies()
     assert any("ghost" in p and "没有适配器实现" in p for p in problems)
@@ -293,6 +378,7 @@ def test_both_directions_are_checked() -> None:
         {},  # 有实现、无配置
         lambda name: None,  # type: ignore[arg-type]
         classes={"orphan": _Adapter},  # type: ignore[dict-item]
+        master_enabled=_master_on,
     )
     assert any("orphan" in p and "配置里没有这一节" in p for p in registry.inconsistencies())
 
@@ -323,6 +409,7 @@ def test_a_fully_wired_platform_reports_nothing() -> None:
             "xiaohongshu": _Adapter,
             "youtube": _Adapter,
         },  # type: ignore[dict-item]
+        master_enabled=_master_on,
     )
     problems = registry.inconsistencies()
     assert problems == [], problems

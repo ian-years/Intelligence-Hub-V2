@@ -56,6 +56,15 @@ def _enabled_map(state: AppState) -> dict[str, Any]:
     }
 
 
+def _master_enabled(state: AppState) -> bool:
+    """总闸。读 `config_manager` 而不是 `state.config`：前者是**写入口**
+    （`write_platform_control` 换的是它手里那个 `AppConfig` 的字段），
+    生产路径上两者是同一个对象，但"同一个对象"是 `build_components` 的装配事实，
+    不是契约 —— 从写的那一侧读，测试里换个 config 实例也不会得到一个安静的假答案。
+    """
+    return state.config_manager.app.platform_control.enabled
+
+
 def _definition_or_404(name: str) -> Any:  # noqa: ANN401 - TaskDefinition
     try:
         return get_task(name)
@@ -65,9 +74,8 @@ def _definition_or_404(name: str) -> Any:  # noqa: ANN401 - TaskDefinition
 
 @router.get("/tasks", response_model=list[TaskInfo])
 async def list_tasks(state: AppState = Depends(get_state)) -> list[TaskInfo]:
-    """当前可运行的任务（平台开关 + `implemented` 过滤后）。"""
-    enabled = _enabled_map(state)
-    names = set(available_task_names(enabled))
+    """当前可运行的任务（平台开关 + 总闸 + `implemented` 过滤后）。"""
+    names = set(available_task_names(_enabled_map(state), master_enabled=_master_enabled(state)))
     out: list[TaskInfo] = []
     for name, definition in TASKS.items():
         if name not in names:

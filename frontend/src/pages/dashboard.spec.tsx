@@ -15,14 +15,18 @@ import { makeCreator, makePage, makeRun, makeVideo } from "@/test/fixtures";
 const health = { status: "ok", version: "0.1.0", time: "2026-09-23T00:00:00+00:00" };
 
 const platforms = {
+  // 根上还有一位 `master_enabled`：Dashboard 只读**每一行**的 `availability`
+  // （那位总闸由设置页那格说），所以这里不给 —— 给了也没人读，而打了桩没人读
+  // 就等于给一个不需要它的实现背书。
   platforms: [
-    // 三家各代表健康行的一种情况：**有结论有时刻** / **从没探测过** /
-    // **有结论但没有时刻**（库里被写成这样就是数据坏了，界面必须选择不画，
-    // 而不是画一个"上次探测 undefined"）。
+    // 四家各代表 `availability` 的一个取值，外加健康行的一种情况：
+    // **有结论有时刻** / **从没探测过** / **有结论但没有时刻**（库里被写成这样就是
+    // 数据坏了，界面必须选择不画，而不是画一个"上次探测 undefined"）。
     {
       name: "douyin",
       display_name: "抖音",
       enabled: true,
+      availability: "available",
       implemented: true,
       health_status: "ok",
       health_checked_at: "2026-09-24T10:00:00+00:00",
@@ -32,6 +36,8 @@ const platforms = {
       name: "bilibili",
       display_name: "B站",
       enabled: false,
+      // 它自己关的 —— 与"被总闸盖住"是两句话（ADR-0025 的判据）
+      availability: "own_off",
       implemented: true,
       health_status: null,
       health_checked_at: null,
@@ -41,6 +47,7 @@ const platforms = {
       name: "xiaohongshu",
       display_name: "小红书",
       enabled: true,
+      availability: "available",
       implemented: false,
       health_status: "degraded",
       health_checked_at: null,
@@ -49,7 +56,10 @@ const platforms = {
     {
       name: "youtube",
       display_name: "YouTube",
-      enabled: false,
+      // 开着的那一位被总闸盖住了：这一家**不能**涂成"已关闭"，
+      // 因为那会让人去 config/platforms.yaml 翻一个写着 enabled: true 的字段。
+      enabled: true,
+      availability: "master_off",
       implemented: false,
       health_status: null,
       health_checked_at: null,
@@ -58,7 +68,24 @@ const platforms = {
   ],
 };
 
+/** 界面上可能出现的那四枚牌（`lib/platform-state.ts` 的四态 + 没实现那一支）。
+ * 写死在这里是要它**跟着变才变**：加第五种态时上面那条用例会数不对，
+ * 而这条字面量必须有人来添一行 —— 那一次红就是提醒"还有界面没跟上"。 */
+const BADGES = new Set([
+  "已启用",
+  "已启用，但本构建没实现",
+  "已关闭",
+  "被总闸关着",
+  "没有配置对象",
+]);
+
 const creators = [makeCreator({ id: 1, name: "阿婆主甲", platform: "bilibili" })];
+
+/** 夹具里某一态的那几家。写成函数而不是各处 `filter` 一遍：
+ *  四种态各要挑一次，而"挑的条件"本身就是这条用例的一部分。 */
+function by(availability: string): typeof platforms.platforms {
+  return platforms.platforms.filter((p) => p.availability === availability);
+}
 
 const runs = [
   makeRun({ id: "r1", task_name: "douyin_collect", status: "success" }),
@@ -127,9 +154,13 @@ describe("Dashboard 的四个区块", () => {
     await ready();
     // 一张卡一个状态牌，所以"牌的数量"就是"卡片的数量"—— 比数文案种类强：
     // 少画一张卡、或者给同一个平台画两张卡，这里都会立刻对不上。
-    expect(screen.getAllByText(/已启用|已关闭|开着，但 V2 没实现/)).toHaveLength(
-      platforms.platforms.length,
-    );
+    // 判据是**整段文案等于那四句之一**，不是"文案里含有某个词"：
+    // 这一页底下本来就有一句说明写着"开没开、V2 实没实现"，用 /没实现/ 这种
+    // 子串正则会把那段话也数进来，于是"一张卡一个牌"这条判据数到 5 而原因完全看不出来。
+    const badges = screen.getAllByText((text) => BADGES.has(text), {
+      selector: "span",
+    });
+    expect(badges).toHaveLength(platforms.platforms.length);
     for (const platform of platforms.platforms) {
       expect(screen.getByText(platform.name)).toBeTruthy();
     }
@@ -150,21 +181,31 @@ describe("Dashboard 的四个区块", () => {
     expect(lines[0]?.textContent).toContain("连得上");
   });
 
-  it("三种平台状态分开说：开着但没实现 ≠ 已启用", async () => {
+  it("三种平台状态分开说：开着但没实现 ≠ 已启用，被总闸盖住 ≠ 已关闭", async () => {
     renderPage();
     await ready();
     // 期望条数从夹具算，不手写数字：改夹具不用回来改断言，
     // 而"少画一张卡 / 一张卡画两个牌"依然会当场对不上。
+    //
+    // 判据取自 `availability` 而不是 `enabled`：一家"自己开着、被总闸盖住"的平台
+    // 在 `platforms.yaml` 里看见的正是 `enabled: true` —— 涂成"已关闭"就等于
+    // 把人支去改一个本来就开着的字段（ADR-0025 的那句谎）。
     const want: Record<string, number> = {
-      已启用: platforms.platforms.filter((p) => p.enabled && p.implemented).length,
-      已关闭: platforms.platforms.filter((p) => !p.enabled).length,
-      "开着，但 V2 没实现": platforms.platforms.filter((p) => p.enabled && !p.implemented).length,
+      已启用: by("available").filter((p) => p.implemented).length,
+      已关闭: by("own_off").length,
+      "已启用，但本构建没实现": by("available").filter((p) => !p.implemented).length,
+      被总闸关着: by("master_off").length,
     };
-    // 夹具必须三种状态都有，否则这条只是在数空气
+    // 夹具必须四种状态都有，否则这条只是在数空气
     expect(Object.values(want).every((count) => count > 0)).toBe(true);
     for (const [label, count] of Object.entries(want)) {
-      expect(screen.getAllByText(new RegExp(label))).toHaveLength(count);
+      // `exact` 是要紧的：默认的字符串匹配是"包含"，
+      // 于是 /已启用/ 会把"已启用，但本构建没实现"也数进来，两种牌互相掩盖。
+      expect(screen.getAllByText(label, { exact: true })).toHaveLength(count);
     }
+    // 最要紧的那一条单独钉一次：youtube 开着、被总闸盖着，画面上不许出现"已关闭"。
+    const youtube = screen.getByText("youtube").closest("div");
+    expect(youtube?.textContent ?? "").not.toMatch(/已关闭/);
   });
 
   it("作品行数 = 这一页 items 的条数，作者名从博主表里来", async () => {

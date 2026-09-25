@@ -446,6 +446,58 @@ class ListError(PlatformError):
 
 ---
 
+### 2.6 平台可用性（四态）与注册表的构造（ADR-0025）
+
+```python
+PlatformAvailability = Literal["available", "own_off", "master_off", "absent"]
+
+def resolve_platform_availability(
+    config: PlatformConfig | None, *, master_enabled: bool
+) -> PlatformAvailability:
+    """那一道 AND 的**唯一定义处**：总闸 AND 该家自己的开关。"""
+
+
+class PlatformRegistry:
+    def __init__(
+        self,
+        configs: Mapping[str, PlatformConfig],
+        deps_factory: Callable[[str], AdapterDeps],
+        *,
+        master_enabled: Callable[[], bool],   # 必填、闭包、没有默认值
+        classes: Mapping[str, type[PlatformAdapter]] | None = None,
+    ) -> None: ...
+
+    def availability(self, name: str) -> PlatformAvailability: ...
+    def enabled_platforms(self) -> list[str]:  # implemented ∩ availability=="available"
+        ...
+```
+
+四条判据，每条都对应一种会说谎的界面或一条会漂的口径：
+
+1. **四态而不是 bool**。`master_off` 时 `platforms.yaml` 里写的还是 `enabled: true`，
+   所以"已被关掉（config/platforms.yaml 的 enabled: false）"那句异常文案在这里是谎话 ——
+   它会把人支去改一个本来就开着的字段。`get()` 按态分句，界面上按态分三色。
+2. **`absent` 排在最前**（先于任何"关"）。类注册了而配置字典里没有 = 装配漏了一环
+   （review P1-4 那条老判据），去开总闸或去开这一家都治不好。
+3. **`master_enabled` 是闭包且没有默认值**。传 bool 快照也能让今天所有用例绿，
+   症状是"设置页显示总闸已开，任务列表还是空的"（要重启才恢复）；
+   给默认值 `True` 则等于"新调用点忘记传就静默忽略总闸"。
+   写总闸的是 `ConfigManager.write_platform_control`，它**原地换共享 `AppConfig` 上的字段**，
+   所以闭包现读现算就是最新值，不需要失效动作。
+4. **四个消费者共用 `resolve_platform_availability`**：
+   `ConfigManager.platform_availability`、`PlatformRegistry.availability`、
+   `core.task_registry.task_is_available`（`/api/tasks` 的过滤）、
+   `TaskScheduler._gate_platforms`（跑前那道门）。
+   各自本地 AND 一次的写法分叉出来就是"按钮在、点下去被拒"或反过来。
+   看护：`tests/unit/platforms/test_availability.py`（三处并排问同一件事）。
+
+`GET /api/platforms` 每行的 `availability` 取自**注册表**而不是配置文件 ——
+界面要报告的是"运行期那道门会怎么判"。注册表的 `configs` 快照由
+`AppState.refresh_platform_state` 在每次平台配置 PUT 后推到三处（注册表 / 依赖袋 / 调度器），
+这条不变。
+
+---
+
 ## 3. 已实现平台
 
 | 平台 | name | capabilities | 里程碑 |
@@ -584,5 +636,8 @@ V3 即使把某个平台的实现从 Python 重写成 Go/Rust（通过 subproces
 3. 配置 Pydantic 模型不变
 4. `MediaArtifact` / `VideoMeta` / `Transcript` 等数据模型不变
 5. 异常带 `platform` / `stage` / 原文
+6. `resolve_platform_availability` 那一道 AND 与 `PlatformAvailability` 四态不变
+   （ADR-0025：`/api/platforms` 每行的 `availability`、`/api/tasks` 的过滤、
+   跑前那道门与 cron 名单四处都从这一个函数进货）
 
 → 调度层零改动，前端零改动，契约测试套件零改动。

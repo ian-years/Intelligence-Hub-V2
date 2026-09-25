@@ -267,25 +267,56 @@ async def test_started_event_carries_task_metadata(storage, files) -> None:
 # ---- Scheduler ----
 
 
-def _scheduler(storage, files, *, douyin_enabled: bool = True) -> TaskScheduler:
+def _scheduler(
+    storage, files, *, douyin_enabled: bool = True, master_enabled: bool = True
+) -> TaskScheduler:
     bus = FakeBus()
     registry = FakeRegistry(
         {"douyin": FakeAdapter("douyin")}, {"douyin": FakeConfig(enabled=douyin_enabled)}
     )
     runner = _runner(storage, files, bus, registry)
     configs = {"douyin": FakeConfig(enabled=douyin_enabled)}
-    app = AppConfig()
+    app = AppConfig(platform_control={"enabled": master_enabled})
     return TaskScheduler(runner=runner, configs=configs, app_config=app, storage=storage)  # type: ignore[arg-type]
 
 
 async def test_scheduler_gates_disabled_platform_before_creating_run(storage, files) -> None:
     sched = _scheduler(storage, files, douyin_enabled=False)
 
-    with pytest.raises(TaskRejected, match="未启用"):
+    with pytest.raises(TaskRejected, match="它被关掉了"):
         await sched.run_to_completion("douyin_collect", {"creator_ids": [1]})
 
     # 跑前拒：不该留下任何 running 档案
     assert await storage.task_runs.count() == 0
+
+
+async def test_the_gate_names_the_master_when_that_is_what_is_down(storage, files) -> None:
+    """报错要点名**是谁**挡的：这一家自己明明是开着的。
+
+    原来那句"未启用或未实现"在总闸关掉时把人支去 Settings 打开抖音 ——
+    那里确实是开着的，于是得到"我打开了，还是这一句"。
+    与 `PlatformRegistry.get()` 那条同一回事，只是这一道门是第二个入口，
+    而且 `/api/tasks` 已经没有按钮了、只有直接 POST 才会走到这里。
+    """
+    sched = _scheduler(storage, files, douyin_enabled=True, master_enabled=False)
+
+    with pytest.raises(TaskRejected) as caught:
+        await sched.run_to_completion("douyin_collect", {"creator_ids": [1]})
+    message = str(caught.value)
+    assert "总闸" in message, message
+    assert "它被关掉了（config/platforms.yaml" not in message, message
+    assert await storage.task_runs.count() == 0, "跑前拒不许留下档案"
+
+
+async def test_the_master_switch_does_not_gate_cross_platform_tasks(storage, files) -> None:
+    """`platforms=()` 的任务在总闸关掉时照样能提交 —— 它们不属于任何一家。
+
+    这一条挡的是"顺手把总闸实现成一个全局 submit 闸门"：那样 `postprocess`
+    （纯本地 ASR，不碰外网）也会被停掉，而界面又不会说为什么。
+    """
+    sched = _scheduler(storage, files, master_enabled=False)
+    record = await sched.run_to_completion("preflight", {})
+    assert record.status in {"success", "partial"}
 
 
 async def test_scheduler_rejects_unimplemented_task(storage, files) -> None:

@@ -273,16 +273,22 @@ async def test_a_platform_setting_needs_save_to_survive_a_reload(page: Page) -> 
     两头都验：设置页是草稿式的，只点开关不点保存，改动根本没发出去。少了中间那步
     对照，这条测不出"到底是 PUT 成了还是页面把草稿留着了"。
     磁盘上那份 YAML 的内容由 `test_api_config` 逐字钉。
+
+    定位用的是 `#f-enabled` 而不是"页面上第一个 switch"：总闸那一格（ADR-0025）现在
+    排在表单**上面**，而它是**点了就写盘**的、没有草稿这一步。用 `.first` 的话
+    这条用例会在点上总闸的那一刻起测的就是另一个功能 —— 而且失败方式看着像
+    "草稿没退回初值"，完全指不到真正的成因。
     """
     await page.goto("/#/settings")
-    toggle = page.get_by_role("switch").first
+    toggle = page.locator("#f-enabled")
     await toggle.wait_for(state="visible", timeout=15000)
+    assert await toggle.get_attribute("role") == "switch", "这一格不是那个开关：定位漂了"
     before = await toggle.get_attribute("data-on")
     assert before is not None, "开关没渲染出 data-on，这条会在空转"
 
     await toggle.click()
     await page.reload()
-    untouched = page.get_by_role("switch").first
+    untouched = page.locator("#f-enabled")
     await untouched.wait_for(state="visible", timeout=15000)
     assert await untouched.get_attribute("data-on") == before, "没点保存就该回到草稿前"
 
@@ -290,7 +296,7 @@ async def test_a_platform_setting_needs_save_to_survive_a_reload(page: Page) -> 
     await page.get_by_role("button", name="保存").first.click()
     await page.wait_for_function(
         """(before) => {
-          const now = document.querySelector('[role=switch]');
+          const now = document.querySelector('#f-enabled');
           return now !== null && now.dataset.on !== before
             && !document.body.innerText.includes('未保存的改动');
         }""",
@@ -299,9 +305,111 @@ async def test_a_platform_setting_needs_save_to_survive_a_reload(page: Page) -> 
     )
 
     await page.reload()
-    again = page.get_by_role("switch").first
+    again = page.locator("#f-enabled")
     await again.wait_for(state="visible", timeout=15000)
     assert await again.get_attribute("data-on") != before, "写盘没生效：刷新之后回了初值"
+
+
+@pytest.fixture
+def platform_rows(api: httpx.Client) -> list[dict[str, Any]]:
+    """`/api/platforms` 那几行 —— 总闸那条用例要用它推"该有几行"，不写死 4。
+
+    做成 fixture 而不是在用例里 `api.get`：`api` 是**同步**客户端，
+    在 async 用例里发阻塞请求正是 ruff `ASYNC212` 要挡的形状
+    （`collected_video` 那份 docstring 讲的是同一条）。
+
+    这里也是那条用例的前置：e2e 那份 `platforms.yaml` 只配了两家且都开着，
+    所以"总闸关掉之后每一行都该说被总闸盖住"有一句现成的锚。
+    """
+    body = api.get("/platforms").json()
+    assert body["master_enabled"] is True, "这份夹具该从「总闸开着」开始"
+    rows: list[dict[str, Any]] = body["platforms"]
+    assert len(rows) >= 2, rows
+    assert all(row["availability"] == "available" for row in rows), rows
+    return rows
+
+
+async def test_the_master_switch_gates_the_whole_ui_without_a_restart(
+    page: Page, platform_rows: list[dict[str, Any]]
+) -> None:
+    """浏览器里翻总闸：不重启就改掉任务页的按钮、四行的说法，翻回来各家回到原位。
+
+    这一段是 L6 独有的：集成测试那边 `state.apscheduler is None`，而前端"翻转之后
+    三份缓存各失效各的"这件事只有真浏览器看得见 —— 少 invalidate 一个 query key 的症状
+    正是"设置页显示总闸已开，任务列表还是空的"。
+
+    行数从 `platform_rows` 推而不是写死 4：写死的数字在有人补 e2e 夹具时会反着红一次
+    （看起来像实现坏了）。
+    """
+    names = [row["name"] for row in platform_rows]
+
+    # 先把第一家单独关掉：总闸翻回来之后它**必须还是关着的**（AND 语义的全部理由）
+    await page.goto("/#/settings")
+    first_toggle = page.locator("#f-enabled")
+    await first_toggle.wait_for(state="visible", timeout=15000)
+    assert await first_toggle.get_attribute("data-on") == "true", "默认选中的不是第一家"
+    await first_toggle.click()
+    await page.get_by_role("button", name="保存").first.click()
+    await page.get_by_text("已写盘并热加载").wait_for(state="visible", timeout=20000)
+
+    master = page.get_by_role("switch", name="平台总闸")
+    await master.wait_for(state="visible", timeout=15000)
+    assert await master.get_attribute("data-on") == "true"
+
+    await master.click()
+    rows = page.get_by_role("list", name="各家当前状态")
+    await rows.wait_for(state="visible", timeout=15000)
+    await page.wait_for_function(
+        """(expected) => {
+          const list = document.querySelector('[aria-label="各家当前状态"]');
+          if (!list) return false;
+          const text = list.innerText;
+          return (
+            (text.match(/被总闸关着/g) ?? []).length === expected &&
+            !text.includes('已关闭')
+          );
+        }""",
+        arg=len(names),
+        timeout=20000,
+    )
+    # 「已关闭」一次都不该出现：每一行此刻都是"被总闸盖住"，
+    # 而那句谎（把 master_off 说成"这一家关了"）正是这一整块改动要挡的东西。
+
+    await page.goto("/#/tasks")
+    await page.get_by_text("preflight").first.wait_for(state="visible", timeout=15000)
+    for name in names:
+        gone = f"{name}_collect"
+        assert await page.get_by_text(gone).count() == 0, f"总闸关着，{gone} 的卡片还在"
+    # 跨平台那几个不属于任何一家，必须还在（否则"关掉采集"就变成了"整个系统不能用"）
+    for here in ("preflight", "single_link", "postprocess", "enrich_metrics"):
+        assert await page.get_by_text(here).count() > 0, f"跨平台任务 {here} 被总闸带走了"
+
+    # 翻回来：写盘是真的（整页重载之后还开着），而抖音**回到它自己那个关着的状态**
+    await page.goto("/#/settings")
+    await master.click()
+    await rows.wait_for(state="visible", timeout=15000)
+    await page.wait_for_function(
+        """() => {
+          const list = document.querySelector('[aria-label="各家当前状态"]');
+          return list !== null && list.innerText.includes('已关闭')
+            && !list.innerText.includes('被总闸关着');
+        }""",
+        timeout=20000,
+    )
+    await page.reload()
+    await master.wait_for(state="visible", timeout=15000)
+    assert await master.get_attribute("data-on") == "true", "总闸没写住：刷新之后又关了"
+    assert await page.locator("#f-enabled").get_attribute("data-on") == "false", (
+        "打开总闸把第一家自己那个开关也复原了 —— 那正是「批量写四次」的那种实现"
+    )
+    # 重载之后从**浏览器**里逐行读这份名单（不再走同步 api 客户端）：
+    # 第一家该是"已关闭"（它自己关的，总闸翻回来不会替它开），其余该是"已启用"。
+    listbox = page.get_by_role("list", name="各家当前状态")
+    for index, name in enumerate(names):
+        line = await listbox.locator("li").filter(has_text=name).first.inner_text()
+        want = "已关闭" if index == 0 else "已启用"
+        assert want in line, (name, want, line)
+        assert "被总闸关着" not in line, (name, line)
 
 
 async def test_dark_mode_changes_the_computed_page_background(page: Page) -> None:

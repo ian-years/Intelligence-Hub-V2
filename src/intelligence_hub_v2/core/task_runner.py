@@ -39,6 +39,10 @@ from intelligence_hub_v2.models.event import (
 )
 from intelligence_hub_v2.models.manifest import ManifestBuilder
 from intelligence_hub_v2.models.task import TaskResult, TaskRunRecord
+from intelligence_hub_v2.platforms.base import (
+    PlatformAvailability,
+    resolve_platform_availability,
+)
 from intelligence_hub_v2.tasks.definition import CancelToken, TaskContext, TaskDefinition
 
 if TYPE_CHECKING:
@@ -56,6 +60,24 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 __all__ = ["CancelToken", "TaskRunner", "TaskScheduler"]
+
+
+_WHY_UNAVAILABLE: dict[PlatformAvailability, str] = {
+    "available": "它可用（走到这条分支说明门写错了）",
+    "own_off": "它被关掉了（config/platforms.yaml 的 enabled: false）",
+    # 这一句不许写成"它被关掉了"：那会让人去翻 platforms.yaml，而那里看见的是 enabled: true。
+    "master_off": (
+        "它被总闸关着（app.yaml 的 platform_control.enabled: false，关掉时四家一律不可用）"
+    ),
+    "absent": "它没有配置对象（ConfigManager 的装配漏了一环）",
+}
+"""三种红各说一句。合成一句"未启用或未实现"是原来这里的形状，
+而症状是"明明去 Settings 打开了，点它还是这句"—— 那才是真原因（总闸）没被说出来。
+"""
+
+
+def _why_unavailable(state: PlatformAvailability) -> str:
+    return _WHY_UNAVAILABLE[state]
 
 
 class TaskRunner:
@@ -368,18 +390,30 @@ class TaskScheduler:
             await asyncio.gather(*pending, return_exceptions=True)
 
     def _gate_platforms(self, definition: TaskDefinition) -> None:
-        """跑前的门：未实现的直接拒；跨平台的过；否则每个依赖平台都要 enabled。
+        """跑前的门：未实现的直接拒；跨平台的过；否则每个依赖平台都要**可用**。
 
         跑前拒（不建 run 行、不发事件）与跑后失败要分得开 —— 前者是"这个按钮不该点"，
         后者才是"这一轮真的挂了"。
+
+        判据与 `/api/tasks` 那份过滤、注册表的 `availability()` 是同一次调用
+        （`resolve_platform_availability`）。这件事是本文件最容易被无声破坏的一条：
+        两边分开写的话，"列表里没这个按钮、POST 点名却跑得起来"和反过来都会发生，
+        而两种都各有一个人每天看见。
+
+        `self._app` 是**共享的那个 `AppConfig` 实例**，`write_platform_control` 原地换的是
+        它的字段，所以这里读到的总是当前值 —— 不需要额外失效动作（对照 `_configs`：
+        那份是 `dict(configs)` 的快照，平台开关的改动必须靠 `update_config` 推过来）。
         """
         if not definition.implemented:
             msg = f"任务 {definition.name!r} 在当前构建里未实现（V2.0 只给了 6 个 handler）"
             raise TaskRejected(msg)
         for platform in definition.platforms:
-            config = self._configs.get(platform)
-            if config is None or not config.enabled:
-                msg = f"任务 {definition.name!r} 依赖平台 {platform!r}，但它未启用或未实现"
+            state = resolve_platform_availability(
+                self._configs.get(platform),
+                master_enabled=self._app.platform_control.enabled,
+            )
+            if state != "available":
+                msg = f"任务 {definition.name!r} 依赖平台 {platform!r}，但{_why_unavailable(state)}"
                 raise TaskRejected(msg)
 
     def _config_snapshot(self, definition: TaskDefinition) -> dict[str, object]:

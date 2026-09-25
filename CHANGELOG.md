@@ -367,6 +367,58 @@
 - `Makefile` 的 `e2e` recipe 从来说不通（`$(PLAYWRIGHT) test` 是 Node 那份 CLI，而本仓库装的是
   Python playwright）→ 改成 `$(PYTEST) -m e2e tests/e2e`
 
+### Added（同日再补 · 平台总闸，ADR-0025）
+
+- **`app.yaml` 多一段 `platform_control.enabled`（四家共用的总闸）**。语义是一道路闸：
+  `可用 = 总闸 AND 这一家自己的 enabled`，**不改写任何一家自己的值** ——
+  批量写四次那种实现在"重新打开总闸"时会把用户之前单独关掉的某家悄悄复原，
+  而界面上再也分不出"你自己关的"与"被总闸盖住的"
+  （`tests/unit/core/test_config.py` 里那条 `test_the_master_does_not_rewrite_…` 盯着这个）
+- **`PlatformAvailability` 四态 + `resolve_platform_availability`**（`platforms/base.py`）：
+  `available / own_off / master_off / absent`。四态而不是 bool 的理由是文案要说得出
+  **是哪一道闸**挡的 —— 注册表原来那句「已被关掉（config/platforms.yaml 的 enabled: false）」
+  在总闸关着时是谎话（文件里写的还是 `true`），会把人支去改一个本来就开着的字段。
+  四个消费者（`/api/tasks` 的过滤、跑前那道门、平台注册表、cron 名单）全调这一个函数
+- **`GET/PUT /api/platform-control`**：响应带 `shadowed_by_env`（env 压着 yaml 时逐键点名，
+  与 `/api/schedule` 同一条纪律）。PUT 之后**当场重排采集 job**，不重启
+- `GET /api/platforms` 根上多 `master_enabled`、每行多 `availability`；
+  `GET /api/schedule` 多 `master_enabled`（默认名单是空的 = 所有启用的平台，
+  于是关总闸会拿到"`effective_platforms` 空、`skipped_platforms` 也空"，
+  cron 还写着 08:00 而一家都不排 —— 没有任何一栏解释原因，那一格是真洞）
+- **设置页多一张 `PlatformControlCard`**：总闸开关 + 四行**只读**状态
+  （开着 / 你自己关的 / 被总闸盖住的 / 没有配置对象）。四行不放开关是刻意的：
+  放了就等于把"总闸 + AND"重新解释成"批量写四次"
+- `frontend/src/lib/platform-state.ts`：那四句说法的唯一出处，总览页与设置页共用
+  （两页各写一份判据迟早分叉，分叉症状是"总览页说已启用、设置页说被总闸关着"）
+- 用例：`tests/unit/platforms/test_availability.py`（新，三处入口并排问同一件事 +
+  四态穷举 + 总闸闭包现读现算）、`tests/integration/test_api_platform_control.py`（新，15 条：
+  一次 PUT 之后四处口径同步、绕界面直接 POST 被拒且点名总闸、真 APScheduler 上 job 被重排）、
+  `tests/unit/platforms/test_registry.py` +4（三种红各说一句，含**反向**断言）、
+  `tests/integration/test_api_schedule.py`/`platform-control` 各一条防"恒印那句话"的反向用例、
+  e2e 一条：真浏览器里翻总闸 → 任务页少掉采集卡片、四行全说"被总闸关着"、
+  翻回来第一家仍是"已关闭"
+- **15 条变异实测**（`.scratch/mutation/run_master_switch*.py`）：全部 KILLED。
+  其中"PUT 里不重排采集 job"这一条第一轮**真的活了**（集成那一格 `apscheduler is None`，
+  名单又每次现算），补了带真 `AsyncIOScheduler` 的用例才杀掉。
+  第一轮另有三条 `ANCHOR-MISS`（锚点是照 `ruff format` 之前的排版抄的）与一条
+  "变异本身是死代码"（把 `case "own_off":` 插到已有 case 后面）—— 两种"看起来验过了"
+  记在 `docs/lessons.md`
+
+### Changed（同批）
+
+- `PlatformRegistry.__init__` 多一个**必填关键字参数** `master_enabled: Callable[[], bool]`。
+  闭包而不是 bool 快照：传值也能让今天所有用例绿，症状是"设置页显示总闸已开、
+  任务列表还是空的"要等重启。没有默认值：默认等于"新调用点忘记传就静默忽略总闸"
+- `ConfigManager.is_enabled` 的语义从"这一家自己的开关"改成"这一家可用吗"（AND）。
+  名字留着是因为四个调用方要的都是后者
+- `ConfigManager.enabled_platforms()` 成为那一份**唯一**的"可用名单"，
+  cron 排程、`/api/schedule` 的两栏、`/api/tasks` 的过滤都从它进货
+- `TaskScheduler._gate_platforms` 的报错从一句盖住三种成因的「未启用或未实现」
+  分家成三句（自家关的 / 被总闸盖住的 / 没有配置对象）
+- e2e 那条"草稿式设置页要按保存"的用例，定位从"页面上第一个 switch"换成 `#f-enabled`：
+  总闸那一格现在排在表单**上面**，而它是点了就写盘、没有草稿这一步 ——
+  用 `.first` 会让那条用例悄悄改测另一个功能，且失败信息完全指不到成因
+
 ### Changed
 - **`docs/adr/0011`：cookie 阶梯的顺序只有一处真源。**
   `DouyinConfig.ytdlp_cookie_priority` 删除 —— 它与 `DouyinAdapter.capabilities.cookie_variants`

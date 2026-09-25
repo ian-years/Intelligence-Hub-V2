@@ -156,9 +156,9 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 > 工坊页截图包的真数据源（ADR-0024）、工坊页的 Playwright 那一腿。
 > 一次会话落了 T2.1 二片 / T2.2 / T5.2-T5.7 / T6.3 二片 / T6.5-T6.8，加 7 份新 ADR（0019-0024 +
 > 0020 的"分期"改为已落）。
-> 全程数字与逐条归属见 `docs/progress/2026-09-25.md`；**待你点头的 17 件事在它的第 7 节**。
-> 一句话摘要：`pytest` 2423 passed / 覆盖率 94.84%（`platforms+tasks+tools` 95%）、
-> 前端 309 passed、e2e 10 条（真 Chromium + 真 uvicorn，`make e2e`），
+> 全程数字与逐条归属见 `docs/progress/2026-09-25.md`；**待你点头的 26 件事在它的第 7 节**。
+> 一句话摘要（2026-09-25 深夜，含平台总闸那一批之后）：`pytest` 2488 passed / 覆盖率 94.93%（`platforms+tasks+tools` 95%）、
+> 前端 325 passed、e2e 11 条（真 Chromium + 真 uvicorn，`make e2e`），
 > 另有一条真 ffmpeg 的 `-m real_network` 烟雾（3 passed）。
 
 - [x] 小红书 Adapter（依赖桥的页面 JS 注入）
@@ -216,6 +216,19 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   —— 2026-09-25：前置全解除（桥 T0.1、cookie 导出 T0.2、三家适配器 T2.x、`--rollback` T6.2），
   **可粘贴的验证命令已逐条写进 `docs/plans/v2.1-migration-plan.md` 的 Phase 3**（那五条都标了 `[!]`）。
   缺的只有"人已登录的 Chrome"与"允许往 live `data/` 写"这两件由人点头的事。
+
+- [x] 四平台的**全局开关**（总闸）
+  —— 2026-09-25（ADR-0025）：`app.yaml` 的 `platform_control.enabled`，语义是
+  `可用 = 总闸 AND 这一家自己的 enabled`，**不改写任何一家自己的值**。
+  四态判据（`available / own_off / master_off / absent`）只有一处定义
+  （`platforms/base.py::resolve_platform_availability`），`/api/tasks` 的过滤、跑前那道门、
+  平台注册表、cron 名单四处都从这一处进货 —— 本地各 AND 一次就是"按钮在、点下去被拒"那一族。
+  只管新提交，不打断在跑的那一轮。界面：设置页一张 `PlatformControlCard`（总闸 + 四行只读三态），
+  总览页那四枚牌与它共用 `lib/platform-state.ts` 一份说法。
+  验证：15 条变异全 KILLED（其中"PUT 不重排采集 job"第一轮真的活了，补了带真
+  `AsyncIOScheduler` 的用例才杀掉）；e2e 一条在真浏览器里翻闸看三处口径。
+  **仍然待点头的范围问题**在第 7 节第 24 行：关掉总闸后 `postprocess` 取字幕也会被拒
+  （与"这一家自己关了"完全同范围，不是新行为，但第一次会让人意外）。
 
 ### V2.2「飞书 + 分析层 + 暗色」 — 规划中
 

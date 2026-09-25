@@ -38,7 +38,8 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | 平台适配器 Protocol | `src/intelligence_hub_v2/platforms/base.py` + [`docs/specs/platform-adapter.md`](docs/specs/platform-adapter.md) | `PlatformAdapter` / `Capabilities` / `MediaArtifact` / `VideoMeta` / `CreatorRef` 等 |
 | 任务定义与事件 | `src/intelligence_hub_v2/tasks/definition.py` + [`docs/specs/task-runner.md`](docs/specs/task-runner.md) / [`event-schema.md`](docs/specs/event-schema.md) | `TaskDefinition` / `TaskKind` / `Event` / `EventType` / `Manifest` |
 | 数据 schema | `src/intelligence_hub_v2/storage/schema.py` + Alembic + [`docs/specs/data-model.md`](docs/specs/data-model.md) | 所有表与字段 |
-| 配置 schema | `src/intelligence_hub_v2/core/config.py` + [`docs/specs/config-schema.md`](docs/specs/config-schema.md) | `AppConfig` / `PlatformConfig`（每个平台一份 Pydantic 模型） |
+| 配置 schema / `PlatformControlSection`（四家总闸，ADR-0025） | `src/intelligence_hub_v2/core/config.py` + [`docs/specs/config-schema.md`](docs/specs/config-schema.md) / `PlatformControlSection`（四家总闸，ADR-0025） | `AppConfig` / `PlatformConfig`（每个平台一份 Pydantic 模型） / `PlatformControlSection`（四家总闸，ADR-0025） |
+| 可用性判据 | `src/intelligence_hub_v2/platforms/base.py::resolve_platform_availability` | 那一道 **AND** 与四态（`available` / `own_off` / `master_off` / `absent`）的唯一出处。四个消费者（`/api/tasks` 的过滤、跑前那道门、平台注册表、cron 名单）都从这一处进货 —— 在本地再 `cfg.enabled and …` 写一次就是「按钮在、点下去被拒」那一族 |
 | 设计令牌 | `frontend/src/styles/tokens.css` + `frontend/tokens.json` + [`docs/specs/ui-tokens.md`](docs/specs/ui-tokens.md) | 孟菲斯色板 / 形状 / 排版 / 图案 / 动效 |
 | OpenAPI | FastAPI 自动出，`/openapi.json` | 前端 `openapi-typescript` 据此生成 TS 类型 |
 | 契约测试套件 | `tests/contracts/` + [`docs/specs/contract-tests.md`](docs/specs/contract-tests.md) | L2 抽象基类 + V1 §7 25 条陷阱映射 |
@@ -163,6 +164,7 @@ V1 那 25 条陷阱（`Intelligence-Hub/AGENTS.md` §7）在 V2 的状态分三�
 - 动的是 Pydantic 模型？→ JSON Schema 自动渲染前端表单还能用？字段加了 `Field(description=...)`？
 - 动的是前端组件？→ 用了设计令牌而不是硬编码颜色 / 间距？孟菲斯风格（粗黑边、硬阴影、几何形状）保持一致？
 - 动的是配置？→ 默认值在 Pydantic Settings 里？YAML 字段名与 Pydantic 一致？敏感字段（token）不进 git？
+- 动的是「这一家能不能用」？→ 判据有没有走 `resolve_platform_availability`，还是在本地又 `cfg.enabled` AND 了一次（ADR-0025）？异常文案与界面说得出**是哪一道闸**挡的吗（自家关的 / 被总闸盖住的 / 根本没有配置对象）？
 - 动的是 API？→ OpenAPI 自动出了？前端类型重新生成了（`npm run gen:api`）？SSE 事件 schema 没破？
 - 声称"修好了"？→ 有没有真机跑通的命令 + 数字？没有就在 `docs/progress/` 写"未验证"。
 

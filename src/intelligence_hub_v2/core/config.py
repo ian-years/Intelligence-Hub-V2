@@ -39,7 +39,11 @@ from intelligence_hub_v2.errors import ConfigError
 from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models import TaskKind
 from intelligence_hub_v2.platforms import PLATFORM_CONFIG_SCHEMAS, platform_defaults
-from intelligence_hub_v2.platforms.base import PlatformConfig
+from intelligence_hub_v2.platforms.base import (
+    PlatformAvailability,
+    PlatformConfig,
+    resolve_platform_availability,
+)
 
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
@@ -87,6 +91,25 @@ class AppSection(BaseModel):
 
     True = 关掉平台只是**停采集**，已收的东西不消失。这是用户预期：
     开关管的是"还收不收"，不是"删不删"。删除走 `is_hidden`（V1 §7.25 的墓碑内化）。
+    """
+
+
+class PlatformControlSection(BaseModel):
+    """四家平台的**总闸**（ADR-0025）。`scheduler.enabled` 管的是"调度器要不要起"，
+    这一段管的是"这四家还可不可以采" —— 后者也管手动点的那一次，所以不是同一件事。
+
+    默认 `True` 是硬要求：新增一道闸门把现网所有平台静默关掉，比没有这道闸门更糟。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    """关掉 = 四家一律不可用（`*_collect` 从 `/api/tasks` 消失、cron 不再排、
+    `single_link`/`add_creator` 认到这些家的链接也拒）。
+
+    **它不改写任何一家自己的 `enabled`**。这一条是整个设计的全部理由：
+    批量写四次的话，"重新打开总闸"会把你之前单独关掉的某家悄悄复原，
+    而界面上再也分不出"你自己关的"与"被总闸盖住的"。
     """
 
 
@@ -346,6 +369,8 @@ class AppConfig(BaseSettings):
     storage: StorageSection = Field(default_factory=StorageSection)
     logging: LoggingSection = Field(default_factory=LoggingSection)
     scheduler: SchedulerSection = Field(default_factory=SchedulerSection)
+    platform_control: PlatformControlSection = Field(default_factory=PlatformControlSection)
+    """四家的总闸（ADR-0025）。某家可用 = 总闸 AND 它自己的 `enabled`。"""
     cdp_bridge: BridgeSection = Field(default_factory=BridgeSection)
     asr: AsrSection = Field(default_factory=AsrSection)
     http_client: HttpSection = Field(default_factory=HttpSection)
@@ -638,15 +663,34 @@ class ConfigManager:
         return [p for p in PLATFORM_CONFIG_SCHEMAS if p in self._platforms]
 
     def enabled_platforms(self) -> list[str]:
-        """开关开着且已配置的平台名，按注册表顺序。
+        """**可用**的平台名（总闸 AND 该家自己的开关），按注册表顺序。
 
-        调度器靠它过滤 `/api/tasks`：平台关掉 → 该平台的任务自动消失。
+        调度器、cron 排程、`/api/tasks` 的过滤、注册表的 `enabled_platforms()` 全读这里 ——
+        所以"总闸关掉之后什么都停"这件事**不需要**每个消费点各改一遍。
+        历史上这一位只看 `cfg.enabled`；ADR-0025 之后它是那一道 AND。
         """
-        return [p for p in self.platform_names() if self._platforms[p].enabled]
+        return [p for p in self.platform_names() if self.is_platform_available(p)]
 
     def is_enabled(self, name: str) -> bool:
-        cfg = self._platforms.get(name)
-        return cfg is not None and cfg.enabled
+        """这一家**可用**吗（总闸 AND 自身）。名字保留 `is_enabled` 是因为它已经有四个调用方，
+        但语义从"它自己的开关"变成了"可不可用" —— 读它的人要的是后者。
+        """
+        return self.is_platform_available(name)
+
+    def is_platform_available(self, name: str) -> bool:
+        return self.platform_availability(name) == "available"
+
+    def platform_availability(self, name: str) -> PlatformAvailability:
+        """**哪一道闸**挡着这一家。四态各自的含义与"为什么要四态"写在
+        `platforms/base.py::PlatformAvailability` —— 那里也是 AND 的唯一定义处，
+        本方法只是把这份配置的两路输入递进去（`app.platform_control.enabled` 与
+        `_platforms` 里那一段）。注册表、`/api/tasks` 的过滤与跑前那道门读的
+        都是同一个函数，不是同一句话的三份抄写。
+        """
+        return resolve_platform_availability(
+            self._platforms.get(name),
+            master_enabled=self.app.platform_control.enabled,
+        )
 
     # ---- 热重载 ----
 
@@ -800,6 +844,58 @@ class ConfigManager:
         logger.info("config.scheduler_written", path=str(target), cron=payload.get("collect_cron"))
         return target
 
+    def write_platform_control(self, enabled: bool) -> Path:
+        """写总闸那一段并**原地换内存**（与 `write_scheduler` 同一套纪律，理由也同源）。
+
+        为什么是原地换 `self._app.platform_control` 而不是重读一份新的：`build_components`
+        里 `config = manager.app`，同一个 `AppConfig` 实例被 `AppState` / `TaskRunner` /
+        `TaskScheduler` 共同握着；换指针会造出第二个实例，没跟着换的持有者继续用旧配置，
+        症状是"设置页显示总闸已开，任务列表还是空的"。
+
+        段**以外**的顶层键（`data` / `storage` / `scheduler` …）原样保留：
+        这份文件是用户手写的，PUT 只该动它点过的那一格。
+        """
+        if not self._loaded:
+            msg = (
+                "ConfigManager 还没 load() 就要写 platform_control 段。写盘是按内存重建 "
+                "app.yaml 的，空内存等于把这一段换成默认值 —— 先 ConfigManager.load()。"
+            )
+            raise ConfigError(msg, path=str(self.app_yaml_path))
+
+        section = PlatformControlSection(enabled=enabled)
+        with self._write_lock:
+            data = dict(read_yaml_mapping(self.app_yaml_path))
+            data["platform_control"] = section.model_dump(mode="json")
+            target = self.app_yaml_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.parent / f"{target.name}.tmp"
+            tmp.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            tmp.replace(target)
+            if self._app is not None:
+                self._app.platform_control = section
+
+        logger.info("config.platform_control_written", path=str(target), enabled=enabled)
+        return target
+
+    def platform_control_keys_shadowed_by_env(self) -> list[str]:
+        """总闸有没有被环境变量压着 —— 有则"保存成功"只对到下一次启动为止。
+
+        与 `scheduler_keys_shadowed_by_env` 同一条理由（那里的注释写了症状）。
+        单列一个方法而不是复用：那个的入参是 `SchedulerSection` 且段名写死，
+        把它改成通用的会顺手改掉调度器那条看护的形状，收益不值。
+        """
+        prefix = str(AppConfig.model_config.get("env_prefix") or "")
+        delimiter = str(AppConfig.model_config.get("env_nested_delimiter") or "__")
+        head = f"{prefix}PLATFORM_CONTROL{delimiter}"
+        return sorted(
+            key
+            for key in PlatformControlSection.model_fields
+            if f"{head}{key.upper()}" in os.environ
+        )
+
     def scheduler_keys_shadowed_by_env(self, section: SchedulerSection) -> list[str]:
         """哪些 `scheduler.*` 键**环境变量里也有**，因此下一次启动会盖掉盘上这份。
 
@@ -829,6 +925,8 @@ __all__ = [
     "HttpSection",
     "LoggingSection",
     "PathsSection",
+    "PlatformAvailability",
+    "PlatformControlSection",
     "SchedulerSection",
     "StorageSection",
     "load_app_config",

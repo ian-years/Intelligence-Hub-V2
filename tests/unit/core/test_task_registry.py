@@ -84,7 +84,7 @@ def _configs(*, douyin: bool = True, bilibili: bool = True) -> dict:
 
 
 def test_available_tasks_respect_platform_switch_and_implementation() -> None:
-    both = available_task_names(_configs())
+    both = available_task_names(_configs(), master_enabled=True)
     assert {
         "preflight",
         "douyin_collect",
@@ -96,7 +96,7 @@ def test_available_tasks_respect_platform_switch_and_implementation() -> None:
         "enrich_metrics",
     } == set(both)
 
-    only_douyin = set(available_task_names(_configs(bilibili=False)))
+    only_douyin = set(available_task_names(_configs(bilibili=False), master_enabled=True))
     assert "bilibili_collect" not in only_douyin
     assert "douyin_collect" in only_douyin
     # 跨平台的实现任务永远在
@@ -104,10 +104,27 @@ def test_available_tasks_respect_platform_switch_and_implementation() -> None:
     assert "enrich_metrics" in only_douyin, "补读数挑活是全平台的，不该跟着平台开关消失"
 
 
+def test_the_master_switch_removes_platform_tasks_and_keeps_the_rest() -> None:
+    """总闸关掉 = "**每一家**都不可用"，所以这里应当与"四家逐个关掉"同一结果。
+
+    留着的四个正是那条边界的另一侧：它们不属于任何一家，
+    关掉四家采集不该连"给本地已有视频跑一次转写"一起停掉（ADR-0025）。
+    """
+    off = set(available_task_names(_configs(), master_enabled=False))
+    assert not (off & {"douyin_collect", "bilibili_collect"})
+    assert {"preflight", "single_link", "add_creator", "postprocess", "enrich_metrics"} <= off
+    # 与"逐个关"同一份答案 —— 两条路径如果各算各的，这里就会分叉
+    assert off == set(
+        available_task_names(_configs(douyin=False, bilibili=False), master_enabled=True)
+    )
+    assert not task_is_available(TASKS["douyin_collect"], _configs(), master_enabled=False)
+    assert task_is_available(TASKS["preflight"], _configs(), master_enabled=False)
+
+
 def test_unimplemented_never_available_even_if_platform_turned_on() -> None:
     # xiaohongshu 从没在 configs 里，且未实现 → 双重不可用
-    assert not task_is_available(TASKS["xiaohongshu_collect"], _configs())
-    assert "all_platforms" not in available_task_names(_configs())
+    assert not task_is_available(TASKS["xiaohongshu_collect"], _configs(), master_enabled=True)
+    assert "all_platforms" not in available_task_names(_configs(), master_enabled=True)
 
 
 def test_resolve_timeout_prefers_scheduler_override() -> None:

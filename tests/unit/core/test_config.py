@@ -622,3 +622,131 @@ def test_shipped_platforms_yaml_survives_write_roundtrip(tmp_path: Path) -> None
 
     assert after == before
     assert mgr2.get_platform("bilibili").ytdlp_cookies_from_browser == "chrome"
+
+
+# ---------------------------------------------------------------------------
+# 平台总闸（`platform_control.enabled`，ADR-0025）
+#
+# 它**不是**"把四家的 enabled 批量写四次"：那种做法在"重新打开总闸"时会把
+# 你之前单独关掉的某家悄悄复原，而且界面上再也分不出"你自己关的"与"被总闸盖住的"。
+# 所以这里看护的核心关系是：总闸只改变"可用"，**不改变任何一家的自身值**。
+# ---------------------------------------------------------------------------
+
+_TWO_PLATFORMS = (
+    "douyin:\n  enabled: true\n  display_name: 抖音\n"
+    "bilibili:\n  enabled: false\n  display_name: B站\n"
+)
+
+
+def _manager_with(tmp_path: Path, *, app_body: str = "") -> ConfigManager:
+    _write_platforms_yaml(tmp_path, _TWO_PLATFORMS)
+    if app_body:
+        (tmp_path / "app.yaml").write_text(app_body, encoding="utf-8")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+    return mgr
+
+
+def test_the_master_switch_defaults_to_on(tmp_path: Path) -> None:
+    """默认必须是"开着"：新增一个闸门把现网所有平台静默关掉是不可接受的默认值。"""
+    mgr = _manager_with(tmp_path)
+    assert mgr.app.platform_control.enabled is True
+    assert mgr.enabled_platforms() == ["douyin"]
+
+
+def test_master_off_makes_every_platform_unavailable(tmp_path: Path) -> None:
+    mgr = _manager_with(tmp_path, app_body="platform_control:\n  enabled: false\n")
+    assert mgr.enabled_platforms() == []
+    assert mgr.is_platform_available("douyin") is False
+
+
+def test_the_master_does_not_rewrite_what_each_platform_says_about_itself(
+    tmp_path: Path,
+) -> None:
+    """这一条是总闸存在的全部理由：**关掉再打开，各家回到原位**。
+
+    断的是"自身值一字未动 + 可用集从空回到原样"两半。只测后半截的话，
+    一个"关总闸 = 把四家都写成 false，开 = 都写成 true"的实现也能绿，
+    而那正是 B站 会被悄悄打开的那种丢选择。
+    """
+    mgr = _manager_with(tmp_path, app_body="platform_control:\n  enabled: false\n")
+
+    assert mgr.get_platform("douyin").enabled is True, "总闸不该改写平台自己的那一位"
+    assert mgr.get_platform("bilibili").enabled is False
+    assert mgr.enabled_platforms() == []
+
+    mgr.write_platform_control(True)
+    assert mgr.is_platform_available("douyin") is True
+    assert mgr.enabled_platforms() == ["douyin"], "打开总闸回到原来的组合，不是四家全开"
+    assert mgr.get_platform("bilibili").enabled is False, "被单独关掉的不能活过来"
+
+
+@pytest.mark.parametrize(
+    ("master", "own", "expected"),
+    [(True, True, "available"), (True, False, "own_off"), (False, True, "master_off")],
+)
+def test_availability_names_which_switch_is_down(
+    tmp_path: Path, master: bool, own: bool, expected: str
+) -> None:
+    """ "为什么这一家不能用"必须答得出**是哪一道闸**。
+
+    注册表原来那句"已被关掉（config/platforms.yaml 的 enabled: false）"在总闸关掉时
+    是谎话 —— 文件里写的还是 true，人去翻 platforms.yaml 会看见"开着"。
+    所以这里不是"顺手加个枚举"，是不让一个错误信息把人支去改错的地方。
+    """
+    _write_platforms_yaml(
+        tmp_path, f"douyin:\n  enabled: {'true' if own else 'false'}\n  display_name: 抖音\n"
+    )
+    if not master:
+        (tmp_path / "app.yaml").write_text(
+            "platform_control:\n  enabled: false\n", encoding="utf-8"
+        )
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+    assert mgr.platform_availability("douyin") == expected
+
+
+def test_an_unconfigured_platform_is_absent_not_off(tmp_path: Path) -> None:
+    """ "这一家没配置对象"与"被关了"是两件事：前者是装配漏了一环。"""
+    mgr = _manager_with(tmp_path)
+    assert mgr.platform_availability("youtube") == "absent"
+
+
+def test_write_platform_control_persists_and_rereads(tmp_path: Path) -> None:
+    """写盘 + 重新 load 读回同一个值（否则重启后总闸自己弹回开）。"""
+    mgr = _manager_with(tmp_path)
+    mgr.write_platform_control(False)
+
+    assert (tmp_path / "app.yaml").read_text(encoding="utf-8").count("platform_control") == 1
+    mgr2 = ConfigManager(config_dir=tmp_path)
+    mgr2.load()
+    assert mgr2.app.platform_control.enabled is False
+    assert mgr2.enabled_platforms() == []
+
+
+def test_env_can_open_the_master_switch_without_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`INTELLIGENCE_HUB_PLATFORM_CONTROL__ENABLED` 与别的 section 同一优先级（env > yaml）。"""
+    _write_platforms_yaml(tmp_path, _TWO_PLATFORMS)
+    (tmp_path / "app.yaml").write_text("platform_control:\n  enabled: false\n", encoding="utf-8")
+    monkeypatch.setenv("INTELLIGENCE_HUB_PLATFORM_CONTROL__ENABLED", "true")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+    assert mgr.app.platform_control.enabled is True
+    assert mgr.enabled_platforms() == ["douyin"]
+
+
+def test_the_shipped_app_yaml_carries_the_master_switch_as_a_comment(tmp_path: Path) -> None:
+    """仓库自带的 app.yaml 要有这一位的说明，但**不写成一行的 false**。
+
+    写死了就变成"新克隆下来四家全不可用"；注释掉 + 默认 True 才既解释又不咬人。
+    """
+    text = (SHIPPED_CONFIG_DIR / "app.yaml").read_text(encoding="utf-8")
+    assert "platform_control" in text
+    live = [
+        line
+        for line in text.splitlines()
+        if line.strip().startswith("enabled:") and not line.strip().startswith("#")
+    ]
+    assert all("true" in line for line in live), f"不该有未注释的关闭值：{live[:3]}"

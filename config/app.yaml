@@ -46,6 +46,13 @@ logging:
   rotate_max_bytes: 52428800      # 50 MB
   rotate_backup_count: 5
 
+# 平台总闸（ADR-0025）。打开时它不改写任何一家自己的 `enabled`，
+# 所以"关掉总闸再打开"会回到你原来的组合，而不是四家全开。
+# 默认就是开着的（`PlatformControlSection.enabled = True`），所以这里整段注释掉 = 不改行为；
+# 要常关就在自己环境设 `INTELLIGENCE_HUB_PLATFORM_CONTROL__ENABLED=false`。
+# platform_control:
+#   enabled: false
+
 scheduler:
   # APScheduler 配置
   enabled: true

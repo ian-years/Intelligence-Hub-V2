@@ -22,7 +22,9 @@ from intelligence_hub_v2.platforms.base import (
     AdapterDeps,
     Capabilities,
     PlatformAdapter,
+    PlatformAvailability,
     PlatformConfig,
+    resolve_platform_availability,
 )
 
 logger = get_logger(__name__)
@@ -86,6 +88,11 @@ class PlatformRegistry:
     `deps_factory` 而不是 `deps`：依赖袋里有 `bridge=None` 这种情况
     （声明 `needs_browser=True` 却拿不到桥是**装配错误**，V1 §7.20 的教训），
     装配哪些东西是平台的 `capabilities` 决定的，所以必须按名字现造。
+
+    `master_enabled` 是**闭包而不是 bool**（ADR-0025）：总闸在运行期会被设置页翻，
+    传进来的那份快照在翻转之后就成旧真相 —— 症状是"设置页显示总闸已开，任务列表还是空的"，
+    要重启才恢复。所以这里要的是"每次问现读一次"。它没有默认值：默认等于
+    "忘记传的新调用点会静默忽略总闸"，那正是这道闸门最坏的失效方式。
     """
 
     def __init__(
@@ -93,12 +100,14 @@ class PlatformRegistry:
         configs: Mapping[str, PlatformConfig],
         deps_factory: Callable[[str], AdapterDeps],
         *,
+        master_enabled: Callable[[], bool],
         classes: Mapping[str, type[PlatformAdapter]] | None = None,
     ) -> None:
         self._configs = dict(configs)
         self._deps_factory = deps_factory
         self._classes = dict(classes) if classes is not None else dict(PLATFORMS)
         self._instances: dict[str, PlatformAdapter] = {}
+        self._master_enabled = master_enabled
 
     # ---- 名字 ----
 
@@ -106,26 +115,37 @@ class PlatformRegistry:
         """有适配器实现的平台（不管开关）。按名字排序，前端列表才不跳。"""
         return sorted(self._classes)
 
+    def availability(self, name: str) -> PlatformAvailability:
+        """这一家此刻能不能用，不能用的话是**哪一道闸**挡着。
+
+        判据不在本文件重写：`ConfigManager.platform_availability`、`/api/tasks` 的过滤
+        与跑前那道门调的是同一个 `resolve_platform_availability`。分叉成两份的成本
+        是"按钮在、点下去被拒"或反之，而两种都有人每天看见。
+        """
+        return resolve_platform_availability(
+            self._configs.get(name), master_enabled=self._master_enabled()
+        )
+
     def enabled_platforms(self) -> list[str]:
-        """既实现了、配置里 `enabled=True` 的平台。日更采集与定时任务走这条。
+        """既实现了、又**可用**（总闸 AND 自身开关）的平台。日更采集与定时任务走这条。
 
         注意与 V1 §7.22 的分工：「抓取某一位博主的爆款」这类**按位任务不走这里**，
         它按链接认博主、不看开关。开关只管"整库/定时"。
         """
-        return [name for name in self.implemented_platforms() if self._is_enabled(name)]
-
-    def _is_enabled(self, name: str) -> bool:
-        config = self._configs.get(name)
-        return bool(getattr(config, "enabled", False))
+        return [
+            name for name in self.implemented_platforms() if self.availability(name) == "available"
+        ]
 
     # ---- 取实例 ----
 
     def get(self, name: str) -> PlatformAdapter:
-        """拿适配器。三种红法各有不同文案，因为它们要的动作完全不同：
+        """拿适配器。不可用的时候有**三种**红法，文案各不相同，因为它们要的动作完全不同：
 
         - 没实现 → 这个平台在当前构建里不支持（V2.0 只有抖音/B站）。
-        - 实现了但被关掉 → 去 Settings 打开开关。
-        - 两者都过 → 正常返回。
+        - 没有配置对象 → 装配漏了一环，翻设置没用。
+        - 被关了 → 再去分是谁关的：**自己那段** `enabled: false`，还是**总闸**压着
+          （ADR-0025）。这两种在 `platforms.yaml` 里长得一模一样（那里还是 `enabled: true`），
+          所以把第二种说成第一种是把人支去改一个本来就开着的字段。
 
         把前两种合并成"未知平台"会让人去翻配置，而问题是这个版本压根没移植。
         """
@@ -135,25 +155,45 @@ class PlatformRegistry:
             msg = f"平台 {name!r} 在当前构建里没有适配器实现。可用的：{available}"
             raise PlatformError(name, "task", msg)
 
-        # "没有配置对象"必须**先于**"已被关掉"判（review P1-4）：`_is_enabled` 对
-        # config=None 也返回 False，先判开关会把装配错误谎报成"去 Settings 打开
+        # "没有配置对象"必须**先于**"已被关掉"判（review P1-4）：`availability` 对
+        # config=None 给的是 `absent`，先判开关会把装配错误谎报成"去 Settings 打开
         # 开关"—— 而那里根本没有这个平台。原来写在下面的同款检查因此不可达。
-        config = self._configs.get(name)
-        if config is None:
+        state = self.availability(name)
+        if state == "absent":
             msg = f"平台 {name!r} 注册了但没有配置对象 —— ConfigManager 的装配漏了一环"
             raise PlatformError(name, "task", msg)
 
-        if not self._is_enabled(name):
-            msg = f"平台 {name!r} 已被关掉（config/platforms.yaml 的 enabled: false）"
-            raise TaskRejected(msg)
+        if state != "available":
+            raise TaskRejected(self._unavailable_message(name, state))
 
         cached = self._instances.get(name)
         if cached is not None:
             return cached
 
-        instance = cls(config, self._deps_factory(name))
+        instance = cls(self.config_for(name), self._deps_factory(name))
         self._instances[name] = instance
         return instance
+
+    def _unavailable_message(self, name: str, state: PlatformAvailability) -> str:
+        """`master_off` / `own_off` 两句分开写，因为**动作相反**。
+
+        总闸那句必须顺带说清"它自己那一段没被关" —— 否则第一个动作仍然是去翻
+        `platforms.yaml`，而那里看见的是 `enabled: true`，什么也查不出来。
+        两道闸都拉着时两句都说：只报总闸会让人开完总闸再吃一次同样的红。
+        """
+        if state == "master_off":
+            config = self._configs.get(name)
+            if config is not None and not config.enabled:
+                tail = "而且它自己在 config/platforms.yaml 里也是关着的，开完总闸还要再开这一家。"
+            else:
+                tail = (
+                    "它自己那一段并没有被关（platforms.yaml 里还是 enabled: true），挡着的是总闸。"
+                )
+            return (
+                f"平台 {name!r} 被总闸关着（app.yaml 的 platform_control.enabled: false）："
+                f"关掉时四家一律不可用。{tail}"
+            )
+        return f"平台 {name!r} 已被关掉（config/platforms.yaml 的 enabled: false）"
 
     def config_for(self, name: str) -> PlatformConfig:
         """这个平台的已校验配置。`inconsistencies()` 之外不该有别人绕过它读 YAML。"""

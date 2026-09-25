@@ -98,7 +98,8 @@ class TaskDefinition(BaseModel):
 
 > **实施期现状（2026-09-23）· `requires` 这一项目前不生效。**
 > 12 个 `TaskDefinition` 都按上面的取值把 `requires` 写好了，但
-> `TaskScheduler._gate_platforms()` 只查两件事：`implemented` 与平台 `enabled`；
+> `TaskScheduler._gate_platforms()` 只查两件事：`implemented`，与它涉及的每家**可用**
+> （= 总闸 AND 该家自己的开关，判据在 `platforms/base.py::resolve_platform_availability`，ADR-0025）；
 > §4.2 速记里那句 `await self._check_requires(...)` 没有实现。
 >
 > 后果要说准：这**不是**「臆造成功」（AGENTS §1.3）—— 缺依赖时任务照样如实失败，
