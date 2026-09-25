@@ -1589,6 +1589,11 @@ export interface components {
             description?: string | null;
             /** Duration Seconds */
             duration_seconds?: number | null;
+            /**
+             * Has Video
+             * @default true
+             */
+            has_video: boolean;
             /** Hidden At */
             hidden_at?: string | null;
             /** Hidden Reason */

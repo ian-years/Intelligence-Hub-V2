@@ -25,7 +25,7 @@ from intelligence_hub_v2.models.creator import CreatorRef
 from intelligence_hub_v2.models.event import EventType
 from intelligence_hub_v2.models.task import TaskResult
 from intelligence_hub_v2.models.video import VideoMeta
-from intelligence_hub_v2.platforms.xiaohongshu.urls import extract_note_id
+from intelligence_hub_v2.platforms.xiaohongshu.urls import extract_note_id, note_token_of
 from intelligence_hub_v2.platforms.youtube.urls import extract_video_id
 from intelligence_hub_v2.tasks.collect import build_video_draft
 from intelligence_hub_v2.tasks.dispatch import canonical_video_url, detect_platform
@@ -56,6 +56,8 @@ async def run_single_link(ctx: TaskContext, params: SingleLinkParams) -> TaskRes
             "creator_ref": _synthetic_ref(platform, video_id),
             "title": video_id,  # 占位标题，V2.1 抓详情时覆盖（见模块 docstring）
             "webpage_url": canonical,
+            # 小红书：用户粘的那条链接里的 `xsec_token` 必须跟着走（见下面那段注释）。
+            **({"extra": _extra_for(platform, url)} if platform == "xiaohongshu" else {}),
         }
     )
 
@@ -118,6 +120,29 @@ async def _expand_if_short(ctx: TaskContext, url: str) -> str:
             return url
         return str(resp.url or url)
     return url
+
+
+def _extra_for(platform: str, expanded_url: str) -> dict[str, str]:
+    """`VideoMeta.extra` 里要跟着走的那几样。目前只有小红书有。
+
+    **这是 T3.3 真机跑出来的 bug，不是"顺手加个字段"**：小红书的详情页必须有
+    `xsec_token` 才拿得到（`build_note_url` 的注释里写着"缺了它站内会跳去风控页"），
+    而本 handler 以前只把链接压成 `canonical_video_url(platform, video_id)` ——
+    那一压正好**把用户粘的那串 query 参数全丢了**，于是 `_fetch_detail` 拿到空 token、
+    拼出一个站内认不出的 URL，症状是 `login_wall_or_removed`，
+    与"笔记被删""登录态过期"三者同形。2026-09-25 在同一条笔记上手工导航验证过：
+    同一个 token 手动打开是正常笔记，走我们这条路就被跳 `/404?source=/404/sec_…`。
+
+    取的是**展开短链之后**的那个 URL：抖音那一路 `_expand_if_short` 已经跟过 302，
+    小红书分享链接落地页带的才是当前有效的 token（原始短链里那个可能已经换过了）。
+    """
+    if platform != "xiaohongshu":
+        return {}
+    token, source = note_token_of(expanded_url)
+    extra: dict[str, str] = {"xsec_token": token}
+    if source:
+        extra["xsec_source"] = source
+    return extra
 
 
 def _extract_video_id(platform: str, url: str) -> str:

@@ -19,6 +19,9 @@ export function makeVideo(over: Partial<Video> = {}): Video {
     duration_seconds: 60,
     view_count: 0,
     is_hidden: false,
+    // 后端这一位是算出来的（`models/video.Video` 的 validator），但 fixture 必须给：
+    // 缺一个必填字段就是 tsc 红，而红的位置在几十个 spec 里，看不出是 fixture 的问题。
+    has_video: true,
     media_aux_paths_json: "[]",
     metadata_json: "{}",
     created_at: "2026-09-23T00:00:00+00:00",

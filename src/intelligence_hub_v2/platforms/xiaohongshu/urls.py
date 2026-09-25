@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, tzinfo
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 __all__ = [
     "build_note_url",
@@ -153,6 +153,27 @@ def extract_user_id(value: object) -> str:
     if not urlparse(text).netloc and re.fullmatch(r"[0-9a-zA-Z]{8,40}", text):
         return text
     return ""
+
+
+def note_token_of(url: str) -> tuple[str, str]:
+    """从一条**用户粘进来或分享短链落地**的笔记链接里取出 `(xsec_token, xsec_source)`。
+
+    为什么这一手必须在 urls 层（而不是任务层自己 `parse_qs`）：`build_note_url` 是拼
+    token 的唯一权威，它的**反方向**就该在旁边 —— 两处各认一次 query 参数名，
+    改名时只会坏一半（V1 §7.11 那一族"同一个东西三个叫法"）。
+
+    取不到就给空串：调用方要区分"链接里没带 token"与"带了但我认不出"，
+    而这件事由 `single_link` 的清单原文去说（缺 token 的链接在现网会被站内跳去风控页，
+    症状与"笔记被删"完全同形 —— 见 `build_note_url` 的注释）。
+
+    值在 URL 里是 percent-encoded 的（token 尾部常有 `=`），`parse_qs` 会解回来 ——
+    这一步不是可省的：拿着编码串再交给 `build_note_url` 去 `quote` 一次就是**双重编码**，
+    站内认不出，症状与"缺 token"同形（又是一个风控页）。
+    """
+    query = parse_qs(urlparse(url).query or "", keep_blank_values=True)
+    token = (query.get("xsec_token") or [""])[0].strip()
+    source = (query.get("xsec_source") or [""])[0].strip()
+    return token, source
 
 
 def build_note_url(note_id: str, xsec_token: str = "", *, source: str = "pc_user") -> str:

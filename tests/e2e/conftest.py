@@ -208,7 +208,19 @@ class _Server:
     def __init__(self, app: Any, port: int) -> None:  # FastAPI 实例
         self.base_url = f"http://127.0.0.1:{port:d}"
         self.server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on")
+            uvicorn.Config(
+                app,
+                host="127.0.0.1",
+                port=port,
+                log_level="warning",
+                lifespan="on",
+                # **优雅关闭必须有上界**：Playwright 那条 keep-alive 连接不一定在
+                # `browser.close()` 时立刻 FIN，uvicorn 会一直等它排空，于是
+                # `_Server.stop()` 那 30 秒 join 被拖爆（实测：单独跑每条都过、
+                # 全跑到最后两条报 "服务线程没退"）。给 5 秒是"正常排空够用、
+                # 卡住的连接不该决定这条用例红不红"。
+                timeout_graceful_shutdown=5,
+            )
         )
         self._thread = threading.Thread(target=self.server.run, daemon=True)
 

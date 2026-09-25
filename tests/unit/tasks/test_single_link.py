@@ -11,8 +11,12 @@ from tests.unit.tasks.conftest import FakeAdapter, FakeBus, FakeConfig, FakeRegi
 from intelligence_hub_v2.errors import PlatformError, TaskCancelled
 from intelligence_hub_v2.models.event import EventType
 from intelligence_hub_v2.models.media import SingleFileArtifact
+from intelligence_hub_v2.models.video import VideoMeta
 from intelligence_hub_v2.tasks.params import SingleLinkParams
 from intelligence_hub_v2.tasks.single_link import run_single_link
+
+#: 小红书笔记 id 的形状是 24 位 hex（`extract_note_id` 认的就是它）。
+_NOTE_ID = "6a910d0400000000210337a9"
 
 
 def _artifact(video, dest: Path) -> SingleFileArtifact:
@@ -121,3 +125,39 @@ async def test_cancelled_before_start(storage, files) -> None:
         await run_single_link(
             ctx, SingleLinkParams(url="https://www.bilibili.com/video/BV1xx411c7mD")
         )
+
+
+async def test_a_xhs_link_keeps_its_xsec_token_for_the_detail_step(storage, files) -> None:
+    """粘进来的小红书链接，那个 `xsec_token` 必须一路带到 `download_media`。
+
+    这是 T3.3 真机跑出来的 bug：handler 把链接压成 `canonical_video_url(platform, id)`
+    的同时**把 query 参数一起压掉了**，于是详情页拿到空 token、站内跳风控页，
+    症状与"笔记被删/登录过期"三者同形。同一条笔记手工导航能正常打开，
+    所以不是现网的锅（2026-09-25 当场对拍过）。
+    断言的是"适配器**收到**的那个 meta 里 token 还在"，不是"我拼的字符串里有"：
+    压成 canonical 那一步就是丢它的地方。
+    """
+    token = "ABOgq79sds9_-oBYa6uGqmDJ6KcKC_sWjr37ssyquu0iw="
+    url = f"https://www.xiaohongshu.com/explore/{_NOTE_ID}?xsec_token={token}&xsec_source=pc_feed"
+    seen: list[VideoMeta] = []
+
+    def capture(video: VideoMeta, dest: Path) -> SingleFileArtifact:
+        # 同步工厂：`FakeAdapter.download_media` 直接把它返回值当产物用
+        seen.append(video)
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / "media.mp4"
+        path.write_bytes(b"x" * 16)
+        return SingleFileArtifact(
+            path=path, size_bytes=16, media_source="page_play_url", has_audio=True
+        )
+
+    adapter = FakeAdapter("xiaohongshu", artifact_factory=capture, download_error=None)
+    reg = FakeRegistry({"xiaohongshu": adapter}, {"xiaohongshu": FakeConfig()})
+    ctx = make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus())
+
+    await run_single_link(ctx, SingleLinkParams(url=url))
+
+    assert seen, "download_media 没被调用，这条就在测空气"
+    assert seen[0].extra.get("xsec_token") == token, f"token 在链路上丢了：{seen[0].extra!r}"
+    # 但 `webpage_url` 仍是规范主页（库里与清单里不该出现会过期的分享链）
+    assert "xsec_token" not in str(seen[0].webpage_url)

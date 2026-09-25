@@ -244,14 +244,23 @@ def plan_cookie_variants(
     - `browser` 但没有浏览器名 → 跳（Windows 上这一档基本永远读不出来，
       所以抖音的阶梯通常根本不列它 —— 声明了就得多花一次子进程时间）。
     - `anonymous` / `none` → 永远可用，是阶梯的兜底档。
+
+    **`--cookies` 后面那串一律换成绝对路径**，不是在洁癖：`YtDlpRunner` 跑下载时给子进程的是
+    `cwd=dest_dir`（媒体目录），而配置里的 `cookies_file` 常写成仓库根相对的
+    `data/cookies/<域>.txt` —— 按我们自己的 cwd 它存在、这一档因此入选，yt-dlp 在另一个
+    cwd 下却看不见，报 `FileNotFoundError` + exit 1。于是"登录 cookie 那一档"会**静默退成
+    匿名档**，而 V1 §7.3/§7.15 花代价换来的恰恰是"Windows 上只有 `--cookies <文件>` 稳定"。
+    2026-09-25 真跑 B站 才炸出来：合成 fixture 都在同一个 cwd 下跑，永远看不出这件事。
     """
     out: list[YtDlpCookieVariant] = []
     for kind in order:
         if kind == "exported_file":
             if cookies_file is None or not cookies_file.is_file():
                 continue
+            # `expanduser()` 在前：`~` 是我们认的写法，而 yt-dlp 那边不展开它。
+            resolved = cookies_file.expanduser().resolve()
             out.append(
-                YtDlpCookieVariant(kind, ("--cookies", str(cookies_file)), "带导出的登录 cookie")
+                YtDlpCookieVariant(kind, ("--cookies", str(resolved)), "带导出的登录 cookie")
             )
         elif kind == "browser":
             if not browser:

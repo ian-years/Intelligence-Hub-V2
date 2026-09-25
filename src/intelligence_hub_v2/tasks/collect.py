@@ -261,6 +261,11 @@ def build_video_draft(
             "yt_dlp_error": ytdlp_err,
             "size_bytes": size,
             "has_audio": _has_audio(artifact),
+            # ADR-0019 造了这一位就是给"要不要挂 `<video>`"用的（一张 jpg 躺在
+            # `media_path` 里是真的存在，喂给播放器只会得到一块**不报错的黑屏**）。
+            # 不落进 metadata 就等于字段只活在产物上：库里那一行读不回来，
+            # 前端只能按"media_path 有没有"猜 —— 而那个判据对图文笔记恰好是错的。
+            "has_video": _has_video(artifact),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -307,7 +312,12 @@ def _metrics_only_draft(meta: VideoMeta, *, creator_id: int | None) -> VideoDraf
         media_source=None,
         media_aux_paths_json="[]",
         metadata_json=json.dumps(
-            {"media_downloaded": False, "media_source": None, "has_audio": False},
+            {
+                "media_downloaded": False,
+                "media_source": None,
+                "has_audio": False,
+                "has_video": False,
+            },
             ensure_ascii=False,
             sort_keys=True,
         ),
@@ -375,6 +385,21 @@ def _artifact_fields(
         artifact.cookie_rung,
         artifact.yt_dlp_error,
     )
+
+
+def _has_video(artifact: MediaArtifact) -> bool:
+    """这条产物**能不能当视频播**。图文笔记的主文件是一张原图 → False（ADR-0019）。
+
+    判据取适配器交回来的那一位，不在这里按后缀猜：猜会得到第二套真相，
+    而 ADR-0019 当初立这一位，就是因为 V1 靠 `glob("*.mp4")` 那类猜法踩过方向相反的错
+    （§7.21 把音频轨当视频喂给 ffmpeg，报出的错长得像"ffmpeg 没装"）。
+
+    `VideoAudioPairArtifact` 恒为 True：那一型就是"视频轨与音频轨各自一份"，
+    有分片必然有视频轨（没有视频轨的那一型是图文，走单文件 + `has_video=False`）。
+    """
+    if isinstance(artifact, VideoAudioPairArtifact):
+        return True
+    return artifact.has_video
 
 
 def _has_audio(artifact: MediaArtifact) -> bool:

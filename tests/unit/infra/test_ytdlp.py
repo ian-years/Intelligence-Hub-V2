@@ -127,6 +127,39 @@ def test_missing_cookie_file_is_skipped_not_passed_through(tmp_path: Path) -> No
     assert [v.kind for v in ladder] == ["anonymous"]
 
 
+def test_the_cookie_path_reaches_the_subprocess_as_absolute(tmp_path: Path, monkeypatch) -> None:
+    """`--cookies` 后面那串**必须是绝对路径**，即使配置里写的是相对的。
+
+    为什么这条值得单独钉：`YtDlpRunner` 跑下载时给子进程的是 `cwd=dest_dir`
+    （媒体目录，为了让 yt-dlp 的相对落点落在作品树下），而配置里的
+    `cookies_file` 是 `data/cookies/<域>.txt` 这种**仓库根相对**路径 —— 按我们自己的
+    cwd 判断它存在，于是 `exported_file` 那一档入选；可 yt-dlp 在另一个 cwd 下看不见，
+    直接 `FileNotFoundError: data\\"cookies\\"bilibili.com.txt` + exit 1。
+
+    症状是"阶梯最高那一档静默失效、每次都退到匿名档"，而 V1 §7.3/§7.15 花代价换来的
+    恰恰是"Windows 上只有 `--cookies <文件>` 这条稳定"。这是 2026-09-25 真跑 B站 时才炸出来的
+    （合成 fixture 全在同一个 cwd 下跑，永远看不出）。
+    """
+    relative_root = tmp_path / "repo"
+    (relative_root / "data" / "cookies").mkdir(parents=True)
+    cookie = relative_root / "data" / "cookies" / "bilibili.com.txt"
+    cookie.write_text("#Netscape\n", encoding="utf-8")
+    monkeypatch.chdir(relative_root)  # 按仓库根相对写法：配置里就是这个形状
+
+    ladder = plan_cookie_variants(
+        ("exported_file",), cookies_file=Path("data/cookies/bilibili.com.txt")
+    )
+
+    assert [v.kind for v in ladder] == ["exported_file"], "文件在，档位该入选"
+    given = ladder[0].args[1]
+    assert Path(given).is_absolute(), f"给了相对路径，子进程换个 cwd 就看不见：{given!r}"
+    # 光"绝对"还不够，要真的能从那一个目录读回来（这才是 dest_dir cwd 的等价情形）
+    elsewhere = tmp_path / "somewhere-else"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert Path(given).is_file(), f"绝对路径指向了别处：{given!r}"
+
+
 def test_browser_rung_is_skipped_without_a_browser_name(cookie_file: Path) -> None:
     """Windows 上这一档基本永远读不出来（V1 §7.3），所以抖音的阶梯通常根本不列它；
     列了但没浏览器名就是白等一次子进程。"""

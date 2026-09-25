@@ -21,6 +21,7 @@ from intelligence_hub_v2.platforms.xiaohongshu.urls import (
     extract_note_id,
     extract_user_id,
     note_id_from_timestamp,
+    note_token_of,
     parse_publish_time,
     published_at_from_note_id,
 )
@@ -223,3 +224,45 @@ def test_every_understood_value_is_aware(value: Any) -> None:
     """
     parsed = parse_publish_time(value)
     assert parsed is None or (parsed.tzinfo is not None and parsed.utcoffset() is not None)
+
+
+# --------------------------------------------------------------------------- #
+# `xsec_token` 的反方向（T3.3 真机炸出来的那一手）
+# --------------------------------------------------------------------------- #
+
+#: 真链接里的 token 长这样（尾部带 `=`，中间可能带 `-` `_`）。
+_REAL_TOKEN = "ABOgq79sds9_-oBYa6uGqmDJ6KcKC_sWjr37ssyquu0iw="
+
+
+def test_the_token_survives_a_build_then_extract_round_trip() -> None:
+    """`build_note_url` 拼出去、`note_token_of` 取回来，必须**一字不差**。
+
+    写成往返而不是"等于某个样本串"：这两只手一个是编码、一个是解码，
+    任何一边改了（比如把 `safe=""` 换成 `safe="/"`）都会先把往返打断，
+    而不需要我来记住"编码之后应该长什么样"。
+    token 尾部的 `=` 是这一条的重点：它是 query 值的一部分，
+    解码不回来 / 编码编两次，站内都认不出 —— 而认不出的症状是跳风控页，
+    看起来像"这条笔记被删了"（2026-09-25 真机踩过的是它的另一面：整条链路丢 token）。
+    """
+    url = build_note_url(NOTE_ID, _REAL_TOKEN, source="pc_feed")
+    token, source = note_token_of(url)
+    assert token == _REAL_TOKEN, f"往返之后 token 变了：{token!r}"
+    assert source == "pc_feed"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (f"https://www.xiaohongshu.com/explore/{NOTE_ID}", ""),
+        (f"https://www.xiaohongshu.com/explore/{NOTE_ID}?xsec_token=", ""),
+        (f"https://www.xiaohongshu.com/explore/{NOTE_ID}?from=x", ""),
+        ("", ""),
+    ],
+)
+def test_absent_token_is_an_empty_string_not_a_crash(url: str, expected: str) -> None:
+    """ "链接里没有 token"要给出空串，让调用方去决定怎么说。
+
+    这一手不抛、也不编一个假 token：调用方（`single_link`）要能分清
+    "用户粘的是裸链接"（该提示他粘完整链接）与"我解析失败"。
+    """
+    assert note_token_of(url) == (expected, "")

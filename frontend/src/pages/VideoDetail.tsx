@@ -129,14 +129,18 @@ export function VideoDetail(): JSX.Element {
                 <Field label="媒体来源">{data.media_source || "（没记录走了哪条路）"}</Field>
               </dl>
 
-              {/* 播放器与"媒体文件"那一栏同一条件：有 media_path 才出图。
-                  没有媒体时那句实话由上面的 Field 说（它显示"（没有落地文件）"），
-                  这里只补一句"所以这一条没有播放与跳转"。 */}
-              {data.media_path ? (
+              {/* 播放器问的是 `has_video`，不是"`media_path` 有没有"。
+                  差一个字，行为差一整屏：小红书图文笔记的 `media_path` 指向第一张原图
+                  （真有文件、真在库里），但 `/api/videos/{id}/media` 的容器白名单会 403 它 ——
+                  按老判据这里会挂出一个**永不加载、也不报错的黑播放器**。
+                  ADR-0019 当初立 `has_video` 这一位就是为了这一刻，字段却只活在产物上。 */}
+              {data.has_video ? (
                 <VideoPlayer videoId={data.id} elementRef={playerRef} />
               ) : (
                 <p className="text-body-sm">
-                  这一条没有可播的文件，所以下面的口播稿也跳不了 —— 采集时只拿到了元数据。
+                  {data.media_path
+                    ? "这一条落地的是图片而不是可播容器（图文笔记），所以没有播放器、口播稿也跳不了 —— 文件在，只是放不了。"
+                    : "这一条没有可播的文件，所以下面的口播稿也跳不了 —— 采集时只拿到了元数据。"}
                 </p>
               )}
 

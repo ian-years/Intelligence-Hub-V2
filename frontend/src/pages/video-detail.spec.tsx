@@ -50,6 +50,7 @@ const patches: { url: string; body: string }[] = [];
  *  那样的用例只能证明按钮被点过。 */
 let hiddenRow = false;
 let noMedia = false;
+let imageNote = false;
 const row = (): unknown => {
   if (hiddenRow) {
     return makeVideo({
@@ -59,9 +60,28 @@ const row = (): unknown => {
       hidden_reason: "在作品详情页隐藏",
     });
   }
-  // 只换那一列：其余字段跟着 `video` 走，否则"没有媒体"这一条会顺带把标题也改掉，
+  // 只换那几列：其余字段跟着 `video` 走，否则"没有媒体"这一条会顺带把标题也改掉，
   // 那一批按标题找元素的用例就查不出自己该查的东西。
-  return noMedia ? makeVideo({ ...video, media_path: null, media_source: null }) : video;
+  if (noMedia)
+    return makeVideo({
+      ...video,
+      media_path: null,
+      media_source: null,
+      // 后端那一位是从 `media_path` 推的（没路径 → false），fixture 必须跟着真判据走，
+      // 否则这里测的是"一个 API 永远不会返回的组合"。
+      has_video: false,
+    });
+  if (imageNote) {
+    // 图文笔记：**文件真的在、路径也合规**，只是它不是可播容器。
+    // 与 noMedia 刻意分开 —— 两者在界面上必须是两句话（前者"放不了"，后者"没采到"）。
+    return makeVideo({
+      ...video,
+      media_path: "media/xiaohongshu/someone/6a910d04/images/01.jpg",
+      media_source: "page_play_url",
+      has_video: false,
+    });
+  }
+  return video;
 };
 
 function stub(
@@ -69,10 +89,12 @@ function stub(
     transcript?: [number, unknown];
     creator?: [number, unknown];
     noMedia?: boolean;
+    imageNote?: boolean;
   } = {},
 ): void {
   hiddenRow = false;
   noMedia = Boolean(options.noMedia);
+  imageNote = Boolean(options.imageNote);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -158,6 +180,18 @@ describe("VideoDetail", () => {
     renderAt("/video/7");
     await screen.findByText(/这一条没有可播的文件/);
     expect(screen.queryByLabelText("播放器")).toBeNull();
+  });
+
+  it("图文笔记：文件在库里但不是可播容器，不画黑播放器", async () => {
+    stub({ imageNote: true });
+    renderAt("/video/7");
+    // 这一条量的是"两种没有"必须分开：图文有文件、只采到元数据的没有。
+    // 合成一句"没有可播的文件"就把下载失败与平台形态混成一谈（V1 §1.3 那一族）。
+    expect(await screen.findByText(/落地的是图片而不是可播容器/)).toBeTruthy();
+    expect(screen.queryByLabelText("播放器")).toBeNull();
+    expect(screen.queryByText(/这一条没有可播的文件/)).toBeNull();
+    // 但"媒体文件"那一栏仍要把路径说出去：文件真的存在，藏起来就没法查为什么放不了。
+    expect(await screen.findByText(/images\/01\.jpg/)).toBeTruthy();
   });
 
   it("媒体取不到时说出原因，能播之后把那句话撤掉", async () => {

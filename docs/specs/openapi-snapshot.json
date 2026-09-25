@@ -1821,6 +1821,11 @@
             ],
             "title": "Duration Seconds"
           },
+          "has_video": {
+            "default": true,
+            "title": "Has Video",
+            "type": "boolean"
+          },
           "hidden_at": {
             "anyOf": [
               {
