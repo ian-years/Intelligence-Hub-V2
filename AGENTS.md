@@ -117,6 +117,14 @@ uv run python tools/migrate_from_v1.py --v1-root "E:/08-Codework/Intelligence-Hu
 2026-09-23 实测不成立）。没装 make 时照 `ci-local` 的 recipe 逐条直接跑，
 并且**自己打退出码** —— `make ci-local 2>&1 | tail -60` 报的是 `tail` 的 0。
 
+**"我改了代码 → 起服务 → 看现象"这条链上，必须先证明在测新进程。** 本机 `pkill -f uvicorn`
+匹配不到 Windows 侧的 `python.exe`，旧服务一直活着、新的绑不上端口自己退了
+（日志一句 `10048`），于是连着两次"验证"跑的都是改之前的代码。
+重启后两条都过才算起来：`netstat -ano | grep ":8789 .*LISTENING"` 的 PID 是新的，
+且新日志里 `Uvicorn running on` 存在、`10048` 计数为 0。
+同一族的第三个实例：`where ffmpeg` 打不出来 **≠** 没装（V1 §7.19，注册表有、进程快照没有）。
+详见 `docs/lessons.md`。
+
 **所有 scratch 一律放仓库内的 `.scratch/`（E 盘），不许往 C: 的 `%TEMP%` 写。**
 本机 C: 只剩几个 G，而"顺手放 Temp"真出过事：一次验证用的假 V1 迁移把 4.5 GB
 拷进 `AppData/Local/Temp`（跨卷 hardlink 退 copy），把 C: 填到 100%。

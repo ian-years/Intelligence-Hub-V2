@@ -314,6 +314,32 @@
   `view=1428/like=49/reply=11/share=4` 落进 `72h` 快照，`coin`/`favorite` 进 metadata
 
 ### Fixed（真机那一批挖出来的）
+### Fixed（真机那一批挖出来的 · 第二组）
+
+- **`--cookies` 传给子进程的是相对路径**：`YtDlpRunner` 用 `cwd=dest_dir` 跑下载，
+  而配置里的 `cookies_file` 是仓库根相对的 `data/cookies/<域>.txt`。存在性检查按我们自己的
+  cwd 判（通过），yt-dlp 在别的 cwd 下看不见 → exit 1。**后果正好是 V1 §7.15 那一族**：
+  阶梯最高那一档（登录档画质）静默失效、每次都退到匿名档，而这在合成测试里永远看不出
+  （它们都在同一个 cwd 下跑）。阶梯这一层现在一律 `expanduser().resolve()` 之后再进 argv
+- **`single_link` 把 `xsec_token` 压掉了**：handler 把用户粘的链接换成
+  `canonical_video_url(platform, video_id)` 的同时连 query 参数一起丢了，
+  于是小红书详情一律被站内跳去风控页，报出来的是 `login_wall_or_removed` ——
+  与"笔记被删""登录态过期"三者同形。判定过程：同一条链接、同一个 token，
+  在同一个浏览器里**手工导航能正常打开**（标题取得到），所以不是现网的锅。
+  新增 `urls.note_token_of()`（`build_note_url` 的反方向，放同一层免得两处各认一次参数名），
+  并有一条 build→extract 的往返断言盯着那个尾部 `=` 的双重编码
+- **ADR-0019 的 `has_video` 从没出口到需要它的那一端**：字段只活在产物上，
+  入库没写进 metadata、模型没暴露、播放器只能按"`media_path` 有没有"猜 ——
+  图文笔记因此在详情页挂出一个**永不加载的黑播放器**，而那条 ADR 写这句判据的理由就是它。
+  现在三段补齐（入库 / `models/video.Video` 上由 metadata 优先、后缀回落推导 / 播放器改问这一位），
+  回落那一支与 `/api/videos/{id}/media` 的容器白名单**逐字对齐**并由一条看护钉住：
+  两处各列一份就会漂，而漂的表征正好是"能播的不播"或"黑屏回来了"。
+  界面文案也分开两种"没有"：图文是"文件在，只是放不了"，未采到是"没有可播的文件"
+- **e2e 全跑到最后两条报"服务线程没退"，单跑每条都过**：根因不在测试而在 uvicorn 配置 ——
+  优雅关闭没有上界，浏览器那条 keep-alive 不 FIN 它就一直等，把 `_Server.stop()` 的 30 秒
+  join 拖爆。给 `timeout_graceful_shutdown=5`（**不是**把 join 调大，那只是往后挪撞线时间）。
+  连跑两次各 10 passed / 35.5s 与 37.6s，对比出问题那次的 69s + 2 errors
+
 
 - **B站 评论抓取从来没有成功过一次**：`parse_reply_rows` 读的身份键 `idstr` 与点赞键
   `like_count` **在真响应里都不存在**（现网是 `rpid_str`/`rpid` 与 `like`）—— 于是每一行都
