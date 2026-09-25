@@ -27,7 +27,7 @@ import logging
 import socket
 import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +35,7 @@ import httpx
 import pytest
 import structlog
 import uvicorn
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 from tests.unit.tasks.conftest import FakeAdapter
 
 from intelligence_hub_v2.api.deps import AppState
@@ -49,7 +49,7 @@ from intelligence_hub_v2.storage.db import SqliteStorage
 from intelligence_hub_v2.storage.files import FileStorage
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Browser, Page, Playwright
+    from playwright.async_api import Page
 
 pytestmark = pytest.mark.e2e
 
@@ -129,21 +129,6 @@ def dist_dir() -> Path:
     index = _DIST / "index.html"
     assert index.is_file(), f"构建跑完了但 {index} 还是不在"
     return _DIST
-
-
-@pytest.fixture(scope="session")
-def playwright_instance() -> Iterator[Playwright]:
-    with sync_playwright() as playwright:
-        yield playwright
-
-
-@pytest.fixture(scope="session")
-def browser(playwright_instance: Playwright) -> Iterator[Browser]:
-    launcher = playwright_instance.chromium.launch(args=["--disable-gpu"])
-    try:
-        yield launcher
-    finally:
-        launcher.close()
 
 
 class _Server:
@@ -269,14 +254,33 @@ def served(tmp_path: Path, dist_dir: Path) -> Iterator[tuple[AppState, str]]:
 
 
 @pytest.fixture
-def page(served: tuple[AppState, str], browser: Browser) -> Iterator[Page]:
+async def page(served: tuple[AppState, str]) -> AsyncIterator[Page]:
+    """一条用例一个浏览器，跑在 **pytest-asyncio 自己那个 loop** 上。
+
+    为什么必须是 async API（第一版用 `sync_playwright`，代码更短，但那是错的）：
+    sync API 会在主线程里再引入一个 loop 主人，退出时把 asyncio 记录"当前跑着哪个 loop"
+    的那个 ContextVar 留在脏值上。之后同一进程里每一次 `Runner.run()` / `asyncio.run()`
+    都在入口检查上炸 —— 报的不是"这条 e2e 红"，而是**后面每条 async 用例**红
+    （实测一次混跑 161 failed + 1604 errors）。
+    试过清 policy、清 `policy._local._loop`、在 fixture teardown 里复位那个变量，全部无效：
+    Playwright 自己的 `close()` 在那之后又脏一次。**从源头不要第二个 loop 主人**才是解，
+    所以这里换成 async API，并且不往全局配置里塞任何排除规则。
+
+    浏览器是**函数级**的：会话级的 async fixture 需要 `loop_scope="session"`，
+    那会把全场 async 用例都拖进同一个 loop —— 为了省每次 0.4 秒去换一个新的隐式全局，
+    正是这一篇要找的东西。
+    """
     _state, base_url = served
-    context = browser.new_context(base_url=base_url)
-    fresh = context.new_page()
-    try:
-        yield fresh
-    finally:
-        context.close()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(args=["--disable-gpu"])
+        context = await browser.new_context(base_url=base_url)
+        fresh = await context.new_page()
+        try:
+            yield fresh
+        finally:
+            await fresh.close()
+            await context.close()
+            await browser.close()
 
 
 @pytest.fixture
