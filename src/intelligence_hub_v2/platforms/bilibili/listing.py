@@ -33,6 +33,7 @@ import httpx
 
 from intelligence_hub_v2.errors import ListError
 from intelligence_hub_v2.models.creator import CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings
 from intelligence_hub_v2.models.video import VideoMeta
 from intelligence_hub_v2.platforms.bilibili.urls import (
     as_http_url,
@@ -283,6 +284,31 @@ def view_to_card(bvid: str, data: Mapping[str, Any]) -> BiliCard:
         view_count=_as_int(stat.get("view")),
         like_count=_as_int(stat.get("like")),
         pages=len(pages) or 1,
+    )
+
+
+def stat_to_readings(data: Mapping[str, Any]) -> MetricReadings:
+    """`view` 接口里的 `stat` → 一次读数（ADR-0020 决定二的 `fetch_metrics`）。
+
+    读的是 `stat` 那一段而不是顶层：B站 把计数全嵌在 `stat` 里，顶层读 `view_count`
+    会永远拿到 None，于是"补抓一次"静默变成"抓了个空的"—— 而空读数会被仓库层
+    当成"这个窗口已经抓过了"，从此不再补抓（见 `MetricSnapshotRepository.put`）。
+
+    `favorite`（收藏）不当成 `share_count`：V1 也没有把两者混过，但这一格最容易被人
+    "反正都是个位数级互动"地合并 —— 收藏与转发回答的是两个问题。
+    认不出来的项留 NULL（`_as_int` 的既有口径），不补 0。
+    """
+    stat = _mapping(data.get("stat"))
+    return MetricReadings(
+        view_count=_as_int(stat.get("view")),
+        like_count=_as_int(stat.get("like")),
+        comment_count=_as_int(stat.get("reply")),
+        share_count=_as_int(stat.get("share")),
+        metadata_json=json.dumps(
+            {"coin": _as_int(stat.get("coin")), "favorite": _as_int(stat.get("favorite"))},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
     )
 
 

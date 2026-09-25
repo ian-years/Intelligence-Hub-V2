@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Literal
 
 from intelligence_hub_v2.errors import TaskCancelled
 from intelligence_hub_v2.models.creator import Creator, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricSnapshotDraft
 from intelligence_hub_v2.models.event import EventType
 from intelligence_hub_v2.models.media import (
     MediaArtifact,
@@ -192,6 +193,12 @@ async def _collect_one_video(
         tally.skipped += 1  # 与并发的另一轮抢到了同一条
         return
 
+    # 新作品顺手记一条 `publish` 快照（ADR-0020：这条读数是"刚抓到时长什么样"的唯一一份）。
+    # 放在这里而不是 `enrich_metrics` 里：采集当场就拿得到 meta 的计数，
+    # 让 enrich 去补就等于要求"每条新作品都要再跑一轮任务"才能留下第一格。
+    # 失败**不**掀掉这一条（作品已经进库了），但要在清单里看得见。
+    await _record_publish_snapshot(ctx, tally, row_id=row.id, meta=meta)
+
     if artifact is None:
         # 判据看的是"有没有字节"，不是那个开关：开关与产物对不上时（将来多一条
         # "下得来但不落盘"的路），跟着事实走才不会往清单里塞一个不存在的路径。
@@ -278,7 +285,7 @@ def build_video_draft(
 
 
 def _metrics_only_draft(meta: VideoMeta, *, creator_id: int | None) -> VideoDraft:
-    """只登记读数的草稿。
+    """只登记读数、不带媒体的草稿。
 
     `has_audio: False` 与 `media_downloaded: False` 都要写：前者让后处理那一步
     干净地跳过（ADR-0019 定的那个闸），后者让"这一条从来没有过媒体"在库里可读 ——
@@ -305,6 +312,36 @@ def _metrics_only_draft(meta: VideoMeta, *, creator_id: int | None) -> VideoDraf
             sort_keys=True,
         ),
     )
+
+
+async def _record_publish_snapshot(
+    ctx: TaskContext, tally: _Tally, *, row_id: int, meta: VideoMeta
+) -> None:
+    """新作品入库时顺手记一条 `publish` 读数（ADR-0020 决定二里"collect 的这一半"）。
+
+    取的是 `meta` 上那四个计数，**不再问一次适配器**：列表枚举刚读回来的就是这一刻的数，
+    再问一趟等于同一个 GET 做两遍 —— 而抖音/小红书那一趟要走 CDP 桥。
+    这也是为什么它不需要 `capabilities` 参与：用的数据这一条链路已经拿到了。
+
+    四项全空直接跳过，不问库：`metrics.put()` 拒收空草稿（一条全 NULL 的快照会冒充
+    "这个窗口抓过了"，让 `enrich_metrics` 从此不再看这条作品）。跳过是**预期**而不是失败，
+    所以不进 `failures`，但 `summary` 里那一栏会如实少一。
+    """
+    draft = MetricSnapshotDraft(
+        checkpoint="publish",
+        view_count=meta.view_count,
+        like_count=meta.like_count,
+        comment_count=meta.comment_count,
+        share_count=meta.share_count,
+    )
+    if draft.is_empty():
+        return
+    try:
+        await ctx.storage.metrics.put(row_id, draft)
+    except Exception as exc:  # noqa: BLE001 - 作品已经在库里，不该被一次附带的写入抹掉
+        tally.record_snapshot_failure(platform=meta.platform, meta=meta, error=str(exc))
+        return
+    tally.record_snapshot()
 
 
 def _artifact_fields(
@@ -361,10 +398,30 @@ class _Tally:
         self.downloaded = 0
         self.registered = 0
         self.skipped = 0
+        self.snapshots = 0
         self.failed = 0
         self.rungs: dict[str, int] = {}
         self.failures: list[FailureRecord] = []
         self.artifacts: list[ArtifactRef] = []
+
+    def record_snapshot(self) -> None:
+        """这一条留下了 `publish` 读数。与 `registered` 分栏：后者数的是"进了库"，
+        前者数的是"库里能看见它当时是多少" —— 计数全 NULL 的作品进得了库但没有第一格。"""
+        self.snapshots += 1
+
+    def record_snapshot_failure(self, *, platform: str, meta: VideoMeta, error: str) -> None:
+        """快照写不进去。**不**记成 `store`：那一格说的是"作品本身没进库"，
+        而这里作品已经在库里了 —— 混在一起会让"整批没有第一格"看起来像"入库在挂"。"""
+        self.failed += 1
+        self.failures.append(
+            FailureRecord(
+                platform=platform,
+                stage="metrics",
+                video_id=meta.platform_video_id,
+                error=error,
+                error_kind="MetricSnapshot",
+            )
+        )
 
     def record_registered(self) -> None:
         """只登记了读数（`metrics_only`）：**不产 ArtifactRef**。
@@ -448,6 +505,9 @@ class _Tally:
             # 而 `downloaded=0` 在 metrics_only 那一站是**预期**，不是失败。
             "registered_metrics_only": self.registered,
             "skipped_existing": self.skipped,
+            # ADR-0020：`downloaded` 与 `registered` 都不回答"这条的第一格读数进了没"。
+            # 少了这一栏，"平台没给计数"（预期）与"快照写挂了"（要查）在清单里同形。
+            "publish_snapshots": self.snapshots,
             "failed": self.failed,
             # 记账 ④：把档位分布抬进清单，"这批为什么糊"才有地方可查。
             "cookie_rungs": ", ".join(f"{k}={v}" for k, v in sorted(self.rungs.items()))

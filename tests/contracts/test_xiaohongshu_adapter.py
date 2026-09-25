@@ -2139,3 +2139,110 @@ class TestSubtitlesAndRegistry:
         assert Path(adapter_module.YTDLP_FILE_TEMPLATE).stem == Path(media.MEDIA_FILE_NAME).stem, (
             "两条路必须写同一个落点名，否则后处理要按来源分支找文件"
         )
+
+
+# =========================================================================== #
+# 补一次读数（fetch_metrics，ADR-0020 决定二）
+#
+# 这一家是四家里唯一"能力位为假、但读数能做"的：评论区是另一条签名接口（没实现），
+# 而点赞数就在我们本来就要访问的详情页上。两条边界分别为真不等于两条同为真，
+# 所以下面这几条钉的是"只有一项也算读数"与"读不到时该报在哪一格"。
+# =========================================================================== #
+
+
+class TestReadings:
+    async def test_the_like_count_comes_from_the_detail_page(self, tmp_path: Path) -> None:
+        """页面上那句 `"1.2万"` 变成一个 12000，且**先导航再取值**。
+
+        导航那一步不是顺手：`evaluate` 只发表达式，少了 navigate 会在
+        **上一条笔记还停着的页面**里取 `noteDetailMap`，于是拿到别人的数且自洽
+        （`detail.fetch_note_detail` 的 docstring 记的就是这个最贵的错）。
+        """
+        bridge = FakeBridge(script=[page_payload("detail_video_note.json")])
+        video = make_video(NOTE_1)
+
+        readings = await make_adapter(tmp_path, bridge=bridge).fetch_metrics(video)
+
+        assert readings.like_count == 12_000
+        assert bridge.navigated == [str(video.webpage_url)]
+
+    async def test_the_three_fields_this_page_does_not_give_stay_null(self, tmp_path: Path) -> None:
+        """只有赞数一项 —— 其余三项必须是 NULL，**且 metadata 要说出这件事**。
+
+        写成"三项同为 None + only 那一栏点名 like"两半：只测前半的话，
+        一个"把缺的补 0"的实现会红在别处（增长率除以 0），而这里要防的是"缺的没被说明"
+        —— 下一次读这条快照的人分不出"评论数为 0"与"这一家没给评论数"。
+        """
+        bridge = FakeBridge(script=[page_payload("detail_video_note.json")])
+        readings = await make_adapter(tmp_path, bridge=bridge).fetch_metrics(make_video(NOTE_1))
+
+        assert (readings.view_count, readings.comment_count, readings.share_count) == (
+            None,
+            None,
+            None,
+        )
+        assert readings.has_any_reading, "一项非空就是有效读数"
+        assert json.loads(readings.metadata_json)["only"] == ["like_count"]
+
+    @pytest.mark.parametrize(
+        ("text", "phrase"),
+        [
+            ("点赞人数未知", "不是个数"),
+            ("", "读不出来"),
+            ("-", "读不出来"),
+        ],
+    )
+    async def test_a_like_count_that_is_not_a_number_is_a_failure_not_a_zero(
+        self, tmp_path: Path, text: str, phrase: str
+    ) -> None:
+        """页面形状变了要红，且**不能把"读不出来"消化成 0**。
+
+        0 是一个会被当成事实的数：下一轮算增长时它与"真的没人点赞"同形。
+        两种坏法分开报（"有字但不是数" vs "这一栏压根没字"），因为一个要改选择器、
+        一个要改解析器 —— `compact_number_to_int` 对前者抛 ValueError，这里换成
+        带平台与 stage 的 `PlatformError` 并留原文。
+        """
+        payload = page_payload("detail_video_note.json", as_json_string=False)
+        payload["likes"] = text
+        bridge = FakeBridge(script=[json.dumps(payload)])
+        with pytest.raises(PlatformError, match=phrase) as caught:
+            await make_adapter(tmp_path, bridge=bridge).fetch_metrics(make_video(NOTE_1))
+        assert caught.value.stage == "metrics"
+        assert text in str(caught.value), "原文里要看得见那一句脏值本身"
+
+    async def test_a_detail_page_that_cannot_be_opened_is_reported_under_metrics(
+        self, tmp_path: Path
+    ) -> None:
+        """复用详情页就有这个副作用：它自己把失败报成 `media`。
+
+        对下载那一步是对的，对补读数不是 —— 清单会把它排到"去查 yt-dlp / 直链"那一格，
+        而真实原因只是登录墙。所以这一条看护的是**换了 stage 但原文一字未动**。
+        """
+        bridge = FakeBridge(script=[page_payload("detail_login_wall.json")])
+        with pytest.raises(PlatformError) as caught:
+            await make_adapter(tmp_path, bridge=bridge).fetch_metrics(make_video(NOTE_1))
+        assert caught.value.stage == "metrics"
+        assert "media" in str(caught.value), "原来那句 media 的原文要还在（不许吞掉重说）"
+
+    async def test_a_broken_bridge_raises_instead_of_returning_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """桥本身挂了（V1 §7.20）：抛，不消化成空读数。
+
+        与上一条的区别是排查方向：这条要去看桥进程，那条要去看页面选择器。
+        """
+        bridge = FakeBridge(script=[BridgeError("xiaohongshu", "browser", "浏览器已关闭")])
+        with pytest.raises(PlatformError) as caught:
+            await make_adapter(tmp_path, bridge=bridge).fetch_metrics(make_video(NOTE_1))
+        assert caught.value.stage == "metrics"
+        assert "浏览器已关闭" in str(caught.value)
+
+    async def test_no_bridge_at_all_is_an_assembly_error_said_plainly(self, tmp_path: Path) -> None:
+        """声明了 `needs_browser=True` 却拿到 `bridge=None`：要说清是装配错了。
+
+        这一条不只是补 `_require_bridge` 的分支：读数与下载共用那条路，而" AttributeError:
+        'NoneType' object has no attribute 'evaluate'" 会让人以为是这一家的接口坏了。
+        """
+        adapter = make_adapter(tmp_path, bridge=None)
+        with pytest.raises(PlatformError, match="桥"):
+            await adapter.fetch_metrics(make_video(NOTE_1))

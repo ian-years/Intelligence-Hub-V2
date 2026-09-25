@@ -59,6 +59,26 @@ class CollectParams(BaseModel):
     )
 
 
+class EnrichMetricsParams(BaseModel):
+    """补读数（`enrich_metrics`）。挑活方式与 `collect` 不同，所以参数也不同一份。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    video_ids: list[int] = Field(
+        default_factory=list,
+        description="指定要补的作品主键；留空 = 库里**一条快照都没有**的作品",
+    )
+    platform: str | None = Field(default=None, description="只补某平台；留空 = 全平台")
+    limit: int = Field(default=50, ge=1, le=500, description="本轮最多补几条（挑活时用）")
+    comments_limit: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description="顺手抓多少条顶层评论；**默认 0=不抓**。评论只有声明了 "
+        "`supports_comments` 的平台能问，且它比读数贵（一次翻页可能好几个请求）",
+    )
+
+
 class SingleLinkParams(BaseModel):
     """收一条作品（`single_link`）：解析链接 → 判平台 → 走对应适配器。"""
 
@@ -82,6 +102,7 @@ class PostprocessParams(BaseModel):
 __all__ = [
     "AddCreatorParams",
     "CollectParams",
+    "EnrichMetricsParams",
     "PostprocessParams",
     "PreflightParams",
     "SingleLinkParams",

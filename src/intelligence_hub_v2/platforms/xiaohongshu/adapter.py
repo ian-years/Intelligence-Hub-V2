@@ -32,6 +32,7 @@ V1 §7 的看护各自落在哪个方法里（全表见 `docs/specs/contract-tes
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
@@ -41,12 +42,14 @@ from typing import ClassVar
 import httpx
 from pydantic import HttpUrl, TypeAdapter, ValidationError
 
+from intelligence_hub_v2.core.identity import compact_number_to_int
 from intelligence_hub_v2.errors import MediaDownloadError, PlatformError
 from intelligence_hub_v2.infra.cdp_bridge import BridgeClient
 from intelligence_hub_v2.infra.ffmpeg import has_audio_stream
 from intelligence_hub_v2.infra.pacing import RatePacer
 from intelligence_hub_v2.infra.ytdlp import YtDlpResult, YtDlpRunner, classify_artifacts
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import MediaArtifact, SingleFileArtifact
 from intelligence_hub_v2.models.task import ProgressCallback
 from intelligence_hub_v2.models.video import VideoMeta
@@ -732,6 +735,67 @@ class XiaohongshuAdapter:
             "xiaohongshu.subtitles.unsupported", platform_video_id=video.platform_video_id
         )
         return None  # noqa: RET501,PLR1711 - 这个 None **就是**契约（"没有字幕"而不是"失败"）。
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        """小红书**没有**这项能力（`supports_comments=False`）→ None，不抛。
+
+        评论在小红书是另一条签名接口（`/api/sns/web/v2/comment/page`），V2 今天不去问它：
+        声明成"能"但没有实现路径，就是对调度器撒谎（`Capabilities` 的 docstring 同一判据）。
+        """
+        self._log.debug(
+            "xiaohongshu.comments.unsupported", platform_video_id=video.platform_video_id
+        )
+        del limit, sort  # 两个入参在这一家没有意义上，但签名是契约要求的（`base.py`）
+        return None
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        """从详情页读** likes 一项**（其余三项页面给了但我们的解析器没取，留 NULL）。
+
+        为什么这算"能做"而抖音算"做不到"：小红书的详情页我们本来就要为下载去访问，
+        `fetch_note_detail` 已经实现且离线可验（假桥 double），拿它顺手回一个点赞数是
+        同一次访问的副产品；抖音的计数则只在未实现的签名接口里。
+
+        只有一项非空也**是有效读数**（`MetricReadings.has_any_reading` 的判据就是"至少一项"），
+        而"这一家只能给赞数"这件事必须能被看见 —— 所以其余三项留 NULL，
+        并且把来源写进 `metadata_json`，让下一次读这条快照的人知道它不是"评论数为 0"。
+        """
+        try:
+            detail = await self._fetch_detail(video)
+        except PlatformError as exc:
+            # 复用详情页就有这一个副作用：它把失败报成 `media`。对下载那一步是对的，
+            # 对补读数不是 —— 清单会把它排到"去查 yt-dlp / 直链"那一格，
+            # 而真实原因只是"页面形状变了"。原文一字不动，只换 stage。
+            msg = str(exc)
+            raise PlatformError(PLATFORM, "metrics", msg, cause=exc) from exc
+        try:
+            likes = compact_number_to_int(detail.likes)
+        except ValueError as exc:
+            # `compact_number_to_int` 对"根本不是个数"的东西抛 ValueError（那句
+            # "Unsupported compact metric count"）。让它穿出去的话，清单里收到的是一句
+            # 没有平台名、没有 stage 的裸错 —— 换类型，并把原文照抄进消息。
+            msg = (
+                f"详情页的点赞数不是个数（原文 {detail.likes!r}"
+                f"，note={video.platform_video_id}）：{exc}"
+            )
+            raise PlatformError(PLATFORM, "metrics", msg) from exc
+        if likes is None:
+            # 空串 / "-" / "--" 走到这里是 None（那一族自己判的空值），与上面那族
+            # "有字但不是数"是两种坏法，分开报才分得清该改选择器还是该改解析器。
+            msg = (
+                f"详情页的点赞数读不出来（原文 {detail.likes!r}，note={video.platform_video_id}）："
+                "这是页面形状变了，不是这条笔记零互动"
+            )
+            raise PlatformError(PLATFORM, "metrics", msg)
+        return MetricReadings(
+            like_count=likes,
+            metadata_json=json.dumps(
+                {"source": "note_detail", "only": ["like_count"], "likes_text": detail.likes},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
 
     # ------------------------------------------------------------------ #
     # 内部

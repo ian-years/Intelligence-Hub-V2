@@ -23,6 +23,15 @@ class TaskKind(StrEnum):
     SINGLE_LINK = "single_link"
     ADD_CREATOR = "add_creator"
     BACKFILL = "backfill"
+    ENRICH_METRICS = "enrich_metrics"
+    """给已有作品补一次读数快照（T4.2 / ADR-0020）。
+
+    为什么不复用 `BACKFILL`：那一档在 V1 指的是"按 URL 回溯历史作品"（§7.22），
+    产物是**新作品行**；这一档产物是**旧作品的第 N 条读数**。合成一个的话
+    "`backfill` 跑了一小时写了多少作品"这个问题就没有答案了。
+    `task_runs.kind` 是无 CHECK 的 `String(32)`（见 `storage/schema.py`），
+    所以加这一档不需要迁移。
+    """
     POSTPROCESS = "postprocess"
     SYNC = "sync"
     PREFLIGHT = "preflight"
@@ -48,10 +57,16 @@ class FailureRecord(BaseModel):
     - `platform` 可为 None：runner 级失败（配置坏了 / 博主库读不出来 / 存储打不开）
       不归任何单一平台。V1 §7.22 那次 `RuntimeError` 一路甩成 traceback 就是这类。
     - `stage` 多了 `"task"`：不是某个 item 的流水线阶段挂了，而是任务本身挂了。
+    - `stage` 多了 `"metrics"` / `"comments"`（V2.1 T4.2）：补读数与抓评论是**两个新阶段**，
+      与 `list`/`download` 不同处在于它们发生在"作品早就在库里"之后。
+      为什么不复用 `store`：清单按 stage 分组，"接口没给数"与"库写不进去"要做的动作不同，
+      合成一格就等于把两类红混成一堆（V1 的 `stage` 就是一路混到没人看的）。
     """
 
     platform: str | None = None
-    stage: Literal["parse_url", "list", "download", "transcribe", "store", "task"]
+    stage: Literal[
+        "parse_url", "list", "download", "transcribe", "store", "task", "metrics", "comments"
+    ]
     video_id: str | None = None
     creator_id: str | None = None
     error: str

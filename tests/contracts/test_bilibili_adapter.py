@@ -918,6 +918,171 @@ def choose_lan(tracks: Sequence[Any]) -> str:
 
 
 # =========================================================================== #
+# 评论与读数（ADR-0020 决定二里 B站 的那一半 —— 唯一一家两个都能真做的）
+# =========================================================================== #
+
+
+def _reply_row(
+    cid: object = "111", *, message: str = "写得好", uname: str = "某人"
+) -> dict[str, Any]:
+    return {
+        "idstr": cid,
+        "content": {"message": message},
+        "member": {"uname": uname, "mid": 4242},
+        "like_count": 7,
+        "ctime": 1_719_000_000,
+    }
+
+
+def _reply_page(rows: list[dict[str, Any]]) -> httpx.Response:
+    return httpx.Response(200, json={"code": 0, "data": {"replies": rows}})
+
+
+#: `view.json` 里那个 aid。评论接口的 `oid` 要的就是它，写死在断言里是为了让"从哪来的"可查。
+AID_IN_VIEW_FIXTURE = 80433022
+
+
+class TestCommentsAndReadings:
+    async def test_comments_ask_view_first_and_use_its_aid_as_the_oid(self, tmp_path: Path) -> None:
+        """`oid` 要数字 aid，不是 bvid —— 所以"先问一次 view"是接口形状决定的，不是多余一跳。
+
+        断言的是**先后与取值来源**，不是"发了两个请求"这个数：把 `oid` 换成 bvid 的话
+        接口回 `code=-400`，症状长得和"评论接口挂了"一模一样（`urls.reply_api_url` 的注释）。
+        页里给几行、草稿就得有几条 —— 这一半也要在这里成立，否则"同一页被数了五遍"
+        那种翻页错误会被上面那半句完全掩盖。
+        """
+        rows = [_reply_row(f"r{n}", message=f"m{n}") for n in range(5)]
+        http, seen = routing_client(
+            [(f"view?bvid={BVID}", api_response("view.json")), ("x/v2/reply?", _reply_page(rows))]
+        )
+        drafts = await make_adapter(tmp_path, http=http).fetch_comments(bili_video(), limit=5)
+
+        assert drafts is not None
+        assert [d.platform_comment_id for d in drafts] == [f"r{n}" for n in range(5)]
+        assert [d.content for d in drafts] == [f"m{n}" for n in range(5)]
+        assert "view" in seen[0] and "reply" in seen[1], "必须先拿 aid 再问评论"
+        assert f"oid={AID_IN_VIEW_FIXTURE}" in seen[1], (
+            f"评论请求的 oid 该是 view 给的那个 aid，实际 URL：{seen[1]}"
+        )
+        assert "type=1" in seen[1], "type=1 才是视频评论区"
+
+    async def test_hot_and_new_are_different_sort_arguments(self, tmp_path: Path) -> None:
+        """契约上那两个名字必须落到**不同**的 `sort` 上，否则"热评"与"最新"是同一个列表。
+
+        写成一个参数的两种取值、而不是两条各测一遍：这条要看的就是"映射表没被写成同一个数"。
+        """
+        asked: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            asked.append(url)
+            if "x/v2/reply" in url:
+                return httpx.Response(200, json={"code": 0, "data": {"replies": []}})
+            return api_response("view.json")
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = make_adapter(tmp_path, http=http)
+        await adapter.fetch_comments(bili_video(), limit=5, sort="hot")
+        await adapter.fetch_comments(bili_video(), limit=5, sort="new")
+        replies = [u for u in asked if "x/v2/reply" in u]
+        assert len(replies) == 2
+        assert "sort=2" in replies[0] and "sort=0" in replies[1], replies
+
+    async def test_an_unrecognised_sort_word_raises_instead_of_quietly_using_hot(
+        self, tmp_path: Path
+    ) -> None:
+        """拼错的 `"newst"` 不能静默按赞排：那会长得完全像"热评就这些"。"""
+        http, seen = routing_client([("x/v2/reply", httpx.Response(200, json={"code": 0}))])
+        adapter = make_adapter(tmp_path, http=http)
+        with pytest.raises(PlatformError, match="只认") as caught:
+            await adapter.fetch_comments(bili_video(), sort="newst")
+        assert caught.value.stage == "comments"
+        assert seen == [], "排序词不合法时连 view 都不该问"
+
+    async def test_a_view_without_aid_does_not_probe_the_reply_api(self, tmp_path: Path) -> None:
+        """拿不到 aid 就**不去发那个注定 -400 的请求**，并且把原因说清。
+
+        少了这道闸的话，清单里留下的是"评论接口失败"，而真实原因是 view 的形状变了 ——
+        排查方向被带偏，这一格 V1 就是这么绕过去的。
+        """
+        http, seen = routing_client(
+            [
+                ("view?bvid=", httpx.Response(200, json={"code": 0, "data": {"bvid": BVID}})),
+                ("x/v2/reply", httpx.Response(200, json={"code": 0, "data": {"replies": []}})),
+            ]
+        )
+        with pytest.raises(PlatformError, match="没给 aid"):
+            await make_adapter(tmp_path, http=http).fetch_comments(bili_video())
+        assert len(seen) == 1, f"不该发第二个请求，实际发了：{seen}"
+
+    async def test_readings_come_from_stat_and_reply_is_the_comment_count(
+        self, tmp_path: Path
+    ) -> None:
+        """四项读数的来源是 `stat` 那一段，且 `reply` → `comment_count`。
+
+        写成"与 fixture 里的数逐字段相等"而不是"等于某常数"：fixture 是真响应，
+        换一份 fixture 这条还在看护同一件事。
+        """
+        stat = fixture("view.json")["data"]["stat"]
+        http, _ = routing_client([(f"view?bvid={BVID}", api_response("view.json"))])
+        readings = await make_adapter(tmp_path, http=http).fetch_metrics(bili_video())
+
+        assert readings.view_count == stat["view"]
+        assert readings.like_count == stat["like"]
+        assert readings.comment_count == stat["reply"], "评论数在 B站 叫 reply"
+        assert readings.share_count == stat["share"]
+        assert readings.has_any_reading
+
+    async def test_coin_and_favorite_are_kept_as_metadata_not_promoted_to_shares(
+        self, tmp_path: Path
+    ) -> None:
+        """投币/收藏**不是**转发数，但也别丢：进 `metadata_json`。
+
+        判据是关系：那两个键在 metadata 里，且四项读数里没有一个是它们的值。
+        写死"share_count == 493425"的话，改 fixture 就红，而这条要防的是"合并"这件事。
+        """
+        stat = fixture("view.json")["data"]["stat"]
+        http, _ = routing_client([(f"view?bvid={BVID}", api_response("view.json"))])
+        readings = await make_adapter(tmp_path, http=http).fetch_metrics(bili_video())
+        extra = json.loads(readings.metadata_json)
+
+        assert (extra["coin"], extra["favorite"]) == (stat["coin"], stat["favorite"])
+        assert readings.share_count == stat["share"] != stat["favorite"]
+
+    async def test_a_stat_with_no_numbers_raises_instead_of_an_empty_reading(
+        self, tmp_path: Path
+    ) -> None:
+        """`stat: {}` 是"接口变了/被风控"，不是"这条作品零互动"。
+
+        交回一个四项全 NULL 的读数的后果写在该方法的 docstring 里：空快照会让
+        `video_ids_missing` 从此不再看这条作品 —— 一次失败换来一个永久盲点。
+        """
+        http, _ = routing_client(
+            [("view?bvid=", httpx.Response(200, json={"code": 0, "data": {"stat": {}}}))]
+        )
+        with pytest.raises(PlatformError, match="一个数都没给") as caught:
+            await make_adapter(tmp_path, http=http).fetch_metrics(bili_video())
+        assert caught.value.stage == "metrics"
+
+    async def test_zeroes_are_a_reading_not_an_absence(self, tmp_path: Path) -> None:
+        """全 0 是**有效读数**（真·没人看），不能和"没给数"混成一件事。
+
+        这一条与上一条是一对：只测"空要抛"的话，最自然的错误实现是
+        `if not any(...)` —— 那会把 0 也判成空，于是"新作品还没人看"永远补不进快照。
+        """
+        http, _ = routing_client(
+            [
+                (
+                    "view?bvid=",
+                    httpx.Response(200, json={"code": 0, "data": {"stat": {"view": 0, "like": 0}}}),
+                )
+            ]
+        )
+        readings = await make_adapter(tmp_path, http=http).fetch_metrics(bili_video())
+        assert readings.view_count == 0 and readings.has_any_reading
+
+
+# =========================================================================== #
 # parse_creator_url
 # =========================================================================== #
 

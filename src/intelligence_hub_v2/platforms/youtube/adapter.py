@@ -55,6 +55,7 @@ from intelligence_hub_v2.infra.ytdlp import (
 )
 from intelligence_hub_v2.logging import get_logger
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import MediaArtifact, SingleFileArtifact
 from intelligence_hub_v2.models.task import ProgressCallback
 from intelligence_hub_v2.models.transcript import Transcript
@@ -564,6 +565,38 @@ class YouTubeAdapter:
             return media.build_transcript(segments, language=media.subtitle_language(chosen))
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    # ------------------------------------------------------------------ #
+    # 评论与读数（ADR-0020 决定二：两家都如实回答"今天做不到"）
+    # ------------------------------------------------------------------ #
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        """YouTube 的评论要走 InnerTube 那套未公开接口，V2 没实现 → None，不抛。
+
+        枚举与字幕都走 yt-dlp：给它加评论抓取会是第五种外部依赖，
+        而现在没有任何一条验收需要它。声明位保持 False，所以这里只是把契约走完。
+        """
+        self._log.debug("youtube.comments.unsupported", platform_video_id=video.platform_video_id)
+        del limit, sort  # 两个入参在这一家没有意义上，但签名是契约要求的（`base.py`）
+        return None
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        """做不到就抛，别交一份空读数。
+
+        yt-dlp 单条 `-J` 确实能回 view/like，但那要为"补一个数"再跑一次完整解析
+        （几秒到几十秒的子进程），而**同一次采集的 flat-playlist 已经带回这些计数** ——
+        所以要新数的正确动作是再跑一次 `youtube_collect`（它会记一条 publish 快照），
+        不是这里补一条更贵的路。判据与抖音那条一致：见 `MetricSnapshotRepository.put`
+        对空快照的拒收。
+        """
+        msg = (
+            f"YouTube 的读数补抓没实现（单条 -J 太贵且与采集重复）："
+            f"要新的数就再跑一次 youtube_collect —— 它会把当次枚举到的读数记成 publish 快照"
+            f"（video={video.platform_video_id}）"
+        )
+        raise PlatformError(PLATFORM, "metrics", msg)
 
     # ------------------------------------------------------------------ #
     # 内部

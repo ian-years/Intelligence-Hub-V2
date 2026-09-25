@@ -271,3 +271,167 @@ async def test_cancel_propagates_as_task_cancelled_not_failure(storage, files) -
 
     with pytest.raises(TaskCancelled):
         await make_collect_handler(PLATFORM)(ctx, CollectParams())
+
+
+# --------------------------------------------------------------------------- #
+# 新作品顺手记一条 `publish` 读数（ADR-0020 决定二里 collect 的这一半）
+# --------------------------------------------------------------------------- #
+
+
+async def _snapshots(storage, video_id: int):
+    return await storage.metrics.list_for_video(video_id)
+
+
+async def test_a_new_video_with_counts_gets_a_publish_snapshot(storage, files) -> None:
+    """采集当场就把"刚抓到时它是多少"留下第一格。
+
+    为什么这条要在 collect 而不是让 `enrich_metrics` 去补：`enrich_metrics` 挑活的条件是
+    "一条快照都没有"（`video_ids_missing`），先记一条 publish 会让那些**永远等不到
+    自己 24h** 的老作品从此不再被补抓 —— 而这里用的是 `meta` 上已有的数，一跳网络都不发。
+    """
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "v1", counts={"view_count": 4242, "like_count": 7})],
+        artifact_factory=_single_artifact,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.summary["publish_snapshots"] == 1
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    assert row is not None
+    snaps = await _snapshots(storage, row.id)
+    assert [(s.checkpoint, s.view_count, s.like_count) for s in snaps] == [("publish", 4242, 7)]
+    # 没给的项留 NULL，不补 0：那会让"平台没说"长成"这条零转发"。
+    assert snaps[0].share_count is None
+
+
+async def test_a_real_zero_is_recorded_and_not_treated_as_absent(storage, files) -> None:
+    """`view_count=0` 是**有效读数**（刚发出去真没人看），不能被当成"没给数"而跳过。
+
+    与上一条是一对：只测"空要跳"的实现，最省事的做法是 `if not meta.view_count` ——
+    那正好把新作品的第一格全丢掉，而新作品恰恰是最需要这条基线的。
+    """
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "v1", counts={"view_count": 0})],
+        artifact_factory=_single_artifact,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.summary["publish_snapshots"] == 1
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    snaps = await _snapshots(storage, (row.id))
+    assert len(snaps) == 1 and snaps[0].view_count == 0
+
+
+async def test_counts_absent_records_nothing_and_is_not_a_failure(storage, files) -> None:
+    """平台没给计数 → 什么都不记，且**不算失败**。
+
+    "这一家没回读数"是事实，不是错误；记一条失败会让 B站 那种"匿名档拿不到 stat"
+    的每一轮采集都变成 partial，而真正该红的（写库挂了）就淹在里面了。
+    """
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1")], artifact_factory=_single_artifact
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert result.status == "success"
+    assert result.summary["publish_snapshots"] == 0
+    assert result.failures == []
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    assert await _snapshots(storage, row.id) == []
+
+
+async def test_a_failed_snapshot_write_keeps_the_video_and_shows_in_manifest(
+    storage, files, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """快照写挂了：作品**留在库里**（它真的进来了），但清单必须看得见这一格红。
+
+    V1 §1.3 的那条：不许为了"这一轮看起来干净"把附带的失败吞掉。stage 是 `metrics`
+    而不是 `store`，因为后者说的是"作品没进库" —— 混起来会让人去查数据库连接。
+    """
+    await _seed_creator(storage)
+
+    async def boom(*_a: object, **_kw: object) -> None:
+        msg = "disk I/O error"
+        raise OSError(msg)
+
+    monkeypatch.setattr(storage.metrics, "put", boom)
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "v1", counts={"view_count": 5})],
+        artifact_factory=_single_artifact,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    assert await storage.videos.count() == 1, "作品不该被附带的失败抹掉"
+    assert result.summary["downloaded"] == 1
+    assert result.summary["publish_snapshots"] == 0
+    assert result.status == "partial"
+    assert [(f.stage, f.video_id) for f in result.failures] == [("metrics", "v1")]
+    assert "disk I/O error" in result.failures[0].error
+
+
+async def test_a_second_round_does_not_rewrite_the_publish_cell(storage, files) -> None:
+    """查重命中的那条**不再记**：`publish` 是"第一次抓到时长什么样"，重跑不该刷新它。
+
+    这一格一旦被覆盖，"发布 24 小时破千"这类结论就会随重跑次数变。
+    """
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM,
+        videos=[make_video_meta(PLATFORM, "v1", counts={"view_count": 1})],
+        artifact_factory=_single_artifact,
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+    handler = make_collect_handler(PLATFORM)
+
+    await handler(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+    adapter._videos = [make_video_meta(PLATFORM, "v1", counts={"view_count": 99999})]
+    second = await handler(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()), CollectParams()
+    )
+
+    row = await storage.videos.find_by_platform_id(PLATFORM, "v1")
+    snaps = await _snapshots(storage, row.id)
+    assert second.summary["publish_snapshots"] == 0
+    assert [(s.checkpoint, s.view_count) for s in snaps] == [("publish", 1)]
+
+
+async def test_metrics_only_round_still_leaves_the_publish_cell(storage, files) -> None:
+    """ "只采指标"那一站更要记这条：它不下载，读数就是它唯一的产出。"""
+    await _seed_creator(storage)
+    adapter = FakeAdapter(
+        PLATFORM, videos=[make_video_meta(PLATFORM, "v1", counts={"like_count": 3})]
+    )
+    reg = FakeRegistry({PLATFORM: adapter}, {PLATFORM: FakeConfig()})
+
+    result = await make_collect_handler(PLATFORM)(
+        make_ctx(storage=storage, files=files, registry=reg, bus=FakeBus()),
+        CollectParams(metrics_only=True),
+    )
+
+    assert result.summary["registered_metrics_only"] == 1
+    assert result.summary["publish_snapshots"] == 1
+    assert adapter.download_calls == []

@@ -30,12 +30,14 @@ from intelligence_hub_v2.platforms.registry import PLATFORMS, PlatformRegistry
 from intelligence_hub_v2.tasks import (
     AddCreatorParams,
     CollectParams,
+    EnrichMetricsParams,
     PostprocessParams,
     PreflightParams,
     SingleLinkParams,
     TaskDefinition,
     make_collect_handler,
     run_add_creator,
+    run_enrich_metrics,
     run_postprocess,
     run_preflight,
     run_single_link,
@@ -140,6 +142,21 @@ TASKS: dict[str, TaskDefinition] = {
         timeout_seconds=900,
         cancellable=True,
         runner=run_postprocess,
+    ),
+    "enrich_metrics": TaskDefinition(
+        name="enrich_metrics",
+        display_name="补一次读数",
+        kind=TaskKind.ENRICH_METRICS,
+        params_schema=EnrichMetricsParams,
+        platforms=(),
+        # 与 postprocess 同口径：`requires` 那道闸还没实现（ADR-0014 的预留位），
+        # 现在声明它等于声明一道纸面防护。缺什么由适配器自己红。
+        requires=(),
+        # 一条作品最多 = 一次 view + 一次评论翻页（`comments_limit` 给了才翻）。
+        # 50 条 × 2 个请求按 `per_minute=30` 是三分钟出头，900 秒留了一倍余量。
+        timeout_seconds=900,
+        cancellable=True,
+        runner=run_enrich_metrics,
     ),
     # ---- 以下 6 个：登记但不实现（见模块 docstring）----
     "xiaohongshu_collect": TaskDefinition(

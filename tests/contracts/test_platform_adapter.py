@@ -12,6 +12,8 @@
 - `list_creator_videos` 流式产出的 `VideoMeta` 形状与 `limit` 上限
 - `download_media` 的产物**说得出走了哪条路**，兜底那一路必须带 yt-dlp 原文（§7.2）
 - 不支持字幕的平台 `fetch_subtitles` **返回 None 而不是抛**（`platforms/base.py` 契约）
+- 不支持评论的平台 `fetch_comments` 同上；`fetch_metrics` **只许"有数的读数"或"如实抛"**，
+  不许交回四项全 NULL 的读数（ADR-0020 决定二）
 
 平台**特有**的深水区（cookie 阶梯 argv 长什么样、DASH 怎么配对、桥 503 自愈…）留在各自的
 `test_<platform>_adapter.py` 里，本基类不重复。
@@ -219,6 +221,18 @@ class PlatformAdapterContractTests(abc.ABC):
             return
         assert await adapter.fetch_subtitles(self.video_fixture()) is None
 
+    async def test_unsupported_comments_returns_none_not_raise(self, tmp_path: Path) -> None:
+        """评论与字幕同一条契约（ADR-0020 决定二 明说照 `supports_subtitles` 的形状做）。
+
+        这一条数的是**没声明能力的三家**：`enrich_metrics` 会先问能力位再决定要不要问，
+        所以真正常的路径上它不会来到这里 —— 但"来到这里就抛"会让任何一个新调用方
+        都必须先读一遍能力表，那条可选能力的意义就没了。
+        """
+        adapter = self.build(tmp_path)
+        if adapter.capabilities.supports_comments:
+            return
+        assert await adapter.fetch_comments(self.video_fixture()) is None
+
 
 class TestDouyinContract(PlatformAdapterContractTests):
     def build(self, tmp_path: Path) -> DouyinAdapter:
@@ -280,6 +294,9 @@ class TestBilibiliContract(PlatformAdapterContractTests):
             supports_dash_split=True,
             list_strategy="yt_dlp_flat",
             media_strategy="yt_dlp",
+            # 四家里只有这一家有评论区接口（`x/v2/reply`）。改这一行要连
+            # `adapter.fetch_comments` 的实现一起改，否则基类那条"声明了就必须给得出东西"会红。
+            supports_comments=True,
         )
 
     def resolvable_profile_url(self) -> str:

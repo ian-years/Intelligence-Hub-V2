@@ -1,4 +1,9 @@
-"""`core/task_registry.py`：12 个任务全登记、6 个真实现、过滤与依赖袋装配。"""
+"""`core/task_registry.py`：13 个任务全登记、9 个真实现、过滤与依赖袋装配。
+
+两个集合都是**快照式**看护（改注册表就要在这里留痕）。它们存在的意义不是数数，
+而是"登记了一条但没有实现"与"实现了但没登记"这两种漂法各红一次：前者让前端
+按钮点开就 `TaskRejected`，后者让一个已经能跑的任务在 `/api/tasks` 里不存在。
+"""
 
 from __future__ import annotations
 
@@ -31,10 +36,11 @@ IMPLEMENTED_NOW = {
     "single_link",
     "add_creator",
     "postprocess",
+    "enrich_metrics",
 }
 
 
-def test_twelve_registered_eight_implemented() -> None:
+def test_thirteen_registered_nine_implemented() -> None:
     assert set(TASKS) == {
         "preflight",
         "douyin_collect",
@@ -48,6 +54,7 @@ def test_twelve_registered_eight_implemented() -> None:
         "postprocess",
         "feishu_sync",
         "migrate_from_v1",
+        "enrich_metrics",
     }
     implemented = {name for name, d in TASKS.items() if d.implemented}
     assert implemented == IMPLEMENTED_NOW
@@ -85,6 +92,8 @@ def test_available_tasks_respect_platform_switch_and_implementation() -> None:
         "single_link",
         "add_creator",
         "postprocess",
+        # 跨平台且已实现：它不属于任何一家，所以关掉平台也不该消失
+        "enrich_metrics",
     } == set(both)
 
     only_douyin = set(available_task_names(_configs(bilibili=False)))
@@ -92,6 +101,7 @@ def test_available_tasks_respect_platform_switch_and_implementation() -> None:
     assert "douyin_collect" in only_douyin
     # 跨平台的实现任务永远在
     assert {"preflight", "single_link", "add_creator", "postprocess"} <= only_douyin
+    assert "enrich_metrics" in only_douyin, "补读数挑活是全平台的，不该跟着平台开关消失"
 
 
 def test_unimplemented_never_available_even_if_platform_turned_on() -> None:

@@ -20,6 +20,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import (
     MediaArtifact,
     MediaSource,
@@ -55,12 +56,14 @@ __all__ = [
     "ListStrategy",
     "MediaArtifact",
     "MediaSource",
+    "MetricReadings",
     "PlatformAdapter",
     "PlatformConfig",
     "RateLimitConfig",
     "SingleFileArtifact",
     "Transcript",
     "VideoAudioPairArtifact",
+    "VideoCommentDraft",
     "VideoMeta",
     "audio_path_of",
     "total_size_bytes",
@@ -130,6 +133,20 @@ class Capabilities:
 
     media_strategy: MediaStrategy
     """媒体下载策略。"""
+
+    supports_comments: bool = False
+    """评论是可问的（B站 True）。False 时 `fetch_comments` 直接返回 None，不抛。
+
+    **带默认值的字段只能排在最后**：`Capabilities` 是 `@dataclass(frozen=True, slots=True)`，
+    把带默认值的插在两个不带默认值的字段之间，dataclass 直接 `TypeError`
+    （`non-default argument 'supports_dash_split' follows default argument`）。
+
+    默认 False 而不是必填，是为了不破坏既有的四处声明与它们之间的 `==` 比较
+    （能力表快照由 `tests/unit/platforms/test_registry.py` 核）。
+    为什么这个能力位必须摆在这里、不让 handler 用 `getattr` 在运行期探测：
+    见 ADR-0020 决定二 —— `supports_subtitles` 就是为同一件事立的先例，
+    探测式写法会让这张表退化成"给 UI 看的装饰"，而它是 ADR-0011 认定的唯一真源。
+    """
 
 
 class RateLimitConfig(BaseModel):
@@ -361,5 +378,34 @@ class PlatformAdapter(Protocol):
 
         `capabilities.supports_subtitles=False` 的平台**直接返回 None**，
         不要抛 —— 抖音压根没有公开字幕轨，抛异常会让"每条作品都先失败一次"变成常态。
+        """
+        ...
+
+    # ---- 评论与读数（可选能力，ADR-0020 决定二） ----
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        """一次评论抓取。**没有这项能力的平台返回 `None`，不是抛**（与 `fetch_subtitles` 同规）。
+
+        返回的是**草稿**（`VideoCommentDraft`）不是行：适配器不知道 `video_id` 是几号
+        （它认的是平台侧 id），归属由 `tasks/enrich.py` 在写库时补。
+
+        `sort` 只有两个可信取值：`"hot"`（按赞，看热评）与 `"new"`（按时间，看最新）。
+        这两个问题不同，所以由调用方选，不在这一层替它决定 —— 平台侧不支持那个排序时
+        要如实说明并给出它实际按什么排（进 `metadata_json`），不许悄悄退回默认档。
+        业务失败（B站 把错误编在 HTTP 200 的 `code` 里）抛 `PlatformError` 带原文。
+        """
+        ...
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        """补抓一次读数（"这条现在多少赞"），**不带窗口**。
+
+        窗口（`publish` / `24h` / `7d` …）由调用方按发布时间算：同一篇稿子早上跑与晚上跑
+        会落到不同窗口，那是**事实**（采集时刻决定的），不是适配器该猜的东西。
+
+        做不到要抛 `PlatformError` 并带原因（"这一家的计数只在页面上下文里给，V2 没实现那条路"），
+        **不要返回一个四项全空的 `MetricReadings`**：空读数会被仓库层当成"这个窗口抓过了"
+        而从此不再补抓（同一判据见 `MetricSnapshotRepository.put` 的拒收）。
         """
         ...

@@ -116,6 +116,39 @@ class PlatformAdapter(Protocol):
     async def fetch_subtitles(self, video: "VideoMeta") -> "Transcript | None":
         """有字幕优先字幕（B站/YouTube），没有返回 None 让调度器走 ASR。
         capabilities.supports_subtitles=False 的平台直接返回 None。"""
+
+    # ---- 评论（可选能力，ADR-0020 决定二） ----
+    async def fetch_comments(
+        self, video: "VideoMeta", *, limit: int = 50, sort: str = "hot"
+    ) -> list["VideoCommentDraft"] | None:
+        """顶层评论草稿。`capabilities.supports_comments=False` 的平台**直接返回 None**，
+        与 `fetch_subtitles` 同一条契约：抛会让"每条作品都先失败一次"变成常态。
+
+        返回 `[]`（这条确实没评论）与返回 `None`（这一家不支持）必须可区分，
+        所以声明了 True 的实现**不许**返回 None —— 那是声明与实现不一致，
+        `tasks/enrich_metrics.py` 会把它记成一条失败而不是"零条"。
+
+        `sort` 只认 `"hot"` / `"new"` 两个词：平台的数字排序档是实现细节，
+        不许漏到 handler 与任务参数里。认不出的词要抛（"静默按 hot 排"会长得
+        完全像"热评就这些"）。"""
+
+    # ---- 读数补抓（人人有这个方法，能不能干活由实现如实回答） ----
+    async def fetch_metrics(self, video: "VideoMeta") -> "MetricReadings":
+        """再问一次这条作品当前的计数。**不返回窗口**：窗口由调用方按
+        `taken_at - published_at` 算（`tasks/enrich_metrics.window_for`），
+        同一个判断放两处迟早漂。
+
+        只有两种合法答案：
+        - 一项以上非空的 `MetricReadings`；
+        - 抛 `PlatformError(stage="metrics")` 并带原文（"这一家的数只在签名接口里"）。
+
+        **不许交回四项全 NULL 的读数**：那会被当成"这个窗口已经抓过了"，
+        于是这条作品从此不再被 `video_ids_missing` 挑中 —— 一次失败换来一个永久盲点
+        （同一判据见 `MetricSnapshotRepository.put` 的拒收）。
+        四项全 0 **是**有效读数（"刚发出去真没人看"与"没给数"是两个答案）。
+
+        不另开能力位：任何能枚举出作品计数的一方都能补抓一次读数；
+        做不到是**错误**（要带原因），不是"不支持"（那是 None 的语义）。"""
 ```
 
 ### 2.2 `Capabilities`
@@ -159,6 +192,17 @@ class Capabilities:
     - yt_dlp: 纯 yt-dlp
     - page_play_url: 纯页面播放直链（抖音兜底）
     - yt_dlp_with_fallback: yt-dlp 失败 → 页面播放直链（抖音常态，V1 §7.2）"""
+
+    supports_comments: bool = False
+    """B站 True（`x/v2/reply`），抖音/小红书/YouTube False。
+    False 时 `fetch_comments` 直接返回 None，不抛。
+
+    **带默认值的字段只能排在最后**：这是 `@dataclass(frozen=True, slots=True)`，
+    无默认值的字段跟在有默认值的后面会当场 `TypeError`（实例化时，不是导入时）。
+    这一格踩过：把 `supports_comments` 插在 `supports_dash_split` 前面，
+    报出来的是"non-default argument follows default argument"，与平台无关，
+    看的人第一反应是"我声明写错了"而不是"顺序错了"。
+    新增能力位时往**末尾**加。"""
 ```
 
 ### 2.3 `AdapterDeps`
@@ -195,6 +239,20 @@ class AdapterDeps:
 ```
 
 ### 2.4 数据模型（Pydantic）
+
+> `VideoCommentDraft` / `MetricReadings` 定义在 `models/engagement.py`
+> （表侧的那两个兄弟 `VideoComment` / `MetricSnapshot` 与 CHECK 约束见
+> `data-model.md §2.11 / §2.12`），本节只列适配器**说出口**的那些类型。
+>
+> **两条 import 惯例同时成立，各有方向**（照抄错方向不会红，只会漂）：
+> - 平台适配器 import 数据模型时走 `models.*`（`models.creator` / `models.media` /
+>   `models.video` / `models.engagement`），**不绕 `platforms.base`** —— 四家现在都是这样。
+> - `platforms/base.py` 把这些名字 re-export 一份（在它的 `__all__` 里），服务对象是
+>   **只看契约、不看实现** 的消费方：`tests/contracts/_doubles.py`、注册表测试、
+>   以及 V3 那份"换语言重写时要对齐的清单"。
+>
+> 判据是方向不是位置：谁需要"协议的参数长什么样"就从 base 拿，
+> 谁需要"这个平台自己要造一个读数对象"就从 models 拿。
 
 ```python
 from pydantic import BaseModel, Field, HttpUrl
@@ -309,6 +367,23 @@ class Transcript(BaseModel):
     segments: list[TranscriptSegment] = Field(default_factory=list)
     text_path: Path | None = None       # 落盘路径（相对 data/）
 
+class MetricReadings(BaseModel):
+    """**一次读数**，不带窗口（`fetch_metrics` 的输出，ADR-0020 决定二）。
+
+    四项都可空，且"空"不等于 0（与 `video_metric_snapshots` 同一口径）：
+    小红书公开页的卡片上没有 view_count，写 0 就得到一条"发布时 0 播放"的快照，
+    下一轮算 `7d / publish` 时要除以它。
+    """
+    view_count: int | None = Field(default=None, ge=0)
+    like_count: int | None = Field(default=None, ge=0)
+    comment_count: int | None = Field(default=None, ge=0)
+    share_count: int | None = Field(default=None, ge=0)
+    metadata_json: str = "{}"
+    """平台给了但契约没有列去放的项（B站 的 coin / favorite）。"""
+
+    def is_empty(self) -> bool:
+        """四项全 NULL。**这不是"零互动"** —— 见 §2.1 `fetch_metrics` 那条判据。"""
+
 class HealthReport(BaseModel):
     """healthcheck 的输出。"""
     platform: str
@@ -320,8 +395,13 @@ class HealthReport(BaseModel):
 
 class FailureRecord(BaseModel):
     """清单里的失败记录。"""
-    platform: str
-    stage: Literal["parse_url", "list", "download", "transcribe", "store"]
+    platform: str | None = None      # runner 级失败不归任何单一平台（V1 §7.22 那一族）
+    stage: Literal[
+        "parse_url", "list", "download", "transcribe", "store",
+        "task",       # 不是某个 item 的某一步挂了，是任务本身挂了
+        "metrics",    # 补读数（ADR-0020）
+        "comments",   # 抓评论（同上）
+    ]
     video_id: str | None = None
     creator_id: str | None = None
     error: str                  # 原文，不许吞错（V1 §1.3）
@@ -370,10 +450,15 @@ class ListError(PlatformError):
 
 | 平台 | name | capabilities | 里程碑 |
 |---|---|---|---|
-| 抖音 | `douyin` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser','none'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp_with_fallback' | V2.0 |
-| B站 | `bilibili` | needs_browser=False, needs_cookies=True, cookie_variants=('exported_file','browser','anonymous'), supports_subtitles=True, supports_dash_split=True, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.0 |
-| 小红书 | `xiaohongshu` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp' | V2.1 |
-| YouTube | `youtube` | needs_browser=False, needs_cookies=False, cookie_variants=('none',), supports_subtitles=True, supports_dash_split=False, list_strategy='yt_dlp_flat', media_strategy='yt_dlp' | V2.1 T2.2（已注册）|
+
+> `capabilities` 里那个 `supports_comments` 是 V2.1 T4.1 加的位（ADR-0020 决定二）。
+> **四家里只有 B站 True**，但"能补读数"与"能抓评论"是两件事：
+> 读数一侧 B站（`view` 的 `stat`）与小红书（详情页的 likes 一项）能做，
+> 抖音与 YouTube 如实抛（理由在各自 §4.x 与那两个 `fetch_metrics` 的 docstring 里）。
+| 抖音 | `douyin` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser','none'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp_with_fallback', supports_comments=False | V2.0 |
+| B站 | `bilibili` | needs_browser=False, needs_cookies=True, cookie_variants=('exported_file','browser','anonymous'), supports_subtitles=True, supports_dash_split=True, list_strategy='yt_dlp_flat', media_strategy='yt_dlp', supports_comments=True | V2.0 |
+| 小红书 | `xiaohongshu` | needs_browser=True, needs_cookies=True, cookie_variants=('exported_file','browser'), supports_subtitles=False, supports_dash_split=False, list_strategy='browser_scroll', media_strategy='yt_dlp', supports_comments=False | V2.1 |
+| YouTube | `youtube` | needs_browser=False, needs_cookies=False, cookie_variants=('none',), supports_subtitles=True, supports_dash_split=False, list_strategy='yt_dlp_flat', media_strategy='yt_dlp', supports_comments=False | V2.1 T2.2（已注册）|
 
 ---
 
@@ -394,6 +479,10 @@ class ListError(PlatformError):
 - **只认作品网格里的链接**（`[data-e2e="user-post-list"]`），整页扫 `a[href*="/video/"]`
   会在网格没渲染时把别人的作品算到本博主头上**而且报成功**（V1 实测踩过）。
   网格为空是 `ok:false` + 原文 → `ListError`，**不是**空列表
+- **`fetch_metrics` 抛而不是交回空读数**（T4.2）：抖音的计数只在页面上下文里给
+  （作品详情接口要签名与页面态），V2 没有那条离线可验的路。空读数会被当成
+  "这个窗口抓过了"，于是这条作品从此不再被补抓 —— 一个永久盲点。
+  消息里点名 `douyin_collect`（它会把当次枚举到的读数记成 publish 快照）。
 - **`sec_uid` 解析有一道域名闸门**（V2 补的，V1 没有）：`douyin.com` 子域 + `iesdouyin.com`
   之外一律认不出。V1 的"路径以 `user/` 开头就取第二段"对任意站点成立，
   于是 `https://example.com/user/x` 会生成一个看起来合法的 `platform_id`（坑 20）
@@ -422,14 +511,37 @@ class ListError(PlatformError):
   所以要逐条问 `view`。因此实现口径是"**传了 `since` 才发这些请求**"——
   没要求按时间过滤时不为填字段多发 N 个请求（一位博主 30 条 × 20 位 = 600 个）
 - **字幕优先**：`fetch_subtitles` 命中时 `PostprocessTask` 跳过 ASR
+- **评论接口的 `oid` 要数字 `aid`，不是 `bvid`**（T4.1）：给 bvid 会回
+  `code=-400 请求错误` 而 **HTTP 是 200**，那句报错长得像"接口挂了"，实际是参数身份不对。
+  所以 `fetch_comments` 先问一次 `view` 拿 `aid`；**拿不到 aid 就当场抛**，
+  不去发那个注定失败的请求（否则清单里留下的原因是"评论接口失败"，方向错一整条）
+- **`stat` 才是读数的地方**：`view` 的顶层没有 `view_count`，四项嵌在 `stat` 里。
+  读顶层会永远拿到 NULL，于是"补抓一次"静默变成"抓了个空的"
+  （`reply`=评论数、`share`=转发数，`coin`/`favorite` **不当作** share：
+  收藏与转发回答的是两个问题，这一格最容易被人"反正都是个位数级互动"地合并）
+- `sort` 的两个契约名落成 B站 的 `2`（按赞）与 `0`（按时）；认不出的名字抛，不"当作 hot"
 
 ### 4.3 小红书
 
 - **全走桥**：列表枚举与详情都要桥内页面 JS 注入（V1 §7 契约三：占位符不加引号）
 - **登录态是会话级的**：cookie 过期后媒体会 403，需要重新在桥里登录
+- **`supports_comments=False`**：评论区是另一条签名接口（`/api/sns/web/v2/comment/page`），
+  V2 没有实现路径，所以声明位保持 False 且 `fetch_comments` 返回 None ——
+  "声明了能力但没有实现"等于对调度器撒谎（`Capabilities` 的判据）
+- **`fetch_metrics` 只能给一项**（详情页的 `likes`，T4.2）：其余三项留 NULL 并把
+  `{"only": ["like_count"]}` 写进 `metadata_json`。这一家与抖音的差别不在"要不要实现"，
+  在**这条路是否已经存在**：详情页本来就要为下载去访问且离线可验（假桥 double），
+  顺手回一个赞数是同一次访问的副产品
+- 复用详情页带来一个 stage 副作用：那一步自己把失败报成 `media`。`fetch_metrics`
+  会换成 `metrics` 再抛，**原文一字不动** —— 否则清单会把它排到"去查 yt-dlp / 直链"那一格
 
 ### 4.4 YouTube
 
+- **`fetch_metrics` / `fetch_comments` 都如实回答"不做"**（T4.2）：单条 `-J` 确实能回
+  view/like，但那是为"补一个数"再跑一次几秒到几十秒的完整解析，
+  而同一次采集的 flat-playlist 已经带回这些计数。所以抛出的那句里点名
+  `youtube_collect` —— **"做不到"要连着"该做什么"一起给**，否则拿到的是一句没有下一步的红。
+  评论要走 InnerTube 那套未公开接口，V2 没有需要它的验收，声明位保持 False。
 - **纯 yt-dlp**，不需要桥，也**不带任何 cookie**：`cookie_variants=('none',)` 是真实档位
   （`plan_cookie_variants` 给出的那一档 argv 为空），不是"没有阶梯"。
   所以 V1 §7.15 那一族（枚举与下载都要带导出 cookie）在这一族不可能发生。

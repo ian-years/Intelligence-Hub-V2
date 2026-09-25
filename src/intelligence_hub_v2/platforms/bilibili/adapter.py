@@ -39,6 +39,7 @@ from intelligence_hub_v2.infra.ytdlp import (
     progress_from_ytdlp_line,
 )
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import (
     MediaArtifact,
     SingleFileArtifact,
@@ -54,7 +55,7 @@ from intelligence_hub_v2.platforms.base import (
     HealthReport,
     PlatformConfig,
 )
-from intelligence_hub_v2.platforms.bilibili import listing, media, subtitles
+from intelligence_hub_v2.platforms.bilibili import comments, listing, media, subtitles
 from intelligence_hub_v2.platforms.bilibili.config import BilibiliConfig
 from intelligence_hub_v2.platforms.bilibili.listing import BiliCard
 from intelligence_hub_v2.platforms.bilibili.media import CookieLadder, resolve_cookie_ladder
@@ -100,6 +101,9 @@ class BilibiliAdapter:
         supports_dash_split=True,
         list_strategy="yt_dlp_flat",
         media_strategy="yt_dlp",
+        # 评论有公开的 web 接口（`x/v2/reply`），所以这一家是真能问的 —— 不是"装的"：
+        # `fetch_comments` 里没有一条代码路径需要桥。
+        supports_comments=True,
     )
 
     def __init__(self, config: PlatformConfig, deps: AdapterDeps) -> None:
@@ -556,6 +560,65 @@ class BilibiliAdapter:
         if transcript is None:
             self._log.info("bilibili.subtitle_absent", bvid=bvid, note=_CDN_PLAY_NOTE)
         return transcript
+
+    # ------------------------------------------------------------------ #
+    # 评论与读数（ADR-0020 决定二）
+    # ------------------------------------------------------------------ #
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        """`x/v2/reply` 的顶层评论。这家**有**这项能力，所以正常路径不返回 None。
+
+        `aid` 要先问一次 `view`：评论接口的 `oid` 要的是数字 aid，给 bvid 会回
+        `code=-404 啥都木有`，**HTTP 200**（V1 同一条坑，见 `urls.reply_api_url` 的注释）。
+        所以"取评论之前先补一次 view"不是多此一举，是这一家接口的形状决定的。
+        """
+        if sort not in comments.SORT_BY_NAME:
+            # 认不出的排序词必须响，不能"当作 hot"：一个拼错的 `"newst"` 静默按赞排，
+            # 界面上会长得完全像"热评就这些"（同一口径见 `media.py` 那个 sort 参数）。
+            msg = f"B站 评论只认 {sorted(comments.SORT_BY_NAME)}，收到 {sort!r}"
+            raise PlatformError(PLATFORM, "comments", msg)
+        data = await self._view(video.platform_video_id)
+        aid = data.get("aid")
+        if aid is None:
+            msg = (
+                f"view 接口没给 aid（bvid={video.platform_video_id}），"
+                "评论接口的 oid 问不了 —— 不去发一个注定 -404 的请求"
+            )
+            raise PlatformError(PLATFORM, "comments", msg)
+        drafts, pages = await comments.fetch_top_level_comments(
+            self._deps.http,
+            aid=aid,
+            bvid=video.platform_video_id,
+            limit=limit,
+            sort=comments.SORT_BY_NAME[sort],
+            budget_seconds=self.request_timeout_seconds,
+        )
+        self._log.info(
+            "bilibili.comments_fetched",
+            bvid=video.platform_video_id,
+            count=len(drafts),
+            pages=len(pages),
+        )
+        return drafts
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        """再问一次 `view`，取 `stat` 那一段。窗口由调用方算（`base.py` 的契约注释）。
+
+        四项全空要抛而不是交回一个空读数：空读数会被 `MetricSnapshotRepository.put`
+        拒收，但**拒收之前**这一家的这一轮已经被当成"抓过了"记进清单了 ——
+        把它在这里就顶回去，失败原因才是真的那一句（"接口没给数"）。
+        """
+        data = await self._view(video.platform_video_id)
+        readings = listing.stat_to_readings(data)
+        if readings.is_empty():
+            msg = (
+                f"view 接口的 stat 一个数都没给（bvid={video.platform_video_id}）："
+                "这是接口形状变了或被风控，不是'这条作品零互动'"
+            )
+            raise PlatformError(PLATFORM, "metrics", msg)
+        return readings
 
     # ------------------------------------------------------------------ #
     # 内部

@@ -1,6 +1,6 @@
 # ADR-0020: 评论与指标快照落成两张"附属读数"表，抓取的调用面走 Protocol 的可选成员
 
-- **状态**：Accepted（表与抓取模块已落；三个适配器的 Protocol 实现**待落**，见"分期"）
+- **状态**：Accepted（决定一与决定二**都已落地**：表 + 四个适配器的 Protocol 实现 + `enrich_metrics` 任务 + collect 的 publish 快照，2026-09-25。下面的"分期"保留为过程记录）
 - **日期**：2026-09-24
 - **决策人**：用户 + Qoder（**待确认项**：本条动了 Locked 契约面 `PlatformAdapter`）
 - **相关**：ADR-0004（适配器 Protocol）、ADR-0006（数据模型）、ADR-0018（搬运区）、
@@ -72,11 +72,24 @@
 
 - 已落：两张表 + Alembic 0003 + `models/engagement.py` + 两个 Repository +
   `platforms/bilibili/comments.py`（抓取与解析，离线可验）。
-- **待落**：`PlatformAdapter` 上那两个方法 + 三家（抖音 / B站 / 小红书）各自的实现 +
-  `tasks/enrich_metrics.py` + `collect` 里"新作品顺手记一条 `publish` 快照"。
-  没在同一轮做的原因是**本会话有三个 Agent 正在改这三个适配器与契约测试基类**，
+- **待落**（2026-09-25 全部落完，逐条对号）：
+  - `PlatformAdapter.fetch_comments` / `fetch_metrics` + `Capabilities.supports_comments`
+    （`platform-adapter.md §2.1 / §2.2` 已同步）
+  - **四家**各自的实现：B站 真做（`view` 的 `stat` + `x/v2/reply`，`aid` 那一跳见
+    `§4.2`）、小红书只做读数（详情页 `likes` 一项，`§4.3`）、抖音与 YouTube **如实抛**
+    并在消息里点名该跑的那条采集任务（`§4.1` / `§4.4`）
+  - `tasks/enrich_metrics.py`（挑活 = `video_ids_missing`，窗口 = `window_for`）
+  - `collect` 里"新作品顺手记一条 `publish` 快照"（用的是 `meta` 上已有的计数，
+    **不再问一次适配器**；四项全空就跳过不记失败）
+
+  没在写这份 ADR 的那一轮一起做，是因为**当时有三个 Agent 正在改这三个适配器与契约测试基类**，
   在别人的文件上动 Locked 契约的签名会把两边的工作都变成冲突。
-  判据与这段理由都记在这里，不是漏了没说。
+  实现期另外发现的一条，值得留在这里：**`fetch_metrics` 不该有第三种答案**。
+  写契约时想的是"能做就返回，不能做就抛"，实现时才看清中间那一档
+  （返回四项全 NULL）必须显式禁掉 —— 它会顺着 `enrich_metrics` 走到 `put()` 被拒收，
+  而拒收之前这一轮已经被当成"抓过了"记进清单，于是 `video_ids_missing` 从此不再看这条作品：
+  **一次失败换来一个永久盲点**。所以现在三处都在挡它（适配器抛、任务再挡一次、仓库拒收），
+  判据是同一条，写在 `platform-adapter.md §2.1` 与那两个方法的 docstring 里。
 
 ## 后果
 

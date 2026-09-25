@@ -39,6 +39,7 @@ from intelligence_hub_v2.infra.ffmpeg import has_audio_stream
 from intelligence_hub_v2.infra.pacing import RatePacer
 from intelligence_hub_v2.infra.ytdlp import YtDlpResult, YtDlpRunner, classify_artifacts
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import MediaArtifact, SingleFileArtifact
 from intelligence_hub_v2.models.task import ProgressCallback
 from intelligence_hub_v2.models.video import VideoMeta
@@ -601,6 +602,33 @@ class DouyinAdapter:
         self._log.debug("douyin.subtitles.unsupported", platform_video_id=video.platform_video_id)
         return None  # noqa: RET501,PLR1711 - 这个 None **就是**契约（"没有字幕"而不是"失败"），
         # 省掉它可读性更差：Protocol 那边写的是 `-> Transcript | None`。
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        """抖音**没有**这项能力（`capabilities.supports_comments=False`）→ 返回 None。
+
+        与字幕同一规：抛会让"每条作品都先失败一次"变成常态，而这里的事实是
+        "这一家的评论区不在 V2 走的那几个接口里"，不是"抓失败了"。
+        """
+        self._log.debug("douyin.comments.unsupported", platform_video_id=video.platform_video_id)
+        del limit, sort  # 两个入参在这一家没有意义上，但签名是契约要求的（`base.py`）
+        return None
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        """做不到，如实抛 —— 这是**能力**的边界，不是"这次运气差"。
+
+        抖音的计数只在页面上下文里给（作品详情接口要签名与页面态），V2 今天没有那条
+        离线可验的路。为什么不返回一个四项全空的读数蒙过去：空读数会被当成
+        "这个窗口已经抓过了"，于是这条作品从此不再补抓（同一判据见
+        `MetricSnapshotRepository.put` 的拒收），而那正是 V1 "看起来在跑" 的又一个形状。
+        """
+        msg = (
+            f"抖音的读数只在页面上下文里给（作品详情接口要签名），V2 没实现那条补抓路径："
+            f"要新的数就再跑一次 douyin_collect —— 它会把当次的读数记成一条 publish 快照"
+            f"（video={video.platform_video_id}）"
+        )
+        raise PlatformError(PLATFORM, "metrics", msg)
 
     # ------------------------------------------------------------------ #
     # 内部

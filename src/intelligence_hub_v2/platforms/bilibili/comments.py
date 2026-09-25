@@ -43,6 +43,15 @@ from intelligence_hub_v2.platforms.bilibili.urls import (
 
 PLATFORM = "bilibili"
 
+SORT_BY_NAME: dict[str, int] = {"hot": 2, "new": 0}
+"""`fetch_comments(sort=...)` 那两个名字 → B站 `sort` 参数（2 按赞、0 按时）。
+
+契约面（`platforms/base.py`）只承认 `"hot"` / `"new"` 两个词：平台的数字档位是这一家的
+实现细节，不该漏到 handler 与任务参数里去。认不出来时**由调用方决定怎么报错**，
+这一层用 `.get(sort, 2)` 之前先由适配器显式判（见 `BilibiliAdapter.fetch_comments`），
+免得一个拼错的 `"newst"` 静默按赞排 —— 那会长得完全像"热评就是这些"。
+"""
+
 MAX_PAGE_SIZE = 20
 """`ps` 的实测上限。超过它接口会自己按 20 给，而我们这边的翻页步长就会与它不一致 ——
 表现为"要 50 条只拿到 40 条且再也没翻页"。"""

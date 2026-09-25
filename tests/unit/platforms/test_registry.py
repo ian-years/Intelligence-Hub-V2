@@ -30,11 +30,13 @@ from intelligence_hub_v2.platforms.base import (
     CreatorRef,
     HealthReport,
     MediaArtifact,
+    MetricReadings,
     PlatformAdapter,
     PlatformConfig,
     ProgressCallback,
     SingleFileArtifact,
     Transcript,
+    VideoCommentDraft,
     VideoMeta,
 )
 from intelligence_hub_v2.platforms.registry import PLATFORMS, PlatformRegistry, register
@@ -113,6 +115,17 @@ class _Adapter:
 
     async def fetch_subtitles(self, video: VideoMeta) -> Transcript | None:
         return None
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        # 契约：能力位为假就回 None，不抛（`platforms/base.py`）。
+        return None
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        # 契约：做不到要抛并带原文，**不许交回四项全空的读数**。
+        msg = "假平台没有读数可补"
+        raise PlatformError(self.name, "metrics", msg)
 
 
 def _config(enabled: bool = True) -> PlatformConfig:

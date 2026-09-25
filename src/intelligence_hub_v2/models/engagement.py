@@ -120,6 +120,40 @@ class MetricSnapshot(BaseModel):
         return any(getattr(self, name) is not None for name in _READINGS)
 
 
+class MetricReadings(BaseModel):
+    """**一次读数**，不带检查点。`PlatformAdapter.fetch_metrics` 的返回类型（ADR-0020 决定二）。
+
+    为什么不直接返回 `MetricSnapshotDraft`：那一份的 `checkpoint` 是必填，而
+    "这条作品的这条读数是 24h 还是 7d" 由**调用方按发布时间算**（`tasks/enrich.py`），
+    适配器只管"现在屏幕上是多少"。让适配器填窗口等于把同一个判断放进两处 ——
+    而它会随"什么时候跑的"漂（同一篇稿子，早上跑算 24h、晚上跑算 72h）。
+
+    四项全空是合法的（"这一家一个数都没给"），但 `is_empty()` 让调用方必须把它
+    当**失败**处理：一条全空的快照会被当成"这个窗口抓过了"，从此不再补抓（同一理由见
+    `MetricSnapshotDraft` 在仓库层的那道拒收）。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    view_count: int | None = Field(default=None, ge=0)
+    like_count: int | None = Field(default=None, ge=0)
+    comment_count: int | None = Field(default=None, ge=0)
+    share_count: int | None = Field(default=None, ge=0)
+    metadata_json: str = "{}"
+
+    def is_empty(self) -> bool:
+        return not self.has_any_reading
+
+    @property
+    def has_any_reading(self) -> bool:
+        """四项里**至少一项是显式数字**（0 算有读数，NULL 不算）。
+
+        判据与 `MetricSnapshotDraft.is_empty()` 同源（共用 `_READINGS`），
+        不然"什么算抓到了"会有两个答案。
+        """
+        return any(getattr(self, name) is not None for name in _READINGS)
+
+
 class MetricSnapshotDraft(BaseModel):
     """写入 DB 前的指标快照草稿。
 

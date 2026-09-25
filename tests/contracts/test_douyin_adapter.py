@@ -1250,3 +1250,29 @@ class TestContractShape:
         """能力声明说没有字幕，实现就必须真的不抛 —— 两处不一致会让调度器白等一轮重试。"""
         assert DouyinAdapter.capabilities.supports_subtitles is False
         assert await make_adapter(tmp_path).fetch_subtitles(make_video()) is None
+
+
+# =========================================================================== #
+# 补读数：这一家**做不到**，而要看得见"做不到"
+# =========================================================================== #
+
+
+class TestReadings:
+    async def test_metrics_refuse_and_point_at_the_task_that_can_answer(
+        self, tmp_path: Path
+    ) -> None:
+        """抖音的计数只在页面上下文里给（详情接口要签名），所以如实抛。
+
+        三个判据各挡一种假绿：
+        - 抛而不是交回四项全空的读数：空快照会让这条作品从此不再被补抓（永久盲点）。
+        - 消息里点名 `douyin_collect`：调用方拿到"做不到"时要知道**该跑哪一条**，
+          不然排查的人会去翻适配器有没有 bug。
+        - `stage == "metrics"`：清单按 stage 分组，混进 `list` 那一格就找错地方了。
+        """
+        adapter = make_adapter(tmp_path)
+        assert adapter.capabilities.supports_comments is False
+        with pytest.raises(PlatformError) as caught:
+            await adapter.fetch_metrics(make_video())
+        message = str(caught.value)
+        assert caught.value.stage == "metrics"
+        assert "douyin_collect" in message, message

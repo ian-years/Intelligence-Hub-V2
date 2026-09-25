@@ -994,3 +994,37 @@ class TestSharedJudgementsDoNotDrift:
         这一条红 = 有人只改了一份。
         """
         assert media.ytdlp_failure_reason(result) == bili_media.ytdlp_failure_reason(result)
+
+
+class TestReadings:
+    """读数补抓：这一家**故意不做**，理由不是没时间，是那条路更贵且与采集重复。
+
+    单条 `-J` 确实能回 view/like，但那是为"补一个数"再跑一次几秒到几十秒的完整解析，
+    而同一次采集的 flat-playlist 已经带回这些计数并记成 publish 快照。
+    所以这里看护的是"如实抛 + 消息点名该跑哪一条"，与抖音那两条同一形状。
+    """
+
+    async def test_metrics_refuse_and_point_at_the_task_that_can_answer(
+        self, tmp_path: Path
+    ) -> None:
+        adapter = make_adapter(tmp_path)
+        assert adapter.capabilities.supports_comments is False
+        with pytest.raises(PlatformError) as caught:
+            await adapter.fetch_metrics(yt_video())
+        message = str(caught.value)
+        assert caught.value.stage == "metrics"
+        assert "youtube_collect" in message, message
+
+    async def test_the_refusal_costs_no_subprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "做不到"必须是**当场说的**，不是先跑一次 yt-dlp 再说。
+
+        少了这一条，一个"先试 `-J` 再放弃"的实现也满足上一条，而补读数一轮 50 条
+        就会变成 50 次白跑的子进程 —— 那才是这条决定真正的代价所在。
+        """
+        runner = RecordingRunner(result=ok_result(stdout=""))
+        adapter = make_adapter(tmp_path, runner=runner, monkeypatch=monkeypatch)
+        with pytest.raises(PlatformError):
+            await adapter.fetch_metrics(yt_video())
+        assert runner.calls == []

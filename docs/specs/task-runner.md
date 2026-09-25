@@ -48,6 +48,7 @@ class TaskKind(StrEnum):
     SINGLE_LINK = "single_link"  # 收一条作品
     ADD_CREATOR = "add_creator"  # 收录博主
     BACKFILL = "backfill"  # 爆款回溯
+    ENRICH_METRICS = "enrich_metrics"  # 给已有作品补一次读数快照（T4.2 / ADR-0020）
     POSTPROCESS = "postprocess"  # ASR 转写（跨平台统一）
     SYNC = "sync"  # 飞书同步
     PREFLIGHT = "preflight"  # 健康检查
@@ -237,6 +238,12 @@ class ArtifactRef(BaseModel):
 > `stage` 的 Literal 多一个 `"task"`（不是某个 item 的流水线阶段挂了，而是任务本身挂了）。
 > 详见 `docs/lessons.md` 坑 2。
 
+> **实施期修订（2026-09-25，V2.1 T4.2）**：`stage` 再加两个 —— `"metrics"` 与 `"comments"`。
+> 它们是**新的流水线阶段**，与 `list` / `download` 的差别在于发生在"作品早就在库里"之后。
+> 为什么不复用 `store`：清单按 stage 分组，"平台接口没给数"与"库写不进去"要做的动作不同，
+> 合成一格就等于把两类红混成一堆（V1 的 `stage` 就是一路混到没人看的）。
+> 契约面在 `platform-adapter.md §2.1` 的那两个新方法。
+
 **强制终态**：用上下文管理器实现，**任何分支退出**（成功/异常/取消/超时）都走 `finalize()`：
 
 ```python
@@ -299,22 +306,37 @@ V1 §2 契约二（清单必须写终态）由此**结构性保证**，写不出
 
 ```python
 TASKS: dict[str, TaskDefinition] = {
-    "preflight":           TaskDefinition(name="preflight", kind=PREFLIGHT, platforms=(), requires=(), ...),
-    "douyin_collect":      TaskDefinition(name="douyin_collect", kind=PLATFORM_COLLECT, platforms=("douyin",), requires=("cdp_bridge", "cookies:douyin"), ...),
-    "bilibili_collect":    TaskDefinition(name="bilibili_collect", kind=PLATFORM_COLLECT, platforms=("bilibili",), requires=("cookies:bilibili",), ...),
-    "xiaohongshu_collect": TaskDefinition(name="xiaohongshu_collect", kind=PLATFORM_COLLECT, platforms=("xiaohongshu",), requires=("cdp_bridge",), ...),
-    "youtube_collect":     TaskDefinition(name="youtube_collect", kind=PLATFORM_COLLECT, platforms=("youtube",), requires=("ffmpeg",), ...),
-    "all_platforms":       TaskDefinition(name="all_platforms", kind=ALL_PLATFORMS, platforms=(), requires=(), ...),
-    "single_link":         TaskDefinition(name="single_link", kind=SINGLE_LINK, platforms=(), requires=(), ...),
-    "add_creator":         TaskDefinition(name="add_creator", kind=ADD_CREATOR, platforms=(), requires=(), ...),
-    "backfill":            TaskDefinition(name="backfill", kind=BACKFILL, platforms=(), requires=(), ...),
-    "postprocess":         TaskDefinition(name="postprocess", kind=POSTPROCESS, platforms=(), requires=("ffmpeg", "asr_engine"), ...),
-    "feishu_sync":         TaskDefinition(name="feishu_sync", kind=SYNC, platforms=(), requires=("lark_cli",), ...),
-    "migrate_from_v1":     TaskDefinition(name="migrate_from_v1", kind=MIGRATE, platforms=(), requires=(), ...),
+    # ---- 已实现（9 个）----
+    "preflight":           TaskDefinition(kind=PREFLIGHT, platforms=(), requires=(), timeout_seconds=60, ...),
+    "douyin_collect":      TaskDefinition(kind=PLATFORM_COLLECT, platforms=("douyin",), requires=("cdp_bridge", "cookies:douyin"), timeout_seconds=1800, ...),
+    "bilibili_collect":    TaskDefinition(kind=PLATFORM_COLLECT, platforms=("bilibili",), requires=("cookies:bilibili",), timeout_seconds=1800, ...),
+    "xiaohongshu_collect": TaskDefinition(kind=PLATFORM_COLLECT, platforms=("xiaohongshu",), requires=("cdp_bridge",), timeout_seconds=1800, ...),
+    "youtube_collect":     TaskDefinition(kind=PLATFORM_COLLECT, platforms=("youtube",), requires=("ffmpeg",), timeout_seconds=1800, ...),
+    "single_link":         TaskDefinition(kind=SINGLE_LINK, platforms=(), requires=(), timeout_seconds=600, ...),
+    "add_creator":         TaskDefinition(kind=ADD_CREATOR, platforms=(), requires=(), timeout_seconds=120, ...),
+    "postprocess":         TaskDefinition(kind=POSTPROCESS, platforms=(), requires=("ffmpeg", "asr_engine"), timeout_seconds=900, ...),
+    "enrich_metrics":      TaskDefinition(kind=ENRICH_METRICS, platforms=(), requires=(), timeout_seconds=900, ...),
+    # ---- 登记但未实现（4 个：`implemented=False`，`/api/tasks` 里不出现）----
+    "all_platforms":       TaskDefinition(kind=ALL_PLATFORMS, platforms=(), requires=(), ...),
+    "backfill":            TaskDefinition(kind=BACKFILL, platforms=(), requires=(), ...),
+    "feishu_sync":         TaskDefinition(kind=SYNC, platforms=(), requires=("lark_cli",), timeout_seconds=600, ...),
+    "migrate_from_v1":     TaskDefinition(kind=MIGRATE, platforms=(), requires=(), ...),
 }
 ```
 
-**V2.0 范围**：只实现 `preflight / douyin_collect / bilibili_collect / single_link / add_creator / postprocess` 6 个。
+> **这一份对齐到 2026-09-25**（V2.1 T4.2）。原来这格停在"12 个里实现 6 个"，
+> 而 `xiaohongshu_collect` / `youtube_collect` / `enrich_metrics` 三条从未被写进来 ——
+> 把清单抄在文档里就要接受它会漂。现在的**真源是 `core/task_registry.py`**，
+> 那份集合快照由 `tests/unit/core/test_task_registry.py` 双向核相等（多一条红、少一条也红）。
+>
+> 两条容易被读成遗漏的取值是故意的：
+>
+> - `enrich_metrics.requires=()` —— 与 `postprocess` 同一口径。`requires` 那道闸今天
+>   **还没有实现**（ADR-0014 的预留位），写上去等于声明一道纸面防护；缺什么由适配器
+>   自己红（`fetch_metrics` 抛并带原文）。
+> - `enrich_metrics.platforms=()` —— 它不挂在任何一家：挑活走
+>   `metrics.video_ids_missing`，是全平台的。所以关掉某个平台**不会**让它消失，
+>   而这一格正是"平台开关语义"要看的地方（V1 §7.24 那一族）。
 
 ---
 

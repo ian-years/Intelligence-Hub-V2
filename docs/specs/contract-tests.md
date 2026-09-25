@@ -140,6 +140,7 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | `test_list_creator_videos_streams_well_formed_meta` | 流式产出的 `VideoMeta` 有身份、平台名对得上、挂在请求的那个 ref 下，且 `limit` **是上限** | `platform-adapter.md §2.3` |
 | `test_download_media_reports_how_it_got_the_file` | 产物说得出走了哪条路、文件真在磁盘上且非空；声明了兜底的平台在非 `yt_dlp` 来源时必须带失败原文 | §7.2 |
 | `test_unsupported_subtitles_returns_none_not_raise` | `supports_subtitles=False` 时 `fetch_subtitles` 回 `None` 而不是抛 | `platforms/base.py` |
+| `test_unsupported_comments_returns_none_not_raise` | 同一条契约的评论版：`supports_comments=False` 时 `fetch_comments` 回 `None`。三家（抖音/小红书/YouTube）受约束，声明了能力的 B站 走自己那份深水区 | ADR-0020 决定二 |
 
 **故意不在这里**：cookie 阶梯的 argv 长什么样、DASH 分片怎么配对、桥 503 的自愈、
 页面 JS 的脏行过滤 —— 那些是平台独有的深水区，留在 `test_<platform>_adapter.py`。
@@ -171,6 +172,7 @@ class TestDouyinContract(PlatformAdapterContractTests):
             supports_dash_split=False,
             list_strategy="browser_scroll",
             media_strategy="yt_dlp_with_fallback",
+            supports_comments=False,  # 有默认值，故必须排在最后（frozen dataclass 的规则）
         )
 
     # + 上面那四个 fixture 钩子，各 1~4 行（复用平台测试文件里已有的 helper）

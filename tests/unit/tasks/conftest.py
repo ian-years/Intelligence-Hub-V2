@@ -21,6 +21,7 @@ import httpx
 from intelligence_hub_v2.errors import PlatformError
 from intelligence_hub_v2.infra.cookies import CookieManager
 from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
+from intelligence_hub_v2.models.engagement import MetricReadings, VideoCommentDraft
 from intelligence_hub_v2.models.media import SingleFileArtifact
 from intelligence_hub_v2.models.task import TaskKind
 from intelligence_hub_v2.models.transcript import Transcript
@@ -90,8 +91,19 @@ class FakeBus:
 
 
 def make_video_meta(
-    platform: str, video_id: str, *, title: str = "t", creator: CreatorRef | None = None
+    platform: str,
+    video_id: str,
+    *,
+    title: str = "t",
+    creator: CreatorRef | None = None,
+    counts: dict[str, Any] | None = None,
 ) -> VideoMeta:
+    """一条 `VideoMeta`。`counts` 是给"发布即读数"那几条用例的口子（四个键都可给可不给）。
+
+    为什么做成参数而不是在调用处 `meta.model_copy(update=...)`：`VideoMeta` 上那几个
+    计数字段的**默认是 None 而不是 0**，用例里要区分"平台没给数"与"给了 0"，
+    两者都得能一行造出来。
+    """
     ref = creator or CreatorRef.model_validate(
         {
             "platform": platform,
@@ -106,6 +118,7 @@ def make_video_meta(
             "creator_ref": ref,
             "title": title,
             "webpage_url": f"https://{platform}.com/video/{video_id}",
+            **(counts or {}),
         }
     )
 
@@ -128,6 +141,10 @@ class FakeAdapter:
         subtitles: Transcript | None = None,
         subtitle_error: Exception | None = None,
         capabilities: Capabilities | None = None,
+        metrics: MetricReadings | None = None,
+        metrics_error: Exception | None = None,
+        comments: list[VideoCommentDraft] | None = None,
+        comments_error: Exception | None = None,
     ) -> None:
         self.platform = platform
         self.name = platform
@@ -141,10 +158,16 @@ class FakeAdapter:
         self._health = health
         self._subtitles = subtitles
         self._subtitle_error = subtitle_error
+        self._metrics = metrics
+        self._metrics_error = metrics_error
+        self._comments = comments
+        self._comments_error = comments_error
         self._capabilities = capabilities
         self.download_calls: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
         self.subtitle_calls: list[str] = []
+        self.metrics_calls: list[str] = []
+        self.comment_calls: list[dict[str, Any]] = []
 
     @property
     def capabilities(self) -> Capabilities:
@@ -156,6 +179,7 @@ class FakeAdapter:
             supports_dash_split=False,
             list_strategy="yt_dlp_flat",
             media_strategy="yt_dlp",
+            supports_comments=self._comments is not None or self._comments_error is not None,
         )
 
     async def healthcheck(self) -> HealthReport:
@@ -196,6 +220,21 @@ class FakeAdapter:
         if self._subtitle_error is not None:
             raise self._subtitle_error
         return self._subtitles
+
+    async def fetch_metrics(self, video: VideoMeta) -> MetricReadings:
+        self.metrics_calls.append(video.platform_video_id)
+        if self._metrics_error is not None:
+            raise self._metrics_error
+        assert self._metrics is not None
+        return self._metrics
+
+    async def fetch_comments(
+        self, video: VideoMeta, *, limit: int = 50, sort: str = "hot"
+    ) -> list[VideoCommentDraft] | None:
+        self.comment_calls.append({"id": video.platform_video_id, "limit": limit, "sort": sort})
+        if self._comments_error is not None:
+            raise self._comments_error
+        return self._comments
 
 
 class FakeConfig:
