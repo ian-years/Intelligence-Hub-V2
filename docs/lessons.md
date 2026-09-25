@@ -2270,29 +2270,45 @@ mock 就把 trigger 解析 / job 注册 / **executor 派发**整段跳过了，�
 
 ---
 
-### 经验：e2e 与 pytest-asyncio 抢的是**进程级**事件循环 policy
+### 经验：e2e 污染全场的真凶是 asyncio 的「当前运行循环」ContextVar，不是 policy
+
+> **本条在 2026-09-25 被自己推翻过一次**：原来这一节写的根因是"两种事件循环主人抢进程级
+> policy"，解法是"把 e2e 从默认档摘出去（`addopts` 加 `-m`）"。**两句都不成立**，
+> 而后者是一个还在仓库里活了半天的副作用。下面是量出来的版本。
 
 **现象**：加了 `tests/e2e/` 之后裸跑 `pytest`（不带 `-m`）→ 161 failed + **1604 errors**，
 错误文本是 `RuntimeError: Runner.run() cannot be called from a running event loop` /
-`Cannot run the event loop while another loop is running`，全在 e2e 之后的那些 async 用例上。
+`Cannot run the event loop while another loop is running`，全在 e2e **之后**的那些 async 用例上。
 
-**根因**：e2e 里 `sync_playwright()` 与 `uvicorn.Server.run()`（后台线程）都会碰进程级的
-事件循环设置。第一反应是"lifespan 里的 `setup_logging()` 冲掉 caplog handler"——
-补了还原 fixture 之后**照样 382 errors**，说明猜的那条不是主因。真正的问题是
-"同一进程里两种事件循环主人"，它不是靠还原 logging 能修的。
+**三条被实测否掉的猜测**（都改过代码、都复跑过，不是想一想排除的）：
+1. "是 lifespan 里 `setup_logging()` 冲掉了 caplog handler" → 补了还原 fixture，**照样 382 errors**。
+2. "是 `asyncio.set_event_loop_policy()` 被换了" → 用例前后读 `policy` 与
+   `policy._local._loop`，两个都是**干净的**。
+3. "是 teardown 钩子里那个僵尸循环" → 显式清掉，红的条数一条没少。
 
-**解法**：把 e2e 从默认档里**摘出去**：`addopts` 里加 `-m` + `"not real_network and not e2e"`
-（两个列表项，不能写成 `'-m "…"'` —— 那会把引号交给 marker 解析器，当场爆炸）。
-命令行上的 `-m` 覆盖 addopts，所以 `make e2e` 照旧跑得动。
+**真根因**（一条探测脚本量的，不是推的）：`sync_playwright()` 会在**主线程** asyncio 的
+"当前运行循环" ContextVar 里留下一个**活着但 `is_running()` 为 False** 的循环。
+`asyncio.events._get_running_loop()` 从此就有返回值，于是之后每一次
+`asyncio.run()` / `Runner.run()` 都在入口检查上抛"已经在运行的循环里"。
+policy 干净、`_local._loop` 干净、没有循环真在跑 —— 三样全干净而错照样发生，
+这就是为什么前两条猜测看起来都对。
 
-**判据**：任何"会起自己的事件循环主人"的测试层（真浏览器、真子进程服务）都必须默认不入选，
-并且**要在混跑里验一次**是否干净 —— 只跑 `make e2e` 单独一档永远看不出污染。
+**解法**：**不要在同一个进程里放第二个循环主人**。e2e 换成 `playwright.async_api`，
+跑在 pytest-asyncio 自己那个循环上；浏览器改成函数级（一条用例一只，用完就关）。
+换完把 `addopts` 里那条 `-m "not real_network and not e2e"` **整块删掉**。
+数字：同一进程 `pytest tests/e2e tests/integration` → 228 passed / 0 errors（此前 161+1604）。
 
-**看护**：本条由两次混跑实测得出（382 errors → 0 deselected 污染）；
-`make e2e` 与 CI 的两个 job 各自带 `-m`。
+**判据**：
+- "把慢的那一层从默认档摘出去"是**止痛不是治病**。当它是为了让自己的测试变绿而加的，
+  就要在注释里写清它挡的是什么，并且设一条撤回条件 —— 否则它会变成下一个人的"为什么有这个排除"。
+- 任何"会起自己的事件循环主人"的库（真浏览器、真子进程服务），在 async 测试里
+  优先找它的 async API；sync API 留给独立进程。
+- 混跑必须真的验一次：只跑 `make e2e` 单独一档永远看不出污染。
 
----
-
+**看护**：`tests/e2e/conftest.py` 的 `page` fixture 是 async 的（换成 sync_playwright 会
+在同一次混跑里把 e2e 之后的 async 用例弄红，实测过）；
+`tests/unit/test_encoding_discipline.py` 旁边那条"默认档必须包含 e2e 以外的一切"由
+`pyproject.toml` 的 `markers` 与 `addopts`（已无 `-m`）共同表达。
 ### 经验：e2e serve 的是构建产物，产物过期时红得没有道理
 
 **现象**：改完 `useRuns`（加轮询）之后两条 e2e 红，代码没坏。
@@ -2376,6 +2392,96 @@ mock 就把 trigger 解析 / job 注册 / **executor 派发**整段跳过了，�
 
 **看护**：无（流程约束）。同一批的另一条并发事故：两个 pytest 会话共用
 `--basetemp=.scratch/pytest` → 一方清空目录，另一方 16 failed；换 basetemp 复跑 530 passed。
+
+### 经验：诱饵埋在 payload 走不到的地方，那条"越界一律拒"就是空转的
+
+**现象**：`tests/integration/test_api_shots.py` 里那条越界用例，全文件跑绿。
+按它的 docstring 说的做变异（把 `_is_under` 改坏）应当红 —— 它没红。
+再把入口那道正则判断也拆掉，**还是没红**。三道判据全拆，它照样绿。
+
+**根因**（两层，第二层才是要命的那层）：
+1. 诱饵的路径是**按猜的目录名埋的**：埋在 `media/bilibili/某UP/BV9-别的片子/`，
+   而真实的媒体目录名带作品 id 前缀（`FileStorage.media_dir` 的规矩），
+   所以那几条 `../..` 写法在磁盘上指向一个**不存在的路径**。
+   payload 打不到东西，"拒绝"当然永远成功 —— 但它拒绝的是空气。
+2. 更要紧的是**我自己第一次的"变异验证"是假的**：harness 里写的是
+   `text.replace(anchor, "if False:", 1)` 而**没有 assert**，
+   而那个 anchor 我用了单引号（源码是双引号）。替换一次都没生效，
+   我却据此下了"这条用例挡不住"的结论并写进了报告。
+   —— **假阴性比没测更糟：它会让人以为已经测过。**
+
+**解法**：payload 不再手抄，改成由**实际算出来的相对路径**现生
+（`os.path.relpath(诱饵, shots_dir)`），前面加一段防空转前置：
+"这两个相对路径确实指到那两份诱饵上"（`resolve()` 相等 + `is_file()`）。
+再加一条看护"至少 N 条写法真的打到了应用层"——因为字面 `..` 那几种会被 httpx
+按 RFC 3986 在**客户端**就消掉、根本进不了路由，全 list 都归零时用例必须自己发现。
+变异 harness 从此每一次替换都 `assert old in text`。
+
+**判据**：
+- 一条"拒绝越界"的用例，其成立前提是**那个越界目标真的存在且真的走得到**。
+  埋诱饵的路径必须由被测代码同一套路径函数算出来，不能凭目录结构印象手写。
+- 变异验证必须检查"改坏的动作发生了"（assert 锚点在），否则一次拼写差异
+  就会伪装成一条结论。
+- 通过 HTTP 层测逃逸时，要顺带断言"请求真的进到了 handler"
+  （状态码来源可分辨：路由 miss 的 404 与 handler 给的 403 不是一回事）。
+
+**看护**：修完之后实测 —— 拆①+③ → 该条转红（那张 `.jpg` 真被交出去）；
+只拆① → 仍绿（③接住，所以③不是死代码）；只拆③ → 仍绿（①本来就把带分隔符的名字全挡了）。
+第三种情况就是为什么③另有一条**直接测 `_is_under` 函数**的用例（改坏函数体会红），
+而不是硬造一条走 transport 的 —— 后者会是一句"通过 HTTP 覆盖了三层"的假话。
+
+---
+
+### 经验：「这台机器没有 ffmpeg」是一句需要重量的误诊（V1 §7.19 换了个方向复现）
+
+**现象**：`where ffmpeg` 打不出来，于是报告里写下"本机没有 ffmpeg，真机截帧未验证"。
+据此搭的测试替身那一层就被当成了"不得已被迫假的"。
+
+**根因**：ffmpeg 装在 WinGet 的目录里（9.0.1-full_build），**注册表 PATH 有、
+进程拿到的那份 PATH 快照没有** —— 这正是 V1 §7.19 那一族（"注册表里有 PATH"≠
+"进程拿得到"），只是这次撞上它的不是子进程找不到 ffmpeg，而是**我自己下的结论**。
+`core/runtime_env.prepare_runtime_environment()` 本来管的就是这件事
+（常驻服务启动与每轮预检各跑一次），所以真服务是能找到 ffmpeg 的；
+而 Git Bash 那个 shell 从来没跑过它。
+
+**解法**：先补 PATH 再重测 —— 跑通了，于是"真机那一格"从"未验证"变成
+`tests/integration/test_shots_real_ffmpeg.py` 三条实测（真二进制、
+`testsrc` 三秒素材、"同一秒两次字节一致 / 第 1 秒与第 2 秒必须不同字节"）。
+顺手把两份文件里那句"本机 `where ffmpeg` 实测为空"的**因果**改对了。
+
+**判据**：
+- "这台机器没有 X" 是一个需要两种证据的结论：`which` 之外还要看注册表 / 安装目录。
+  报缺依赖之前先问一句"是它不在，还是我进程看不见它"。
+- 结论决定测试分层之前更要这样：那句误诊差点让"画面是不是那一秒"永远留在未验证清单里。
+
+**看护**：`test_shots_real_ffmpeg.py`（`-m real_network`，默认不跑，`make test-real` 那一档）。
+它自己会先调 `prepare_runtime_environment()`，所以哪天 `runtime_env` 不再管 ffmpeg，
+这一条会以"找不到二进制"红掉，而不是安静地证明一个不存在的东西。
+
+---
+
+### 经验：frozen+slots dataclass 里加一个带默认值的字段，位置错了报的不是位置错
+
+**现象**：给 `Capabilities` 加 `supports_comments: bool = False`，插在
+`supports_dash_split` 前面。导入期一切正常，红在**实例化的那一刻**：
+`TypeError: non-default argument 'supports_dash_split' follows default argument`。
+错文里没有"顺序"两个字，而栈上点的是某个具体平台的适配器 —— 第一反应是"我那家声明写错了"。
+
+**根因**：dataclass 的字段顺序规则（无默认值的必须在前）是**类定义期**就成立的，
+但 Python 直到 `__init__` 被生成/调用时才报出来。四家适配器各有各的实例化时机，
+所以谁先跑谁背这条错，看起来像那一家的问题。
+
+**解法**：带默认值的新字段一律往**末尾**加。这条已经写进
+`docs/specs/platform-adapter.md §2.2` 那个字段的注释里（连同这条报错原文），
+因为 V3 重写时还会有人再撞一次。
+
+**判据**：往一个 frozen dataclass 的**中间**插字段之前，先看它有没有默认值；
+有就往末尾放，或者把后面所有字段都补上默认值（后者会悄悄放开"漏填"的自由度，不推荐）。
+
+**看护**：`tests/contracts/test_platform_adapter.py::test_capabilities_match_expected`
+（四家各一条，快照式逐字段核；顺序错会死在实例化而不是断言上，但都会红）。
+
+---
 
 ---
 

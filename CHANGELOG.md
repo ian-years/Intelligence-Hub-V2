@@ -240,18 +240,74 @@
 
 ### Changed（同批）
 
-- `pyproject.toml` 的 `addopts` 加上 `-m "not real_network and not e2e"`：裸跑 `pytest` 不再被
-  e2e 的事件循环副作用污染（实测 1604 errors → 0）。命令行上的 `-m` 覆盖它，`make e2e` 照旧
+- ~~`pyproject.toml` 的 `addopts` 加上 `-m "not real_network and not e2e"`~~
+  —— **同日撤回，改为从根上解决**：那条排除是在遮盖症状（裸跑 `pytest` 被 e2e 污染 1604 errors），
+  真因是 `sync_playwright` 会在主线程 asyncio 的"当前运行循环" ContextVar 里留一个活但不在跑的循环，
+  之后每一次 `asyncio.run()` 都报"已在运行的循环里"。`tests/e2e/` 换成 `playwright.async_api`
+  跑在 pytest-asyncio 自己那个循环上之后，**那条 `addopts` 排除整块删掉了**
+  （同一进程 `pytest tests/e2e tests/integration` 实测 228 passed / 0 errors）
 - `api/hooks/useTasks.ts`：`useRuns` 在"有 running"时轮询（e2e 发现的缺陷，见 Fixed）
 - 排序与筛选类的用例从"样本式"改写成"关系式"：加一家平台或加一档排序不再需要挨个改用例
 
-### Fixed（同批）
+### Added（同日补完 · T4.1/T4.2 调用侧 + 截图包真数据源）
 
-- `tasks/postprocess.py::_audio_source`：图文笔记的 `media_aux_paths_json` 会被当成音频喂给 ffmpeg
-  （ADR-0019 的闸门从"aux 非空"改成认 `metadata_json.has_audio is False`）
-- `platforms/xiaohongshu/media.py`：直链兜底成功时把前面候选的失败原文丢掉（§7.2 断了一半）
-- `useRuns`：只在提交那一刻 invalidate 一次 → 运行历史永远停在"正在跑"，
-  而实时事件在滚（`make e2e` 那一条 `test_a_run_row_leaves_running_without_a_page_reload` 钉住）
+- **`PlatformAdapter.fetch_comments` / `fetch_metrics` + `Capabilities.supports_comments`**
+  （ADR-0020 决定二，动的是 Locked 契约面）：走的是 `fetch_subtitles` 那条已验证的形状 ——
+  方法人人有，能不能干活由能力声明决定，`supports_comments=False` 的三家返回 None 不抛。
+  四家各自的如实回答：B站 两项全做（`view` 的 `stat` 出四项、`x/v2/reply` 出评论，
+  评论的 `oid` 要数字 aid 所以先问一次 view）；小红书只有读数能做且只有一项（`likes`，
+  其余留 NULL 并把 `{"only": ["like_count"]}` 写进 metadata）；抖音与 YouTube 抛，
+  并在消息里点名该跑哪一条采集任务
+- **`enrich_metrics` 任务**（`tasks/enrich_metrics.py`，注册表第 13 个、实现第 9 个）：
+  挑活的判据是"一条快照都没有"而不是"缺某个固定窗口"（一条三年前的稿子永远等不到它的
+  `24h`，按窗口挑会让它每轮被重挑、每轮零产出）；窗口由这一趟的时刻算
+  （`window_for`，边界那一秒归已开始的那一档），`published_at` 为 NULL 或落在将来都算
+  `manual` 不 `publish`；评论只在能力位为真的平台问，先问能力再分支，不 try/except 里猜
+- **collect 顺手记一条 `publish` 快照**：用的是列表枚举已经带回的那几个计数，一跳网络都不发。
+  四项全空是**跳过不是失败**（"这一家没回读数"是事实），写库挂了才记 `stage="metrics"`
+  且不掀掉已经进库的作品；`summary` 多一栏 `publish_snapshots`
+- **工坊「截图包」有了真数据源**（ADR-0024）：`POST /api/videos/{id}/shots` 用 ffmpeg 从
+  **这条作品已落地的成片**按分镜时间点现截，`GET /api/videos/{id}/shots/{name}` 出图。
+  产物不入库（可再生的派生物，记一份"上次截了哪些帧"就是第二个真源）、同步做完不起任务、
+  写盘动作必须是 POST。`infra/ffmpeg.py` 长出 `extract_frames`/`frame_argv`/`ffmpeg_version`，
+  `storage/files.py` 长出 `shots_dir`/`shot_file`（命名对时间点单射且确定，所以 `cached`
+  不用记账也算得准）
+- 测试：后端 +52（`enrich_metrics` 22 条 + collect 的快照 6 条 + 四家适配器那两条新契约的
+  各自看护），前端 +13，`tests/integration/test_api_shots.py` 21 条 +
+  `tests/unit/infra/test_ffmpeg_frames.py` 15 条，
+  另加 `tests/integration/test_shots_real_ffmpeg.py`（`-m real_network`，真 ffmpeg 9.0.1）
+- e2e：工坊页从 2 条变 3 条，其中一条真跑"收录博主 → 采集入库 → 工坊选中 → 点生成截图包 →
+  **浏览器真的解码出 3 帧**"（断 `naturalWidth > 0`，不是断 DOM 里有个 `<img>`）。
+  这条链的替身只有两处且都写清了：平台适配器假的（不出本机）、ffmpeg 是 tmp 里现写的假二进制
+
+### Changed（同日补完）
+
+- **`FailureRecord.stage` 多两个词**：`"metrics"` / `"comments"`。不复用 `store` ——
+  清单按 stage 分组，"接口没给数"与"库写不进去"要做的动作不同，合成一格就是两类红混成一堆
+- 出图端点那条"越界一律拒"的用例**重写而不是撤掉**：payload 改成由
+  `os.path.relpath(诱饵, shots_dir)` 现算（原来是按猜的目录名埋的，指向一个不存在的路径，
+  三道判据全拆掉它照样绿），并加了两段防空转前置（诱饵确实指得到 + 至少 N 条写法真的打到应用层）。
+  变异实测：拆①+③ → 红；只拆① → 绿（③接住，证明它不是死代码）；只拆③ → 绿
+  （③今天从 HTTP 打不到，另有一条直接测 `_is_under` 的用例）
+- `platforms/xiaohongshu/adapter.py`：`fetch_metrics` 复用详情页这件事有一个 stage 副作用
+  （那一步自己把失败报成 `media`）—— 换成 `metrics` 再抛，原文一字不动，
+  否则清单会把它排到"去查 yt-dlp / 直链"那一格
+- 文档：`platform-adapter.md`（两个新方法 + 新能力位 + 四家的 §4.x + `MetricReadings`）、
+  `task-runner.md`（注册表那一格顺手对齐到今天的 13/9，原来停在 V2.0 的"12 里挑 6"）、
+  `contract-tests.md §4.1`（新增那条通用契约）、ADR-0020 的"分期"改为已落
+
+### Fixed（同日补完）
+
+- `tests/e2e/conftest._stub_adapter` 造的产物写的是 `media_source="e2e_stub"`，
+  而 `MediaSource` 那四个字面量里没有它 —— 也就是**e2e 里从来没有一条用例真的走到过
+  `download_media`**，所以它一直没人发现（新加的那条长链一跑就炸："采集 failed +
+  两条 download 失败"）
+- `tasks/enrich_metrics.py`：库里有某平台作品而这一家今天没装配（平台被关掉 / 配置坏了）
+  会让整轮崩在 `adapters.get()`，现在记一条 `metrics` 失败照常收尾
+- `platforms/xiaohongshu/adapter.py`：`compact_number_to_int` 对"有字但不是数"抛的是裸
+  `ValueError`（没有平台名、没有 stage），现在换成 `PlatformError` 并照抄原文
+- `Makefile` 的 `e2e` recipe 从来说不通（`$(PLAYWRIGHT) test` 是 Node 那份 CLI，而本仓库装的是
+  Python playwright）→ 改成 `$(PYTEST) -m e2e tests/e2e`
 
 ### Changed
 - **`docs/adr/0011`：cookie 阶梯的顺序只有一处真源。**

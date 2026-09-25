@@ -12,6 +12,7 @@ V1 在这一层踩过两类坑，都留了注释在具体函数上：
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,13 +24,34 @@ logger = get_logger(__name__)
 """缺二进制的 probe 会往这里记一条 debug。没有这一句，"这台机器没装 ffprobe"
 在日志里就是个空白 —— 而它正是"为什么这批稿件的时长全是空的"那条线索的起点。"""
 
-__all__ = ["StreamInfo", "extract_audio", "has_audio_stream", "probe_streams"]
+__all__ = [
+    "ExtractedFrame",
+    "FrameFailure",
+    "FrameTarget",
+    "FramesResult",
+    "StreamInfo",
+    "extract_audio",
+    "extract_frame",
+    "extract_frames",
+    "ffmpeg_binary",
+    "ffmpeg_version",
+    "frame_argv",
+    "has_audio_stream",
+    "probe_streams",
+]
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 
 WAV_HEADER_BYTES = 44
 """一个 WAV 文件的头。产出的音频**只比这长一点**就等于没解出任何采样。"""
+
+FRAME_TIMEOUT_SECONDS = 60.0
+"""单帧的预算。截一帧是秒级（快进 + 解一帧），给到 60 秒已经是"磁盘或解码器不对劲"。
+
+为什么按帧算而不是按整批算：一批 12 帧共用一个预算时，第一帧卡住就把后面 11 帧的
+配额一起吃光，报出来的原因还是"超时" —— 而真相是"第 3 秒那个位置损坏"。
+"""
 
 
 @dataclass(frozen=True)
@@ -185,6 +207,223 @@ async def extract_audio(
         msg = f"ffmpeg 退出码 0 却没产出音频（{output_path}）—— 不要当成成功"
         raise RuntimeError(msg)
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# 分镜截图（工坊页「截图包」的数据源）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FrameTarget:
+    """要截的一帧：时间点 + **由 `FileStorage.shot_file()` 算出来的**落点。
+
+    落点不在这里算：命名规则（`shot-<秒>.jpg`）的权威是 `storage/files.py`
+    （"产物在哪"只有一处答案这条纪律）。这一层只负责把它截出来。
+    """
+
+    at_seconds: float
+    output_path: Path
+
+
+@dataclass(frozen=True)
+class ExtractedFrame:
+    """一帧的产出。`produced` 是 `cached` 那个标志的来源。"""
+
+    at_seconds: float
+    path: Path
+    produced: bool
+    """True = 这一次真的调 ffmpeg 截出来了；False = 复用上一次的同一帧。"""
+
+
+@dataclass(frozen=True)
+class FrameFailure:
+    """某一帧没截出来。**逐帧**记，不要把整批并成一句"失败"。"""
+
+    at_seconds: float
+    path: Path
+    reason: str
+
+
+@dataclass(frozen=True)
+class FramesResult:
+    """一批帧的结局。空 `frames` 不等于"什么都没发生" —— 看 `failures`。"""
+
+    frames: list[ExtractedFrame]
+    failures: list[FrameFailure]
+
+    @property
+    def all_reused(self) -> bool:
+        """一帧都没新截，但**全都拿到手了**（= 界面上该写"这是上次截好的"）。"""
+        return bool(self.frames) and not any(frame.produced for frame in self.frames)
+
+
+def ffmpeg_binary(configured: Path | str | None = None) -> str:
+    """这一句要用的 ffmpeg：`config.paths.ffmpeg` 指的文件赢，否则回落 `FFMPEG` 走 PATH。
+
+    回落是**有意的**，不是省事：这台机器上 ffmpeg 装在 WinGet 的目录里，
+    而 `where ffmpeg` 打不出来 —— 正是 V1 §7.19 那个形状（注册表 PATH 里有、
+    进程拿到的那份快照里没有）。`core/runtime_env.py` 只在常驻服务启动与每轮预检时
+    把那一段补进 `os.environ`，测试与任何直接构造 `AppState` 的路径都不跑那一步。
+    所以两边各吃一次同一个配置项：启动期补 PATH（管所有子进程），
+    这里再显式认一次（管这一条命令）。
+    配了却指着一个不存在的文件时**不报错也不静默换人**：那条已经在启动期的
+    `explicit_path_dirs()` 里被记成 problem 了（V1 §7.19），这里再判一次只会让
+    "配错路径"同时在两处红、而两处的原文还不一样。
+    """
+    if configured is None or not str(configured).strip():
+        return FFMPEG
+    candidate = Path(str(configured)).expanduser()
+    if not candidate.is_file():
+        return FFMPEG
+    return str(candidate)
+
+
+def frame_argv(
+    media_path: Path,
+    output_path: Path,
+    at_seconds: float,
+    *,
+    binary: str = FFMPEG,
+) -> list[str]:
+    """截一帧的命令行。**纯函数**，为的是 argv 能被逐字钉住（不依赖机器上有 ffmpeg）。
+
+    - `-ss` 放在 `-i` **前面**：那是"先定位再解到准确时间点"（ffmpeg ≥ 2.1 会解到
+      指定的那一帧，不是停在最近的关键帧），而放后面是**从 0 开始解过去**——
+      截第 600 秒要先把 600 秒解完。工坊那个按钮点的是"秒级返回"。
+    - `-frames:v 1`：只要一帧。没有它就是"从这一秒开始把剩下的全编出来"。
+    - `-an`：帧里没有音频，留着只会让 ffmpeg 去找音频编码器。
+    - `-y`：同一秒重截是**覆盖**（`shot_file()` 的命名规则就是为了这件事成立）。
+    - 全程 `shell=False`（`run_subprocess` 那条纪律）：时间点与路径都当独立 argv 传。
+    """
+    return [
+        binary,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        f"{float(at_seconds):.3f}",
+        "-i",
+        str(media_path),
+        "-frames:v",
+        "1",
+        "-an",
+        "-q:v",
+        "2",
+        str(output_path),
+    ]
+
+
+async def extract_frame(
+    media_path: Path,
+    output_path: Path,
+    *,
+    at_seconds: float,
+    overwrite: bool = False,
+    timeout: float = FRAME_TIMEOUT_SECONDS,
+    ffmpeg_path: Path | str | None = None,
+) -> bool:
+    """截一帧。返回 `True` = 真的截了，`False` = 复用了已有的同一帧。
+
+    与 `extract_audio()` 同一个形状（`run_subprocess` + timeout + 结构化失败），
+    三处差别都是截图特有的：
+
+    - **退出码 0 但文件不在/是 0 字节**同样算失败。ffmpeg 对"时间点超出片长"
+      这件事就是回 0 且不产出（不是报错），把它当成功会得到一套空的缩略图网格。
+    - **缺二进制不消化**：`run_subprocess` 抛的 `LookupError` 原样往上走。
+      这里是在产出用户点着要的东西，不是问一个问题（对比 `probe_streams()`
+      那条就地消化的理由），所以"这台机器没装 ffmpeg"必须红。
+    """
+    if not overwrite and output_path.is_file() and output_path.stat().st_size > 0:
+        return False
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    argv = frame_argv(media_path, output_path, at_seconds, binary=ffmpeg_binary(ffmpeg_path))
+    result = await run_subprocess(argv, timeout=timeout)
+    if not result.ok:
+        msg = (
+            f"ffmpeg 截帧失败（第 {at_seconds:g} 秒，exit {result.returncode}）："
+            f"{result.tail(lines=8) or '（无 stderr）'}"
+        )
+        raise RuntimeError(msg)
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        msg = f"ffmpeg 退出码 0 却没产出第 {at_seconds:g} 秒的帧（{output_path}）—— 不要当成成功"
+        raise RuntimeError(msg)
+    return True
+
+
+async def extract_frames(
+    media_path: Path,
+    targets: Sequence[FrameTarget],
+    *,
+    overwrite: bool = False,
+    timeout: float = FRAME_TIMEOUT_SECONDS,
+    ffmpeg_path: Path | str | None = None,
+) -> FramesResult:
+    """按时间点依次截帧。**串行**：并开 12 个 ffmpeg 只会让每一路都变慢，
+    而这一条链路的要求是"点完按钮秒级看到缩略图"，不是吞吐。
+
+    失败分两类处理，界线是"这条命令还能不能往下走"：
+
+    - `LookupError`（ffmpeg 不在）→ **就地往上抛，一帧都不再试**。
+      缺二进制是全局状态，重试 11 次只会产出 11 条同样的错，还会把 HTTP 响应拖成
+      十几次启动失败。调用方（`api/v1/shots.py`）把它翻成 503 + 一句可执行的下一步。
+    - 其余（这一秒坏了 / 解不出来 / 超时）→ 记进 `failures`，继续截剩下的。
+      一帧截不出与整条链路不可用是两件事，界面上要能分清。
+    """
+    frames: list[ExtractedFrame] = []
+    failures: list[FrameFailure] = []
+    for target in targets:
+        try:
+            produced = await extract_frame(
+                media_path,
+                target.output_path,
+                at_seconds=target.at_seconds,
+                overwrite=overwrite,
+                timeout=timeout,
+                ffmpeg_path=ffmpeg_path,
+            )
+        except LookupError:
+            raise
+        except (RuntimeError, TimeoutError, OSError) as exc:
+            failures.append(
+                FrameFailure(
+                    at_seconds=target.at_seconds,
+                    path=target.output_path,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            continue
+        frames.append(
+            ExtractedFrame(
+                at_seconds=target.at_seconds,
+                path=target.output_path,
+                produced=produced,
+            )
+        )
+    return FramesResult(frames=frames, failures=failures)
+
+
+async def ffmpeg_version(
+    *, ffmpeg_path: Path | str | None = None, timeout: float = 10.0
+) -> str | None:
+    """`ffmpeg -version` 的第一行，**问不出来就返回 None**（不抛）。
+
+    为什么值得再花一次子进程：清单与界面上要能回答"这 12 帧是哪个 ffmpeg 截的"。
+    V1 §7.19 那类事故（注册表里有、进程 PATH 没有）症状正是"换了个 ffmpeg 而没人知道"。
+    它只是**附注**，所以缺二进制 / 超时 / 启动失败全部走 None ——
+    不能因为拿不到版本就把已经截好的帧报成失败。
+    """
+    argv = [ffmpeg_binary(ffmpeg_path), "-hide_banner", "-version"]
+    try:
+        result = await run_subprocess(argv, timeout=timeout)
+    except (LookupError, TimeoutError, OSError):
+        return None
+    if not result.ok:
+        return None
+    first_line = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
+    return first_line or None
 
 
 def _as_int(value: object) -> int | None:

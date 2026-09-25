@@ -660,6 +660,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/videos/{video_id}/shots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Shots
+         * @description 从这条作品已落地的成片里按时间点截一批帧，返回缩略图清单。
+         */
+        post: operations["create_shots_api_videos__video_id__shots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/videos/{video_id}/shots/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shot Image
+         * @description 把 `shots/` 里那张图交出去。三道判据见模块 docstring，越界一律 403。
+         */
+        get: operations["get_shot_image_api_videos__video_id__shots__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/videos/{video_id}/transcript": {
         parameters: {
             query?: never;
@@ -1283,6 +1323,79 @@ export interface components {
             title: string;
             /** Type */
             type: string;
+        };
+        /** ShotFailureItem */
+        ShotFailureItem: {
+            /** At Seconds */
+            at_seconds: number;
+            /**
+             * Reason
+             * @description ffmpeg 的失败原文（截不出这一帧的真实原因，不并成一句'失败'）
+             */
+            reason: string;
+        };
+        /** ShotItem */
+        ShotItem: {
+            /**
+             * At Seconds
+             * @description 这一帧对应的时间点（已按文件名的量化精度对齐）
+             */
+            at_seconds: number;
+            /**
+             * Path
+             * @description 相对 `data/` 的路径（与 `media_path` 同一套约定）
+             */
+            path: string;
+            /**
+             * Produced
+             * @description True = 这次真的截了；False = 复用上一次的同一帧
+             */
+            produced: boolean;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Url
+             * @description 出图地址，前端直接用；**不拼磁盘路径**
+             */
+            url: string;
+        };
+        /**
+         * ShotRequest
+         * @description 请求体。`at_seconds` 省略 = 按 `videos.duration_seconds` 均分。
+         */
+        ShotRequest: {
+            /**
+             * At Seconds
+             * @description 要截的时间点（秒），来自分镜行；省略则按作品时长均分（最多 12 帧）
+             */
+            at_seconds?: number[] | null;
+        };
+        /** ShotsResponse */
+        ShotsResponse: {
+            /**
+             * Cached
+             * @description True = 这一帧都没有新截，全是复用上次的；界面上必须与'刚截好的'区分开
+             */
+            cached: boolean;
+            /**
+             * Failures
+             * @description 某几秒截不出来时，原因在这里（不伪装成没发生）
+             */
+            failures: components["schemas"]["ShotFailureItem"][];
+            /**
+             * Ffmpeg Version Or Error
+             * @description 产出这些帧的 ffmpeg 是哪一支；纯复用时为 null
+             */
+            ffmpeg_version_or_error: string | null;
+            /**
+             * Requested At
+             * @description 实际去截的时间点（已去重、已限量）
+             */
+            requested_at: number[];
+            /** Shots */
+            shots: components["schemas"]["ShotItem"][];
+            /** Video Id */
+            video_id: number;
         };
         /**
          * SingleLinkParams
@@ -2793,6 +2906,73 @@ export interface operations {
             };
             path: {
                 video_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_shots_api_videos__video_id__shots_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShotsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shot_image_api_videos__video_id__shots__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: number;
+                name: string;
             };
             cookie?: never;
         };

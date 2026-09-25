@@ -67,3 +67,45 @@ export const BEAT_TEMPLATE_KEYS = [
   "tool_demo",
 ] as const;
 export type DraftTemplateKey = (typeof BEAT_TEMPLATE_KEYS)[number];
+
+/** 一次最多截几帧。**与后端 `api/v1/shots.py::MAX_SHOTS_PER_REQUEST` 同一份**，
+ * 由 `workshop.spec.ts` 直接读那个 Python 源文件逐字核（漂了会红）。
+ *
+ * 为什么前端也要有这一份：超了后端回 422，而那一次点击就白点了 ——
+ * 20 格分镜的稿子在这里就该只发 12 个时间点，界面上同时说清"只截其中 12 格"。 */
+export const MAX_SHOT_FRAMES = 12;
+
+/** 分镜行 → 要截的时间点（秒）。
+ *
+ * 三条规则，每条都对应一种坏法：
+ *
+ * 1. **没有可信时长就不给点**（返回空数组）：均分要拿时长做分母，
+ *    瞎猜一个（30 秒？）会得到一套"看着像、其实全挤在前几秒"的帧。
+ *    空数组交给界面去说"这条作品没有时长元数据"，而不是发一个后端会 422 的请求。
+ * 2. **每格取该格在成片里的起始秒**，不是中点、不是末点：一格分镜说的是"从这一秒起
+ *    观众看到什么"；取中点会让人以为图与格子错了一位，取末点那一瞬 ffmpeg 退出 0 却不产出。
+ * 3. **限量**：分镜比上限多时等距跨步取样，而不是把 20 个点全发出去撞 422 ——
+ *    取前 12 格会把截图包变成"只看了片子开头"。
+ */
+export function shotTimesOf(text: string, duration: number | null | undefined): number[] {
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return [];
+  const beats = beatsOf(text).length;
+  const count = Math.max(1, Math.min(beats, MAX_SHOT_FRAMES));
+  // `cells` 与 `count` 分开：**正文是空的**时候 `beats` 是 0，直接拿它当分母
+  // 会得到 `0 / 0 = NaN` —— 那不是"第 0 秒那一帧"，那是一个 NaN 进 HTTP 请求体。
+  const cells = Math.max(beats, 1);
+  const step = cells / count;
+  return Array.from({ length: count }, (_, index) => {
+    const beatIndex = Math.floor(index * step);
+    return Math.round(((duration * beatIndex) / cells) * 1000) / 1000;
+  });
+}
+
+/** 这条作品能不能截帧：**没有落地成片就一个请求都不发**。
+ *
+ * 判据只看 `media_path`（库里那一列指的是**成片**，截图是它的派生物）。
+ * 后端对空 `media_path` 回的是 404 + 一句原文，前端照发不误的话，
+ * 用户看到的是"点了按钮转一圈然后报错"，而这件事在点之前就能说出来。 */
+export function canRequestShots(video: { media_path?: string | null } | null | undefined): boolean {
+  return typeof video?.media_path === "string" && video.media_path.trim() !== "";
+}

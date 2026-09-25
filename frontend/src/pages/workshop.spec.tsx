@@ -31,15 +31,54 @@ const VIDEO_PAGE = {
       platform_video_id: "BV1",
       title: "对标那条",
       is_hidden: false,
+      // 有媒体：截图包那一格靠这一列决定"能不能截"（没有成片时那句实话由它说）
+      media_path: "media/bilibili/某UP/BV1-对标那条/media.mp4",
+      duration_seconds: 40,
+      media_aux_paths_json: "[]",
+      metadata_json: "{}",
+      created_at: "2026-09-24T10:00:00Z",
+      updated_at: "2026-09-24T10:00:00Z",
+    },
+    {
+      id: 43,
+      platform: "bilibili",
+      platform_video_id: "BV2",
+      title: "只采到元数据那条",
+      is_hidden: false,
+      media_path: null,
+      duration_seconds: 40,
       media_aux_paths_json: "[]",
       metadata_json: "{}",
       created_at: "2026-09-24T10:00:00Z",
       updated_at: "2026-09-24T10:00:00Z",
     },
   ],
-  total: 1,
+  total: 2,
   page: 1,
   size: 8,
+};
+const SHOTS_BODY = {
+  video_id: 42,
+  requested_at: [0, 10, 20, 30],
+  cached: false,
+  failures: [],
+  ffmpeg_version_or_error: "ffmpeg version 6.1 Copyright (c) 2000-2024 the FFmpeg project",
+  shots: [
+    {
+      at_seconds: 0,
+      path: "media/bilibili/某UP/BV1-对标那条/shots/shot-0.jpg",
+      url: "/api/videos/42/shots/shot-0.jpg",
+      size_bytes: 1024,
+      produced: true,
+    },
+    {
+      at_seconds: 10,
+      path: "media/bilibili/某UP/BV1-对标那条/shots/shot-10.jpg",
+      url: "/api/videos/42/shots/shot-10.jpg",
+      size_bytes: 2048,
+      produced: true,
+    },
+  ],
 };
 const TRANSCRIPT = {
   video_id: 42,
@@ -77,6 +116,8 @@ interface Call {
 
 let calls: Call[] = [];
 let saveStatus = 200;
+let shotsStatus = 200;
+let shotsBody: unknown = SHOTS_BODY;
 
 function serve(): void {
   vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
@@ -88,6 +129,11 @@ function serve(): void {
         status,
         headers: { "Content-Type": "application/json" },
       });
+    // 截图包那条要**先于** `/videos` 那一条判：URL 里同时含 `/videos`，
+    // 排后面就会拿到作品列表，而用例仍会"绿着"什么都没测。
+    if (url.includes("/shots")) {
+      return json(shotsStatus, shotsStatus === 200 ? shotsBody : { detail: shotsBody });
+    }
     if (method === "POST" && url.includes("/drafts")) {
       return json(
         saveStatus,
@@ -130,6 +176,8 @@ async function waitUntilAutosaveSettles(): Promise<void> {
 beforeEach(() => {
   calls = [];
   saveStatus = 200;
+  shotsStatus = 200;
+  shotsBody = SHOTS_BODY;
   vi.stubGlobal("fetch", vi.fn());
   serve();
 });
@@ -253,9 +301,84 @@ describe("Workshop 的四视图", () => {
     expect(rows[1]?.textContent).toContain("第二格");
   });
 
-  it("截图包说实话：V2 没有这一格的数据源", async () => {
+  it("截图包：没有落地成片时仍说实话，而且一个请求都不发", async () => {
     renderPage();
-    await userEvent.click(await screen.findByRole("button", { name: "截图包" }));
-    expect(await screen.findByText(/V2 没有截图包这一步/)).toBeTruthy();
+    await userEvent.click(await screen.findByRole("button", { name: "只采到元数据那条" }));
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    expect(await screen.findByText(/没有落地成片/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "生成截图包" })).toBeNull();
+    await waitUntilAutosaveSettles();
+    expect(calls.filter((call) => call.url.includes("/shots"))).toHaveLength(0);
+  });
+
+  it("截图包：点一次生成的就是分镜那几个时间点，回来的图用后端给的 url 画", async () => {
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "对标那条" }));
+    const body = await screen.findByLabelText(/正文/);
+    await userEvent.type(body, "一\n二\n三\n四");
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成截图包" }));
+
+    const call = calls.find((item) => item.method === "POST" && item.url.includes("/shots"));
+    expect(call?.url).toBe("/api/videos/42/shots");
+    // 40 秒 4 格 → 每格取起始秒。写死这一串等于同时钉住前后端那一条规则。
+    expect(JSON.parse(call?.body ?? "{}")).toEqual({ at_seconds: [0, 10, 20, 30] });
+
+    const grid = await screen.findByRole("list", { name: "截图包" });
+    const images = within(grid).getAllByRole("img");
+    expect(images).toHaveLength(2);
+    // 地址必须逐字是后端给的那一个：前端拼出来的路径就是第二个真源（V1 §7.5 那一族）
+    expect(images[0]?.getAttribute("src")).toBe("/api/videos/42/shots/shot-0.jpg");
+    expect(images[1]?.getAttribute("src")).toBe("/api/videos/42/shots/shot-10.jpg");
+    expect(images[1]?.getAttribute("alt")).toContain("10");
+    expect(await screen.findByText(/刚截好 2 张/)).toBeTruthy();
+    expect(screen.getAllByText(/ffmpeg version 6\.1/).length).toBeGreaterThan(0);
+  });
+
+  it("截图包：复用上次的时说「上次截好的」，不谎报刚截", async () => {
+    shotsBody = { ...SHOTS_BODY, cached: true, ffmpeg_version_or_error: null };
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "对标那条" }));
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成截图包" }));
+    expect(await screen.findByText(/上次截好的 2 张/)).toBeTruthy();
+    expect(screen.queryByText(/刚截好/)).toBeNull();
+  });
+
+  it("截图包：ffmpeg 不在场时把那一句原文显示出来，且不画一个假装成功的网格", async () => {
+    shotsStatus = 503;
+    shotsBody =
+      "截不了帧：这台机器上没有可用的 ffmpeg。下一步二选一：① 装 ffmpeg；② 把 config/app.yaml 的 paths.ffmpeg 指到 ffmpeg.exe 的绝对路径";
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "对标那条" }));
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成截图包" }));
+
+    expect(await screen.findByText(/截图包没做成/)).toBeTruthy();
+    expect(await screen.findByText(/paths\.ffmpeg/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "截图包" })).toBeNull();
+  });
+
+  it("截图包：某几秒没截出来时逐条说出是哪几秒与原因", async () => {
+    shotsBody = {
+      ...SHOTS_BODY,
+      failures: [{ at_seconds: 65, reason: "RuntimeError: ffmpeg 截帧失败（exit 1）" }],
+    };
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "对标那条" }));
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成截图包" }));
+    expect(await screen.findByText(/第 65 秒没截出来/)).toBeTruthy();
+    expect(screen.getAllByText(/exit 1/).length).toBeGreaterThan(0);
+  });
+
+  it("截图包：后端回的不是这条作品的包时不画网格", async () => {
+    shotsBody = { ...SHOTS_BODY, video_id: 99 };
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "对标那条" }));
+    await userEvent.click(screen.getByRole("button", { name: "截图包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "生成截图包" }));
+    await waitFor(() => expect(calls.some((call) => call.url.includes("/shots"))).toBe(true));
+    expect(screen.queryByRole("list", { name: "截图包" })).toBeNull();
   });
 });

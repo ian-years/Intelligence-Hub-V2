@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import socket
 import subprocess
+import sys
 import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -42,6 +43,7 @@ from intelligence_hub_v2.api.deps import AppState
 from intelligence_hub_v2.core.config import ConfigManager
 from intelligence_hub_v2.logging import QUIETED_LOGGERS
 from intelligence_hub_v2.main import build_components, create_app
+from intelligence_hub_v2.models.creator import CreatorProfile, CreatorRef
 from intelligence_hub_v2.models.media import SingleFileArtifact
 from intelligence_hub_v2.models.transcript import Transcript, TranscriptSegment
 from intelligence_hub_v2.models.video import VideoMeta
@@ -65,14 +67,83 @@ bilibili:
 
 #: 这份 `app.yaml` 管的是"这个进程会不会自己动手做事"。
 #: `collect_cron` 留空 = 不排定时采集；`enabled: false` = 连清理事件的那个 job 也不起。
-_APP_YAML = """\
+#:
+#: `paths.ffmpeg` 指到一个**测试目录下现写的假 ffmpeg**：这台机器 `where ffmpeg` 实测为空
+#: （2026-09-25），而工坊页那条"截图包"的链路要真的走完
+#: POST → 子进程 → 磁盘上有帧 → GET 出图 → `<img>` 解码。
+#: **替身只有这一个**：进程是真的 `create_subprocess_exec` 起的、字节是真写进 tmp 的
+#: 媒体树里的、图是真由 Chromium 去取并解码的（用例断 `naturalWidth > 0`，不是断 DOM 里
+#: 有个 img）。"画面是不是那一秒的内容"仍然没验 —— 那要真 ffmpeg，属 `-m real_network`。
+_APP_YAML_TEMPLATE = """\
 scheduler:
   enabled: false
   collect_cron: null
   health_check_on_startup: false
 logging:
   file: null
+paths:
+  ffmpeg: "@@FFMPEG@@"
 """
+
+#: 一字节 1x1 的真 JPEG（Chromium 能解，实测 `naturalWidth == 1`）。
+_FAKE_JPEG_B64 = (
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a"
+    "HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA"
+    "AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q=="
+)
+
+_FAKE_FFMPEG_SHIM = '''"""假的 ffmpeg：只做"看得见的形状"，不做编解码。
+
+写这份替身的理由与边界都在 `tests/e2e/conftest.py` 的 `_write_fake_ffmpeg` 上面。
+"""
+import base64
+import os
+import sys
+
+argv = sys.argv[1:]
+if "-version" in argv:
+    print("ffmpeg version 7.1 FAKE-E2E Copyright (c) the FFmpeg project")
+    raise SystemExit(0)
+if "-i" not in argv:
+    sys.stderr.write("fake ffmpeg: 没有 -i，看不懂这行命令\\n")
+    raise SystemExit(2)
+source = argv[argv.index("-i") + 1]
+target = argv[-1]
+if not os.path.isfile(source):
+    # 与真 ffmpeg 同一形：输入不在就给非零码，不静默产出一张图。
+    sys.stderr.write("fake ffmpeg: 输入不在磁盘上：" + source + "\\n")
+    raise SystemExit(1)
+with open(target, "wb") as handle:
+    handle.write(base64.b64decode("@@JPEG_B64@@"))
+'''
+
+
+def _write_fake_ffmpeg(bin_dir: Path) -> Path:
+    """在 tmp 里现写一对 `ffmpeg.bat` + `fake_ffmpeg.py`，返回 .bat 的路径。
+
+    为什么是 .bat 包一层 python：`paths.ffmpeg` 要的是一个**可执行文件**，
+    它会被直接放到 argv[0]（`infra/ffmpeg.py::ffmpeg_binary` 只做 `is_file()` 判断，
+    不经 shell）。`.bat` 是这台机器上不需要额外权限就能被
+    `asyncio.create_subprocess_exec` 直接起起来的脚本载体（2026-09-25 实测），
+    而真 JPEG 的字节用 batch 写不出来，所以里面转一手 python。
+
+    字节常量用 `@@JPEG_B64@@` 这种**替换记号**注入而不是 `str.format`：
+    那份 shim 里有 `{source}` 这样的 f-string 花括号，`.format` 会把它们当成字段名
+    （第一次就这么炸在 `KeyError: 'source'` 上，报的还是装配那一步，看不出是模板冲突）。
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim = bin_dir / "fake_ffmpeg.py"
+    shim.write_text(_FAKE_FFMPEG_SHIM.replace("@@JPEG_B64@@", _FAKE_JPEG_B64), encoding="utf-8")
+    bat = bin_dir / "ffmpeg.bat"
+    body = f'@echo off\r\n"{sys.executable}" "{shim}" %*\r\nexit /b %ERRORLEVEL%\r\n'
+    bat.write_text(body, encoding="utf-8")
+    return bat
+
+
+def _app_yaml(ffmpeg: Path) -> str:
+    """那份 tmp `app.yaml`。路径加引号：`as_posix()` 里是 `C:/Users/...`，
+    YAML 的 plain scalar 对裸冒号并不总是宽容（换成引号版是为了不依赖这一点）。"""
+    return _APP_YAML_TEMPLATE.replace("@@FFMPEG@@", ffmpeg.as_posix())
 
 
 def _free_port() -> int:
@@ -195,15 +266,26 @@ def _transcript() -> Transcript:
 
 
 def _stub_adapter(name: str) -> FakeAdapter:
-    """一家平台的假适配器：能枚举两条、能"下"一个文件、能出字幕，且不出本机。"""
+    """一家平台的假适配器：能认主页链接、能枚举两条、能"下"一个文件、能出字幕，且不出本机。
+
+    `ref` / `profile` 这两个入参位是 `add_creator` 那条链要的（本文件 docstring 的"下一步
+    第一步"）：没有它们，收录博主会在 `parse_creator_url` 上炸，于是"收录 → 采集 → 入库"
+    这条只能在集成层验的链，在 L6 也有了一条真的。
+    """
 
     def artifact(_meta: VideoMeta, dest: Path) -> SingleFileArtifact:
         # 不是可解码的媒体（见 `test_detail_plays_the_served_file` 里那句"验的是那一趟往返"），
         # 但字节是真的落在 tmp 的媒体树下、真的由 `/media` 端点交出去。
+        #
+        # `media_source` 必须是 `models/media.MediaSource` 那四个字面量之一：这里原来写的
+        # 是 `"e2e_stub"`，而**没有任何一条 e2e 真的走到 `download_media`**，所以它一直没人发现
+        # （`SingleFileArtifact` 当场 pydantic 判失败，症状是"采集 failed + 两条 download 失败"，
+        # 2026-09-25 加工坊那条长链时才炸出来）。选 `page_play_url` 是因为它是"直链下载"，
+        # 与这个替身的形状一致。
         path = dest / "media.webm"
         path.write_bytes(b"\x1aE\xdf\xa3" + b"\x00" * 32)
         return SingleFileArtifact(
-            path=path, size_bytes=36, media_source="e2e_stub", has_audio=False
+            path=path, size_bytes=36, media_source="page_play_url", has_audio=False
         )
 
     return FakeAdapter(
@@ -211,6 +293,23 @@ def _stub_adapter(name: str) -> FakeAdapter:
         videos=[_meta(name, f"{name}-e2e-1"), _meta(name, f"{name}-e2e-2")],
         artifact_factory=artifact,
         subtitles=_transcript() if name == "bilibili" else None,
+        ref=CreatorRef.model_validate(
+            {
+                "platform": name,
+                "platform_id": "c-e2e",
+                "profile_url": f"https://{name}.com/user/c-e2e",
+            }
+        ),
+        profile=CreatorProfile(
+            ref=CreatorRef.model_validate(
+                {
+                    "platform": name,
+                    "platform_id": "c-e2e",
+                    "profile_url": f"https://{name}.com/user/c-e2e",
+                }
+            ),
+            name="端到端博主",
+        ),
     )
 
 
@@ -225,7 +324,8 @@ def served(tmp_path: Path, dist_dir: Path) -> Iterator[tuple[AppState, str]]:
     config_dir = tmp_path / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "platforms.yaml").write_text(_PLATFORMS_YAML, encoding="utf-8")
-    (config_dir / "app.yaml").write_text(_APP_YAML, encoding="utf-8")
+    fake_ffmpeg = _write_fake_ffmpeg(tmp_path / "fakebin")
+    (config_dir / "app.yaml").write_text(_app_yaml(fake_ffmpeg), encoding="utf-8")
 
     manager = ConfigManager(config_dir)
     manager.load()

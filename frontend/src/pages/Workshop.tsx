@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 
-import { api, ApiError } from "@/api/client";
+import { api, ApiError, type Schemas } from "@/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { keys } from "@/api/keys";
 import { useBenchmarkAnalysis, useGenerateDraftScript } from "@/api/hooks/useAnalysis";
@@ -15,10 +15,13 @@ import { formatTime } from "@/lib/formatters";
 import {
   AUTOSAVE_DELAY_MS,
   beatsOf,
+  canRequestShots,
   isDirty,
   promptLinesOf,
   shouldAutosave,
+  shotTimesOf,
   BEAT_TEMPLATE_KEYS,
+  MAX_SHOT_FRAMES,
   type DraftTemplateKey,
   VIEW_LABELS,
   WORKSHOP_VIEWS,
@@ -39,8 +42,9 @@ import { cn } from "@/lib/utils";
  * 3. **空白不发**：后端的 `assert_non_blank_text` 会 422，
  *    一个每 1.6 秒必然失败一次的自动保存，最后会被用户当成"这页坏了"。
  *
- * "截图包"那一格 V2 没有数据源（没有分镜截图这一步，媒体只有成片），
- * 所以它说的是一句实话而不是一个空网格 —— V1 那一格靠的是 V1 才有的截图任务。
+ * "截图包"那一格（T6.7）的数据源是 `POST /api/videos/{id}/shots`：ffmpeg 从**这条作品
+ * 已落地的成片**里按分镜时间点截帧，缩略图走同一族端点的 GET 出图。
+ * 没有媒体时它仍然说一句实话 —— 那句判据现在由 `media_path` 决定，而不是写死在组件里。
  */
 export function Workshop(): JSX.Element {
   const [topicName, setTopicName] = useState("");
@@ -93,6 +97,7 @@ export function Workshop(): JSX.Element {
             initial={seed}
             topicName={topicName}
             referenceVideoId={reference?.id ?? null}
+            video={reference}
           />
         </div>
       </div>
@@ -276,10 +281,12 @@ function DraftEditor({
   initial,
   topicName,
   referenceVideoId,
+  video,
 }: {
   initial: { id?: number; title: string; body: string };
   topicName: string;
   referenceVideoId: number | null;
+  video: Video | null;
 }): JSX.Element {
   const [draft, setDraft] = useState<DraftDraft>({
     title: initial.title || topicName,
@@ -406,7 +413,7 @@ function DraftEditor({
       )}
       {view === "beats" && <BeatsView text={draft.body} />}
       {view === "teleprompter" && <TeleprompterView text={draft.body} />}
-      {view === "shots" && <ShotsView />}
+      {view === "shots" && <ShotsView video={video} text={draft.body} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <MemphisButton
@@ -530,9 +537,126 @@ function TeleprompterView({ text }: { text: string }): JSX.Element {
   );
 }
 
-function ShotsView(): JSX.Element {
+/** 后端 `api/v1/shots.py::ShotsResponse` 的投影（`npm run gen:api` 出来的那份）。
+ * 这里只**用**它，不另写一份接口：另写一份就是第二个真源，漂了没人知道。 */
+type ShotsBody = Schemas["ShotsResponse"];
+
+function ShotsView({ video, text }: { video: Video | null; text: string }): JSX.Element {
+  const [pack, setPack] = useState<ShotsBody | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running">("idle");
+
+  const times = shotTimesOf(text, video?.duration_seconds ?? null);
+
+  // 没有成片就**不发请求**（判据在 `lib/workshop.ts::canRequestShots`）。
+  // 这一句实话留着，只是它现在由 `media_path` 决定，而不是写死在组件里。
+  if (!canRequestShots(video)) {
+    return (
+      <EmptyView text="这条作品没有落地成片（库里 media_path 是空的），截不出帧：先去任务页跑一次采集/后处理让 media.mp4 落盘。V2 的截图包是从成片现截的，不再另有一份截图任务。" />
+    );
+  }
+  const beatCount = beatsOf(text).length;
+  /** 时间点算不出来（这条作品没有时长元数据）时按钮按下去也是白按：直接不给按。 */
+  const canSend = times.length > 0;
+  const shown = pack !== null && pack.video_id === video?.id ? pack : null;
+
+  const generate = async (): Promise<void> => {
+    if (video === null) return;
+    setPhase("running");
+    setErrorText(null);
+    // 清掉上一次的包：留着会让"这次没截成"看起来像"截了但图坏了"
+    setPack(null);
+    try {
+      setPack(
+        await api.post<ShotsBody>(`/videos/${String(video.id)}/shots`, { at_seconds: times }),
+      );
+    } catch (error) {
+      // 后端的原文一个字的改：那句里带着"装 ffmpeg 还是改 paths.ffmpeg"的下一步
+      setErrorText(error instanceof ApiError ? error.detail : String(error));
+    } finally {
+      setPhase("idle");
+    }
+  };
+
   return (
-    <EmptyView text="V2 没有截图包这一步：媒体只有成片，没有按分镜截出来的图。要这一格得先有一个截图任务，那是 V2.2 的事。" />
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <MemphisButton onClick={() => void generate()} disabled={phase === "running" || !canSend}>
+          {phase === "running" ? "截帧中…" : "生成截图包"}
+        </MemphisButton>
+        <span className="text-mono-sm">
+          {`分镜 ${String(beatCount)} 格 → 截 ${String(times.length)} 帧上限 ${String(MAX_SHOT_FRAMES)}`}
+        </span>
+      </div>
+
+      {!canSend && (
+        <p className="text-body-sm">
+          这条作品没有可用的时长（duration_seconds 是空的），算不出要截哪几秒：
+          先重跑一次采集把元数据补齐，或让磁盘重扫把时长读回来。
+        </p>
+      )}
+      {beatCount > MAX_SHOT_FRAMES && canSend && (
+        <p className="text-body-sm">
+          {`分镜比上限多：${String(beatCount)} 格只截其中 ${String(MAX_SHOT_FRAMES)} 张（等距跨步，不是只看开头）。`}
+        </p>
+      )}
+      {errorText && (
+        <p aria-live="polite" className="text-body-sm break-words">
+          <span className="memphis-border border-ink-black bg-coral-red px-3 py-1">
+            截图包没做成
+          </span>
+          <span className="ml-2">{errorText}</span>
+        </p>
+      )}
+
+      {shown !== null && (
+        <>
+          <p aria-live="polite" className="text-mono-sm">
+            {shown.cached
+              ? `这是上次截好的 ${String(shown.shots.length)} 张（本次一帧都没重截）`
+              : `刚截好 ${String(shown.shots.length)} 张`}
+            {shown.ffmpeg_version_or_error ? ` · ${shown.ffmpeg_version_or_error}` : ""}
+          </p>
+          {shown.failures.length > 0 && (
+            <ul className="flex flex-col gap-1 text-body-sm">
+              {shown.failures.map((failure) => (
+                <li key={String(failure.at_seconds)} className="break-words">
+                  第 {String(failure.at_seconds)} 秒没截出来：{failure.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+          {shown.shots.length === 0 ? (
+            <p className="text-body-sm">一张都没有：看上面那行原因。</p>
+          ) : (
+            <ul
+              role="list"
+              aria-label="截图包"
+              className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+            >
+              {shown.shots.map((shot) => (
+                <li
+                  key={shot.path}
+                  className="memphis-border border-ink-black flex flex-col gap-1 bg-paper-cream p-2"
+                >
+                  {/* src 只可能来自后端给的 url：在前端拼磁盘路径等于把目录结构写进前端
+                      （V1 §7.5 那一族：两处各按自己那套读，改错一处就读不到）。 */}
+                  <img
+                    src={shot.url}
+                    alt={`第 ${String(shot.at_seconds)} 秒那一帧`}
+                    loading="lazy"
+                    className="aspect-video w-full object-cover"
+                  />
+                  <code className="text-mono-sm">
+                    {String(shot.at_seconds)}s · {String(shot.size_bytes)} B
+                  </code>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

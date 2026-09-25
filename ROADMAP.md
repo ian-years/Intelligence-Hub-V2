@@ -145,13 +145,15 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
 
 ### V2.1「四平台齐全 + 转写完整」 — 规划中
 
-> 2026-09-25（V2.1 批量推进）：**Phase 2 收满、Phase 6 收满、Phase 4 5/7、Phase 5 6/7**。
-> 还欠的是：`PlatformAdapter` 的契约口（T4.1/T4.2 调用侧）、工坊页的 Playwright 一条、
-> 以及必须人跑的 Phase 3 五条。
-> 一次会话落了 T2.1 二片 / T2.2 / T5.2-T5.7 / T6.3 二片 / T6.5-T6.8，加 5 份新 ADR（0019-0023）。
-> 全程数字与逐条归属见 `docs/progress/2026-09-25.md`；**待你点头的 12 件事在它的第 7 节**。
-> 一句话摘要：`pytest` 2335 passed / 覆盖率 94.8%（`platforms+tasks+tools` 95%）、
-> 前端 275 passed、e2e 那一档第一次真的跑起来（8 条，真 Chromium + 真 uvicorn，`make e2e`）。
+> 2026-09-25（V2.1 批量推进 + 同日补完）：**Phase 2 / 4 / 5 / 6 全收满，只剩必须人跑的 Phase 3 五条**。
+> 上午那一批欠的三样下午都清了：`PlatformAdapter` 的契约口（T4.1/T4.2 调用侧，ADR-0020 决定二）、
+> 工坊页截图包的真数据源（ADR-0024）、工坊页的 Playwright 那一腿。
+> 一次会话落了 T2.1 二片 / T2.2 / T5.2-T5.7 / T6.3 二片 / T6.5-T6.8，加 7 份新 ADR（0019-0024 +
+> 0020 的"分期"改为已落）。
+> 全程数字与逐条归属见 `docs/progress/2026-09-25.md`；**待你点头的 17 件事在它的第 7 节**。
+> 一句话摘要：`pytest` 2423 passed / 覆盖率 94.84%（`platforms+tasks+tools` 95%）、
+> 前端 309 passed、e2e 10 条（真 Chromium + 真 uvicorn，`make e2e`），
+> 另有一条真 ffmpeg 的 `-m real_network` 烟雾（3 passed）。
 
 - [x] 小红书 Adapter（依赖桥的页面 JS 注入）
   —— 2026-09-24/25（V2.1 T2.1）三片齐：共用纯解析层（ADR-0016）→ 适配器落地并注册 →

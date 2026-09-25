@@ -1248,6 +1248,143 @@
         "title": "ScriptCard",
         "type": "object"
       },
+      "ShotFailureItem": {
+        "properties": {
+          "at_seconds": {
+            "title": "At Seconds",
+            "type": "number"
+          },
+          "reason": {
+            "description": "ffmpeg 的失败原文（截不出这一帧的真实原因，不并成一句'失败'）",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_seconds",
+          "reason"
+        ],
+        "title": "ShotFailureItem",
+        "type": "object"
+      },
+      "ShotItem": {
+        "properties": {
+          "at_seconds": {
+            "description": "这一帧对应的时间点（已按文件名的量化精度对齐）",
+            "title": "At Seconds",
+            "type": "number"
+          },
+          "path": {
+            "description": "相对 `data/` 的路径（与 `media_path` 同一套约定）",
+            "title": "Path",
+            "type": "string"
+          },
+          "produced": {
+            "description": "True = 这次真的截了；False = 复用上一次的同一帧",
+            "title": "Produced",
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "url": {
+            "description": "出图地址，前端直接用；**不拼磁盘路径**",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_seconds",
+          "path",
+          "url",
+          "size_bytes",
+          "produced"
+        ],
+        "title": "ShotItem",
+        "type": "object"
+      },
+      "ShotRequest": {
+        "additionalProperties": false,
+        "description": "请求体。`at_seconds` 省略 = 按 `videos.duration_seconds` 均分。",
+        "properties": {
+          "at_seconds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "要截的时间点（秒），来自分镜行；省略则按作品时长均分（最多 12 帧）",
+            "title": "At Seconds"
+          }
+        },
+        "title": "ShotRequest",
+        "type": "object"
+      },
+      "ShotsResponse": {
+        "properties": {
+          "cached": {
+            "description": "True = 这一帧都没有新截，全是复用上次的；界面上必须与'刚截好的'区分开",
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "failures": {
+            "description": "某几秒截不出来时，原因在这里（不伪装成没发生）",
+            "items": {
+              "$ref": "#/components/schemas/ShotFailureItem"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "ffmpeg_version_or_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "产出这些帧的 ffmpeg 是哪一支；纯复用时为 null",
+            "title": "Ffmpeg Version Or Error"
+          },
+          "requested_at": {
+            "description": "实际去截的时间点（已去重、已限量）",
+            "items": {
+              "type": "number"
+            },
+            "title": "Requested At",
+            "type": "array"
+          },
+          "shots": {
+            "items": {
+              "$ref": "#/components/schemas/ShotItem"
+            },
+            "title": "Shots",
+            "type": "array"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "video_id",
+          "requested_at",
+          "shots",
+          "cached",
+          "failures",
+          "ffmpeg_version_or_error"
+        ],
+        "title": "ShotsResponse",
+        "type": "object"
+      },
       "SingleLinkParams": {
         "description": "收一条作品（`single_link`）：解析链接 → 判平台 → 走对应适配器。",
         "properties": {
@@ -3871,6 +4008,109 @@
         "summary": "Stream Video Media",
         "tags": [
           "media"
+        ]
+      }
+    },
+    "/api/videos/{video_id}/shots": {
+      "post": {
+        "description": "从这条作品已落地的成片里按时间点截一批帧，返回缩略图清单。",
+        "operationId": "create_shots_api_videos__video_id__shots_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Shots",
+        "tags": [
+          "shots"
+        ]
+      }
+    },
+    "/api/videos/{video_id}/shots/{name}": {
+      "get": {
+        "description": "把 `shots/` 里那张图交出去。三道判据见模块 docstring，越界一律 403。",
+        "operationId": "get_shot_image_api_videos__video_id__shots__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Shot Image",
+        "tags": [
+          "shots"
         ]
       }
     },

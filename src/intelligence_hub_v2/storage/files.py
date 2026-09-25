@@ -11,6 +11,8 @@ data/
       media.f137.mp4 + media.f140.m4a # 或 DASH 未合并分片（B站）
       cover.jpg
       metadata.json
+      shots/
+        shot-8.5.jpg              # 工坊「截图包」：按分镜时间点从 media.mp4 截的帧
       transcript/
         speech-clean.txt
         segments.json
@@ -34,6 +36,7 @@ data/
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +45,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from intelligence_hub_v2.core.config import AppConfig
 
-__all__ = ["FileStorage", "safe_filename"]
+__all__ = ["FileStorage", "safe_filename", "shot_stem"]
 
 # ---------------------------------------------------------------------------
 # 文件名净化（V1 §7.8）
@@ -90,6 +93,34 @@ def safe_filename(name: str, *, max_length: int = 120, fallback: str = DEFAULT_F
 
 
 _DOMAIN = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+SHOT_TIME_DECIMALS = 3
+"""截图文件名里秒数保留的位数。
+
+**量化本身是判据的一部分**：分镜时间点在 UI 与引擎之间会来回换算
+（`60 / 7 = 8.571428571428571`），不归一的话"同一个时间点"每次都能得到一个新文件名，
+`shot_file()` 的单射就只剩纸面意义。1 毫秒比人眼能分辨的帧间隔还小，
+归一到这一档不会把两个不同的镜头并成一张。
+"""
+
+
+def shot_stem(at_seconds: float) -> str:
+    """`at_seconds` → 文件名中间那一段（`8.5`、`0`、`65`）。
+
+    负数与非有限值（NaN / inf）直接抛：它们到 ffmpeg 那里会变成 `-ss -1` 这种
+    **看起来像参数**的字符串（`run_subprocess` 走 `shell=False`，不会被解释成选项，
+    但产物会莫名其妙），而且"负的第几秒"本身没有语义 —— 早失败、报清楚，
+    比产出一个没人能解释的文件好。
+    """
+    seconds = float(at_seconds)
+    if not math.isfinite(seconds):
+        msg = f"截图时间点必须是有限秒数，收到 {at_seconds!r}"
+        raise ValueError(msg)
+    if seconds < 0:
+        msg = f"截图时间点不能是负数，收到 {at_seconds!r}"
+        raise ValueError(msg)
+    text = f"{seconds:.{SHOT_TIME_DECIMALS}f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +290,36 @@ class FileStorage:
             self.media_dir(platform, creator_name, video_id, title)
             / f"media.f{safe_fmt}.{safe_ext}"
         )
+
+    # ---- 分镜截图（工坊页「截图包」）----
+
+    def shots_dir(self, media_dir: Path) -> Path:
+        """按分镜时间点从**这条成片**截出来的帧：`<media_dir>/shots/`。
+
+        与 `audio_dir()` 同一个理由：帧是**可再生产物**，不是真相，所以
+
+        - 库里不加列、不做迁移（`videos.media_path` 指的成片才是真相）；
+        - 它住在媒体目录**里面**，搬走/删掉一条作品时不会留下孤儿，
+          而 `media.py` 出图那两条边界判据（只认 `media_root` 底下 + 扩展名白名单）
+          天然罩得住它。
+
+        参数同样是 `media_dir` 而不是 `video_id`：算这一层的唯一输入是"成片在哪"，
+        而库里那一列给的正是那个（`resolve_media_file()` 的返回值取其父目录）。
+        """
+        return media_dir / "shots"
+
+    def shot_file(self, media_dir: Path, at_seconds: float) -> Path:
+        """某一秒那一帧：`<media_dir>/shots/shot-<秒>.jpg`。
+
+        **命名对 `at_seconds` 单射且确定**，两件事各挡一类坏：
+
+        - 单射 → 同一秒重截是**覆盖**，不是 `shot-8.jpg` / `shot-8(1).jpg` /
+          `shot-8-2.jpg` 那样攒垃圾。少了这条，`extract_frame()` 的"已存在就跳过"
+          永远不会命中，每点一次按钮就多一整套帧。
+        - 确定性 → 界面刷新后还能认出同一帧（`cached` 那个标志全靠它），
+          也不需要为截图另开一张表去记"上次截到哪了"。
+        """
+        return self.shots_dir(media_dir) / f"shot-{shot_stem(at_seconds)}.jpg"
 
     # ---- 口播稿 ----
 

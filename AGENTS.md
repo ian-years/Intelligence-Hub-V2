@@ -66,8 +66,8 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `tools/rescan_local.py` / `tools/render_reports.py` | 磁盘重扫恢复（T4.4）与报告薄壳（T5.4，**只走子进程**，不 import `ported/`） |
 | `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie 到 `data/cookies/<域名>.txt`（走 `CookieManager.refresh_from_bridge`，渲染器只有那一处；T0.2，2026-09-24） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
-| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试。**e2e 默认不入选**（`addopts` 里那条 `-m`；Playwright 与 uvicorn 会碰进程级事件循环 policy），跑它用 `make e2e` |
-| `docs/adr/` | 架构决策记录（0001~0015，背景/选项/决定/后果。**0014 已预留**给 `_check_requires` 那道闸，新决定从 0016 起 —— 编号不复用） |
+| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试。三条命令三种范围：`make test-backend`（`-m "not real_network and not e2e"`，日常那道门）、`make e2e`（L6，真 Chromium + 真 uvicorn，每条用例一只浏览器并**每次重构建 dist**）、`make test-real`（真机烟雾）。**`addopts` 里没有 `-m` 排除**：曾经有一条，它是为遮盖 e2e 污染全场加的，2026-09-25 换成 async Playwright 之后删了 —— 根因与三条被否掉的猜测见 `docs/lessons.md` 那条「ContextVar」与 `docs/progress/2026-09-25.md` §8.2 |
+| `docs/adr/` | 架构决策记录（**0001~0024**，背景/选项/决定/后果。**0014 已预留**给 `_check_requires` 那道闸，0016 起是 V2.1 那一批 —— 编号不复用） |
 | `docs/specs/` | 接口契约文档 |
 | `docs/progress/YYYY-MM-DD.md` | 每日推进日志 |
 | `docs/lessons.md` | V1 → V2 移植经验 |
