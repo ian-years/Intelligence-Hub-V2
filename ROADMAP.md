@@ -352,7 +352,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   所以那 11 条后面紧跟一行 `FAIL Required test coverage of 80% not reached`。
   `ci-local` 与 CI 都不含 e2e（`Makefile:100-107`），所以今天没有任何人天天撞它 —— 但判据里
   "`make e2e` 全绿"这一句在字面上不成立。要么 e2e 那一档带 `--no-cov`，要么把判据改成
-  "`pytest -m e2e` 11 条全过"。**这条待你点头，见 `docs/progress/2026-09-26.md` §9 第 28 行。**
+  "`pytest -m e2e` 11 条全过"。**这条待你点头，见 `docs/progress/2026-09-26.md` §11 第 28 行。**
 
 ### V2.x 稳定后 — 远期
 
