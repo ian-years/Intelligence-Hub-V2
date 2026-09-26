@@ -153,8 +153,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   ② 本机 Git for Windows 里没有 `make.exe`（`AGENTS.md §4` 记着），所以 `make ci-local`
   这条"一键跑全套"从未按它自己的形式跑过一次，日常是照 recipe 逐条手跑；
   ③ 逐条手跑的数字见上面"测试"那一格与 `docs/progress/2026-09-26.md`。
-  **2026-09-26 用户点头**：建远端并允许 push，让 Actions 第一次真跑（这是这一格唯一的堵点，
-  不是代码缺口）。跑通之前整条不勾。
+  **2026-09-26 用户点头**：建远端并允许 push。已经做了 —— `origin = github.com/ian-years/Intelligence-Hub-V2`，
+  推了两次（run #1 `2ddef2a`、run #2 `07d20bd`），**Actions 第一次真跑 = 两个 job 红**
+  （`lint-python` 的 mypy 那一步 + `precommit`），其余五个 job 因 `needs: lint-python` 全被 skip，
+  所以 `test-backend` / `test-frontend` / `build` / `openapi-snapshot` / `e2e` **至今一次都没在 CI 上跑过**。
+  本地同一批命令是全绿的（`mypy src tools` 143 files clean、`pre-commit run --all-files` 22 hook 过），
+  所以这是 **runner 环境差异**而不是代码回归 —— 但**报错原文拿不到**（logs 端点 403 要鉴权、
+  annotations 只给 exit code、本机没 `gh`），因此不猜成因，等日志（`docs/progress/2026-09-26.md` §12 第 37 行）。
+  这一格的红是好消息：它正是"CI 从未真跑"这条判据要暴露的东西。跑通之前整条不勾。
 - [x] **文档**：**24 份** ADR（编号到 0025，`0014` 空着不复用；判据要的是 ≥10）+ 7 份 spec +
   AGENTS.md + README +
   CONTRIBUTING + architecture.md + lessons.md 全部落盘并已 commit
