@@ -61,14 +61,14 @@ Python 3.12，uv 管包，ruff + mypy strict 卡风格，pytest + Vitest + Playw
 | `src/intelligence_hub_v2/tasks/` | TaskDefinition / TaskRegistry / runner / context / 清单上下文管理器 |
 | `src/intelligence_hub_v2/asr/` | sherpa-onnx 封装（SenseVoice + 静音切句补标点） |
 | `src/intelligence_hub_v2/bridge/` | CDP 桥服务（`server.py`：Playwright + Chrome 持久化 profile，只绑 `127.0.0.1:3457`；**客户端**在 `infra/cdp_bridge.py`） |
-| `frontend/` | React + Vite + TS 源；`frontend/src/pages/` 七页，`components/memphis/` 自定义组件，`styles/tokens.css` 设计令牌 |
+| `frontend/` | React + Vite + TS 源；`frontend/src/pages/` **九页**（09-25 起：V2.0 那七页 + `Topics`（T5.5）+ `Workshop`（T4.7）），`components/memphis/` 是自定义基础件、`components/shared/` 是业务块（`ScheduleCard` / `PlatformControlCard` / `ThemeSwitch` 这一族在后者），`styles/tokens.css` 设计令牌 |
 | `src/intelligence_hub_v2/ported/` | **未适配的 V1 搬运区**（ADR-0018）：`feishu/`、`reports/`、`v1_shared/`。主流程不许 import 它，豁免只有 ruff/mypy/coverage 三处，`git ls-files` 就是债的清单 |
 | `tools/migrate_from_v1.py` | V1 → V2 一次性迁移脚本（只读 V1 SQLite） |
 | `tools/rescan_local.py` / `tools/render_reports.py` | 磁盘重扫恢复（T4.4）与报告薄壳（T5.4，**只走子进程**，不 import `ported/`） |
 | `tools/refresh_bridge_cookies.py` | 从桥导出 Netscape cookie 到 `data/cookies/<域名>.txt`（走 `CookieManager.refresh_from_bridge`，渲染器只有那一处；T0.2，2026-09-24） |
 | `tests/contracts/` | L2 平台适配器契约测试抽象基类 |
-| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试。三条命令三种范围：`make test-backend`（`-m "not real_network and not e2e"`，日常那道门）、`make e2e`（L6，真 Chromium + 真 uvicorn，每条用例一只浏览器并**每次重构建 dist**）、`make test-real`（真机烟雾）。**`addopts` 里没有 `-m` 排除**：曾经有一条，它是为遮盖 e2e 污染全场加的，2026-09-25 换成 async Playwright 之后删了 —— 根因与三条被否掉的猜测见 `docs/lessons.md` 那条「ContextVar」与 `docs/progress/2026-09-25.md` §8.2 |
-| `docs/adr/` | 架构决策记录（**0001~0024**，背景/选项/决定/后果。**0014 已预留**给 `_check_requires` 那道闸，0016 起是 V2.1 那一批 —— 编号不复用） |
+| `tests/{unit,integration,e2e}/` | L0-L1 / L3-L4 / L6 测试。三条命令三种范围：`make test-backend`（`-m "not real_network and not e2e"`，日常那道门）、`make e2e`（L6，真 Chromium + 真 uvicorn，每条用例一只浏览器并**每次重构建 dist**）、`make test-real`（真机烟雾）。**`make e2e` 今天必然非零退出**：`addopts` 无条件带 `--cov-fail-under=80`，而只跑 e2e 那 11 条覆盖到 42%，所以 `11 passed` 后面紧跟一行 `FAIL Required test coverage of 80% not reached` —— 看用例结论要自己补 `--no-cov`，两条出路待点头（`docs/progress/2026-09-26.md` §5）。**`addopts` 里没有 `-m` 排除**：曾经有一条，它是为遮盖 e2e 污染全场加的，2026-09-25 换成 async Playwright 之后删了 —— 根因与三条被否掉的猜测见 `docs/lessons.md` 那条「ContextVar」与 `docs/progress/2026-09-25.md` §8.2 |
+| `docs/adr/` | 架构决策记录（**0001~0025，磁盘上 24 份**，背景/选项/决定/后果。**0014 仍空着**给 `_check_requires` 那道闸，0016 起是 V2.1 那一批，0025 是平台总闸 —— 编号不复用） |
 | `docs/specs/` | 接口契约文档 |
 | `docs/progress/YYYY-MM-DD.md` | 每日推进日志 |
 | `docs/lessons.md` | V1 → V2 移植经验 |
