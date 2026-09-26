@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from intelligence_hub_v2.core import config as config_module
-from intelligence_hub_v2.core.config import AppConfig, ConfigManager, load_app_config
+from intelligence_hub_v2.core.config import (
+    AppConfig,
+    ConfigManager,
+    _jsonable,
+    load_app_config,
+)
 from intelligence_hub_v2.errors import ConfigError
 from intelligence_hub_v2.platforms import PLATFORM_CONFIG_SCHEMAS
 from intelligence_hub_v2.platforms.base import Capabilities, PlatformConfig, RateLimitConfig
@@ -309,6 +314,71 @@ def test_every_config_write_lands_lf_not_crlf(tmp_path: Path) -> None:
     # 三次写都真的落到了盘上（不是"写到了别处"）
     assert "enabled: false" in (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
     assert "platform_control" in (tmp_path / "app.yaml").read_text(encoding="utf-8")
+
+
+def test_a_saved_platform_config_writes_posix_paths(tmp_path: Path) -> None:
+    """`cookies_file` 是 `Path`，落盘必须是 **POSIX 形状**。
+
+    这条不是洁癖，是 2026-09-26 从一次真·界面保存里抓出来的：`model_dump(mode="json")`
+    走的是 `str(path)`，Windows 上把 `data/cookies/bilibili.com.txt` 写成
+    `data\\cookies\\bilibili.com.txt` —— 而 `config/platforms.yaml` 是 tracked、跨平台的，
+    Linux（含 CI）拿那个值去找的是一个**名字里带反斜杠**的文件。
+    在 Linux/macOS 上这条会"本来就对"，所以它还配了一条 `test_the_posix_rule_has_teeth`
+    把形状差异显式量出来，不让这条变成空跑。
+    """
+    _write_platforms_yaml(tmp_path, "bilibili:\n  enabled: true\n  display_name: B站\n")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+
+    mgr.write_platform_config(
+        "bilibili",
+        BilibiliConfig(
+            display_name="B站",
+            cookies_file=Path("data") / "cookies" / "bilibili.com.txt",
+        ),
+    )
+
+    raw = (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
+    assert "data/cookies/bilibili.com.txt" in raw, raw
+    assert "data\\cookies" not in raw, "落盘带上了 OS 分隔符：_jsonable 那一层没生效"
+
+
+def test_the_posix_rule_has_teeth() -> None:
+    """上一条在 POSIX 机器上会天然通过，所以这里显式量一次"两种写法确实不同"。
+
+    判据是 `str(Path)` 与 `as_posix()` 的比较：只有在 Windows 上它们才不等 ——
+    不等时这条把差异钉住，相等时（Linux/CI）它转为钉"转换器不会把已经是 POSIX 的东西改坏"。
+    两种情况下都不许静默跳过（缺依赖就 SkipTest 是 V1 §7.14 那一族）。
+    """
+    probe = Path("data") / "cookies" / "x.txt"
+    converted = _jsonable(probe)
+    assert converted == "data/cookies/x.txt"
+    assert isinstance(converted, str)
+    assert "\\" not in converted
+    # 已经是 POSIX 的字符串原样不动（转换器不许"顺手改写"用户写对的值）
+    assert _jsonable("data/cookies/y.txt") == "data/cookies/y.txt"
+
+
+def test_ui_hidden_fields_are_never_materialized_into_the_file(tmp_path: Path) -> None:
+    """`ui:hidden`（ADR-0012：声明了但没有实现路径）的键**不进 YAML 文件**。
+
+    症状很具体：一次 PUT 之后 `xiaohongshu.advanced` 里凭空多出
+    `retry_max` / `retry_backoff_seconds` / `request_timeout_seconds` —— 文件于是看起来像
+    有人配过它们，而改它们什么也不会发生。前端不受影响（判据在 JSON Schema 里）。
+    防空转：同一份文件里必须有那些**有人读**的键，否则"没有 retry_max"可以是整段没写。
+    """
+    _write_platforms_yaml(tmp_path, "bilibili:\n  enabled: true\n  display_name: B站\n")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+
+    mgr.write_platform_config("bilibili", BilibiliConfig(display_name="B站", enabled=True))
+
+    raw = (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
+    for hidden in ("retry_max", "retry_backoff_seconds", "require_login_for_high_quality"):
+        assert hidden not in raw, f"{hidden} 是 ui:hidden 的键，不该被物化进文件：{raw[:400]}"
+    # 反面：有人读的键必须在
+    assert "dash_split_handling" in raw, raw[:400]
+    assert "enabled: true" in raw, raw[:400]
 
 
 def test_config_module_has_only_one_yaml_write_site() -> None:
@@ -608,16 +678,24 @@ def test_shipped_config_files_load() -> None:
     # 这一串是**发货配置的快照**：加平台必须同时改这里，红是设计出来的（不是脆），
     # 因为它挡的是"改了代码忘了改仓库里那份 config/platforms.yaml"（或反过来）。
     assert mgr.platform_names() == ["douyin", "bilibili", "xiaohongshu", "youtube"]
-    # 四家里**只有三家默认开着**：youtube 段自己写着 `enabled: false`，
-    # 理由是这台机器到 YouTube 大概率直连不通（V1 §6）。两个名单**不相等**是刻意的，
-    # 所以两条都要断言 —— 只断第一条就放过了"默认打开一个采不动的平台"。
-    assert mgr.enabled_platforms() == ["douyin", "bilibili", "xiaohongshu"]
+    # 四家注册的顺序不变；**默认开着的现在只有两家**。
+    # 09-26 之前这里是三家：那次界面保存把 `xiaohongshu.enabled` 关掉了，
+    # 用户看过 `/api/tasks` 里 `xiaohongshu_collect` 随之消失的实际效果后说"留着"。
+    # 这条断言本来就是设计成"改了文件就要来这里同步一次"的红（不是脆），
+    # 所以它红过一次、改的是期望而不是文件，是它在工作。
+    assert mgr.enabled_platforms() == ["douyin", "bilibili"]
     assert mgr.get_platform("youtube").enabled is False
+    assert mgr.get_platform("xiaohongshu").enabled is False
     # 发货的 YAML 里不许再躺着一个没人读的键（extra="forbid" 会当场红，
     # 但这条断言的红比 ConfigError 好读得多）
     raw = (Path("config/platforms.yaml")).read_text(encoding="utf-8")
     assert "cookie_variant_order" not in raw
     assert "ytdlp_cookie_priority" not in raw
+    # 路径必须是 POSIX 形状：这份文件是 tracked 且跨平台的，反斜杠在 Linux（含 CI）上
+    # 指向的是一个"名字里带反斜杠"的文件。09-26 之前它确实被写成过那样。
+    assert "data\\cookies" not in raw, "发货配置里出现了 OS 分隔符：见 _jsonable"
+    # `ui:hidden`（没有实现路径）的键不该被物化进发货文件
+    assert "retry_max" not in raw, raw[:300]
 
     douyin = mgr.get_platform("douyin")
     assert douyin.media_strategy == "yt_dlp_with_fallback"

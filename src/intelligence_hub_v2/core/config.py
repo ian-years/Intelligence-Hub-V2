@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
-from pathlib import Path
+from enum import Enum
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
@@ -568,6 +569,54 @@ def _build_platform_config(platform: str, section: object) -> PlatformConfig:
         raise ConfigError(msg, path=str(DEFAULT_PLATFORMS_YAML)) from exc
 
 
+def _jsonable(value: Any) -> Any:  # noqa: ANN401 - 递归归一化，叶子类型由模型决定
+    """把一棵配置树归一成"能安全进 YAML"的形状，**并且只有一种行尾与分隔符的说法**。
+
+    - `Path` → **POSIX 字符串**（`as_posix()`）。这条不是洁癖：`cookies_file` 是
+      `Path | None`，而 `model_dump(mode="json")` 走的是 `str(path)` —— Windows 上那会
+      把 `data/cookies/x.txt` 写成 `data\\cookies\\x.txt`，落进一份 **tracked、跨平台**的
+      `config/platforms.yaml`。Linux 上（含 CI）那个值不再是 `data/cookies/x.txt`，
+      而是一个**名字里带反斜杠**的文件。
+    - `str` 的子类（`HttpUrl` 这类 pydantic 的 Url）→ 剥成普通 `str`，否则 YAML 会连
+      类型标签一起写出来。
+    - `Enum` → `.value`；`BaseModel` → 递归（用 `model_dump()` 的 python 档，
+      这样 Path 还活着、由这一层统一转 POSIX）。
+    """
+    if isinstance(value, PurePath):
+        return value.as_posix()
+    if isinstance(value, BaseModel):
+        return {key: _jsonable(item) for key, item in value.model_dump().items()}
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(item) for item in value]
+    # 叶子：str 的子类（pydantic 的 Url 那一族）剥成普通 str，其余原样交给 YAML
+    return str(value) if isinstance(value, str) else value
+
+
+def _dump_platform_section(config: BaseModel) -> dict[str, Any]:
+    """平台配置 → 要落盘的那份 dict，**丢掉 `ui:hidden` 的键**。
+
+    为什么丢：那个标记的意思就是"这一格声明了，但今天没有任何实现路径"（ADR-0012，
+    `retry_max` / `request_timeout_seconds` 这一批）。按整模型 dump 会把它们连默认值一起
+    物化进 YAML —— 文件于是长得像"有人配过 retry_max"，而改它什么也不会发生。
+    前端不受影响：判据在 JSON Schema 里（`/api/platforms/{name}/schema`），不是在这个文件里。
+
+    与 `_jsonable` 的分工：这一层只管**哪些键进文件**（要读字段元数据，所以只能在模型上走），
+    形状归一化（Path / Enum / Url）留给写盘那一个出口。
+    """
+    out: dict[str, Any] = {}
+    for name, field in type(config).model_fields.items():
+        extra = field.json_schema_extra
+        if isinstance(extra, dict) and extra.get("ui:hidden"):
+            continue
+        value = getattr(config, name)
+        out[name] = _dump_platform_section(value) if isinstance(value, BaseModel) else value
+    return out
+
+
 def _atomic_write_yaml(target: Path, data: dict[str, Any]) -> None:
     """把一份配置原子落到 `target`：同目录 `.tmp` + `Path.replace`（= `os.replace`）。
 
@@ -582,7 +631,7 @@ def _atomic_write_yaml(target: Path, data: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.parent / f"{target.name}.tmp"
     tmp.write_text(
-        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        yaml.safe_dump(_jsonable(data), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
         newline="\n",
     )
@@ -782,7 +831,7 @@ class ConfigManager:
             )
             raise ConfigError(msg, path=str(self.platforms_yaml_path))
 
-        payload = config.model_dump(mode="json")
+        payload = _dump_platform_section(config)
 
         with self._write_lock:
             data = self._current_platforms_dump()
@@ -808,7 +857,7 @@ class ConfigManager:
         merged: dict[str, Any] = dict(read_yaml_mapping(self.platforms_yaml_path))
         for platform in PLATFORM_CONFIG_SCHEMAS:
             if platform in self._platforms:
-                merged[platform] = self._platforms[platform].model_dump(mode="json")
+                merged[platform] = _dump_platform_section(self._platforms[platform])
         return merged
 
     # ---- 写 `app.yaml` 的 scheduler 段（`/api/schedule` 的唯一写入口，ADR-0017）----

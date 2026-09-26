@@ -56,7 +56,16 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   断言"关掉之后 `/api/tasks` 里没了 **且** `scheduler._configs` 那份也变了"
   （那是审查轮抓到的真 bug：三处各握一份 configs 快照，只改 manager 等于关不掉平台）。
   env 侧两种拼写（`..._DATA_DIR` 与 `..._DATA__DIR`）现在都吃，嵌套那份优先。
-  **没做**：对仓库自己那份 `config/platforms.yaml` 下手 —— 那会改写真实配置，留给手动。
+  **09-26 把写盘收成一处 `_atomic_write_yaml`**：三个写盘点（platforms / scheduler /
+  platform_control）原来各自复制一份 `write_text(yaml.safe_dump(...))`，缺
+  `newline="\n"` 与"路径用 POSIX"两条规矩 —— 一次真·界面保存就把 tracked 的
+  `config/platforms.yaml` 写成了 CRLF + `data\cookies\…` + 三个没人读的 `ui:hidden` 键。
+  看护三处：结果（CR 与反斜杠都不许出现）、形状（AST 数 `write_text(yaml.safe_dump(...))`
+  的调用点 == 1）、以及"转换器本身在 POSIX 平台上也不空转"那条 `..._has_teeth`。
+  细节与判据在 `docs/progress/2026-09-26.md` §11.3 / §13.1。
+  **那一行"没做：对仓库自己那份 config 下手"已经不成立了**：09-25 起界面上的开关
+  真会重写它（这正是上面那个缺陷被发现的经过）。现在的工作树里那份是四家注册、
+  两家开着（youtube 因直连不通、xiaohongshu 因 09-26 那次界面关闭后被决定保留）。
 - [x] **平台契约**：`PlatformAdapter` Protocol + `Capabilities` dataclass + 显式注册表 + 契约测试抽象基类
   —— 四件齐了。Protocol / 注册表 / infra 五件包装（Task 5）；抖音 + B站 两实现（Task 6/7）；
   `PLATFORMS` 与 `PLATFORM_CONFIG_SCHEMAS` 差集为空（注册表快照用例钉着）；
