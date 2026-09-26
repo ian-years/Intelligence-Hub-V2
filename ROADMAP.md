@@ -294,6 +294,14 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `AsyncIOScheduler` 的用例才杀掉）；e2e 一条在真浏览器里翻闸看三处口径。
   **仍然待点头的范围问题**在第 7 节第 24 行：关掉总闸后 `postprocess` 取字幕也会被拒
   （与"这一家自己关了"完全同范围，不是新行为，但第一次会让人意外）。
+  **09-25 §10.4 那条"真机没为总闸重跑"已结**（2026-09-26，22 条判据全 PASS，真 uvicorn + 真桥，
+  config 与 data 全隔离在 `.scratch/master-switch/`）：闸关时 `POST /api/tasks/douyin_collect/run`
+  → 422 且文案点名"被总闸关着（app.yaml 的 platform_control.enabled: false…）"、
+  **被拒的提交连 run 行都不落**（scratch 库 `like '%_collect'` 查得空）、桥整轮
+  `last_page_url` 与 `restarts` 一字未变（没有一次 navigate）、`/api/schedule` 的
+  `effective_platforms` 是 `[]` 而 `master_enabled:false` 说得出原因；翻回来不用重启。
+  过程里第一版脚本 6 条红**全部**是脚本自己猜错了响应形状（其中那条 405 让核心断言整条没执行），
+  判据与教训记在 `docs/lessons.md` 那两条新的与 `docs/progress/2026-09-26.md` §7。
 
 ### V2.2「飞书 + 分析层 + 暗色」 — 2026-09-26 对账：7 条里 5 条已经在树里，剩 2 条各有明确堵点
 
@@ -344,7 +352,7 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   所以那 11 条后面紧跟一行 `FAIL Required test coverage of 80% not reached`。
   `ci-local` 与 CI 都不含 e2e（`Makefile:100-107`），所以今天没有任何人天天撞它 —— 但判据里
   "`make e2e` 全绿"这一句在字面上不成立。要么 e2e 那一档带 `--no-cov`，要么把判据改成
-  "`pytest -m e2e` 11 条全过"。**这条待你点头，见 `docs/progress/2026-09-26.md` §7 第 1 行。**
+  "`pytest -m e2e` 11 条全过"。**这条待你点头，见 `docs/progress/2026-09-26.md` §9 第 28 行。**
 
 ### V2.x 稳定后 — 远期
 
