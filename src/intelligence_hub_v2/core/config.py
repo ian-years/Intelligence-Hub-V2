@@ -568,6 +568,27 @@ def _build_platform_config(platform: str, section: object) -> PlatformConfig:
         raise ConfigError(msg, path=str(DEFAULT_PLATFORMS_YAML)) from exc
 
 
+def _atomic_write_yaml(target: Path, data: dict[str, Any]) -> None:
+    """把一份配置原子落到 `target`：同目录 `.tmp` + `Path.replace`（= `os.replace`）。
+
+    **`newline="\n"` 是这一份的唯一真源，不许在调用点各写一遍**：Windows 上
+    `write_text` 走文本模式会把 `\n` 翻成 `\r\n`，而这里写的是 **tracked、跨平台**的
+    `config/app.yaml` / `config/platforms.yaml` —— 一次界面保存就把仓库里那份变成 CRLF
+    （`pre-commit` 的 `mixed-line-ending` 会红，`ruff format --check` 报的是"整份文件每行都要
+    重排"，看着像格式化在闹脾气，不像编码事故：`docs/lessons.md` 那条「行尾」就是为这个学的）。
+    三个写盘点（platforms / scheduler / platform_control）以前各自复制一遍，第四个人加进来
+    漏掉这五个字是迟早的事 —— 收成一处，漏不掉。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.parent / f"{target.name}.tmp"
+    tmp.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+        newline="\n",
+    )
+    tmp.replace(target)
+
+
 class ConfigManager:
     """配置的持有者与写盘者。
 
@@ -768,13 +789,7 @@ class ConfigManager:
             data[name] = payload
 
             target = self.platforms_yaml_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.parent / f"{target.name}.tmp"
-            tmp.write_text(
-                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-                encoding="utf-8",
-            )
-            tmp.replace(target)
+            _atomic_write_yaml(target, data)
 
             self._platforms[name] = config
 
@@ -831,13 +846,7 @@ class ConfigManager:
             data = dict(read_yaml_mapping(self.app_yaml_path))
             data["scheduler"] = payload
             target = self.app_yaml_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.parent / f"{target.name}.tmp"
-            tmp.write_text(
-                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-                encoding="utf-8",
-            )
-            tmp.replace(target)
+            _atomic_write_yaml(target, data)
             if self._app is not None:
                 self._app.scheduler = section
 
@@ -867,13 +876,7 @@ class ConfigManager:
             data = dict(read_yaml_mapping(self.app_yaml_path))
             data["platform_control"] = section.model_dump(mode="json")
             target = self.app_yaml_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.parent / f"{target.name}.tmp"
-            tmp.write_text(
-                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-                encoding="utf-8",
-            )
-            tmp.replace(target)
+            _atomic_write_yaml(target, data)
             if self._app is not None:
                 self._app.platform_control = section
 

@@ -2750,6 +2750,42 @@ R4 的变异体**留在了树上**，而下一次全量 pytest 就是照着那�
 
 ---
 
+### 经验：昨天学的 `newline="\n"` 只改了工具脚本，生产写盘路径上三份副本一份都没改
+
+**现象**：2026-09-26 追一条红（`test_shipped_config_files_load`）时发现工作树里
+`config/platforms.yaml` 被写成 CRLF，`pre-commit run --all-files` 因此在
+`mixed-line-ending` 上红 —— 而这条纪律前一天（09-25 §10.3）才刚被写进本文件：
+"`finally` 里那句 `path.write_text(text, encoding="utf-8")` 还原的内容一字不差，
+但 Windows 文本模式会把 `\n` 翻成 `\r\n`"。**同一个根因，换了个地方又中一次**。
+
+**根因**：那次修的是 `.scratch/` 里的一次性脚本（谁踩到谁改），而真正的
+`core/config.py` 里有**三处**各自复制的 `tmp.write_text(yaml.safe_dump(...), encoding="utf-8")`
+（platforms / scheduler / platform_control 三个写盘点）。复制三遍的东西没人会一次改全 ——
+这正是本仓库 §7.11「三种命名」那一族的形状，只不过漂的不是名字，是**编码假设**。
+
+**解法**：收成一处 `_atomic_write_yaml(target, data)`，`newline="\n"` 只在那一份里出现。
+两条看护，各测一个方向：
+
+1. **测结果** —— `test_every_config_write_lands_lf_not_crlf`：三个写盘点全跑一遍，
+   落盘字节 `b"\r" not in raw`，并且先断言文件非空、内容真的变了（否则"没有 CR"是空转）。
+   变异验证 KILLED：摘掉 `newline="\n"` 就红（`.scratch/mutation/run_lf_guard.py`）。
+2. **测形状** —— `test_config_module_has_only_one_yaml_write_site`：AST 数
+   `write_text(yaml.safe_dump(...))` 的调用点必须 == 1。第四个写盘点想绕过出口自己复制一遍，
+   这一条先红。只数调用点不数文本，注释里提一句不算违规。
+
+**判据（这一条比修法更值钱）**：修完一个"三处复制"的坑，要问的不是"这三处都改了吗"，
+而是**"为什么会有三处"**。三处都改 = 下次加第四处再中一次；收成一处 + 一条测形状的看护
+= 第四处出不来了。同理，把纪律写进文档只覆盖"读文档的人"，写进 AST 断言才覆盖"不读文档的人"。
+
+**顺带一条本机才有的坑**：我用 `git show HEAD:<f> | grep -c $'\r'` 数出"4 个 blob 带 CR"，
+其中一份 838 行全中 —— **全是假的**，Git Bash（MSYS）的管道会自行转换行尾。
+绕开管道、用 python 直接读 `git show` 的字节 → 493 个 tracked 文件里带 CR 的是 **0 个**。
+与 `pkill -f` 在 Windows 匹配不到、`where ffmpeg` 打不出来 ≠ 没装同族：
+**Windows 上"管道里看到的字节"不是字节**。量行尾/编码这类事，要么在 python 里读 bytes，
+要么用 `ruff format --check`（它的报错形状是"整个文件每行都要重排"，正好是这件事的指纹）。
+
+---
+
 ## 附录 · 如何新增一条经验
 
 1. 在对应部分（V1 §7 映射 / V2 设计 / V2 实施）新增一节。

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import ast
 import shutil
 from pathlib import Path
 
@@ -279,6 +280,64 @@ def test_config_manager_write_is_atomic_and_rereadable(tmp_path: Path) -> None:
     mgr2 = ConfigManager(config_dir=tmp_path)
     mgr2.load()
     assert mgr2.get_platform("douyin").enabled is False
+
+
+def test_every_config_write_lands_lf_not_crlf(tmp_path: Path) -> None:
+    """三个写盘点落盘后**字节里不许有 CR**（2026-09-26 真出过事：一次界面保存把
+    tracked 的 `config/platforms.yaml` 写成了 CRLF，`pre-commit` 的 `mixed-line-ending` 红，
+    而 `ruff format --check` 报的是"整份文件每行都要重排"，看着像格式化的问题）。
+
+    三个都要跑：只测一个的话，另外两处漏掉 `newline="\n"` 没人知道 —— 它们当年就是
+    各自复制一遍 `_atomic_write_yaml` 那六行的三份副本。
+    """
+    _write_platforms_yaml(tmp_path, "douyin:\n  enabled: true\n  display_name: 抖音\n")
+    (tmp_path / "app.yaml").write_text("app:\n  port: 8789\n", encoding="utf-8", newline="\n")
+    mgr = ConfigManager(config_dir=tmp_path)
+    mgr.load()
+
+    mgr.write_platform_config("douyin", DouyinConfig(display_name="抖音", enabled=False))
+    mgr.write_scheduler(config_module.SchedulerSection())
+    mgr.write_platform_control(False)
+
+    written = ["platforms.yaml", "app.yaml"]
+    for name in written:
+        raw = (tmp_path / name).read_bytes()
+        assert raw, f"{name} 是空的 —— 这条断言就成了空转"
+        assert b"\r" not in raw, (
+            f"{name} 里出现了 CR：写盘没走 newline='\\n'（Windows 上会整份翻 CRLF）"
+        )
+    # 三次写都真的落到了盘上（不是"写到了别处"）
+    assert "enabled: false" in (tmp_path / "platforms.yaml").read_text(encoding="utf-8")
+    assert "platform_control" in (tmp_path / "app.yaml").read_text(encoding="utf-8")
+
+
+def test_config_module_has_only_one_yaml_write_site() -> None:
+    """结构看护：`core/config.py` 里**只允许一处**把 YAML 落盘的那个 `write_text`。
+
+    上一那条测的是结果（没有 CR），这一条测的是形状（不许再出现第二处直接写盘）：
+    新增第四个写盘点时必须走 `_atomic_write_yaml`，否则它会带着自己的编码假设漂开。
+    只数 `write_text` 的**调用点**，不数注释与字符串（走 AST，避免"在文档里提了一句"就红）。
+    """
+    source = Path(config_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    yaml_writes = 0
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "write_text"
+        ):
+            dumped = any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "safe_dump"
+                for n in ast.walk(node)
+            )
+            yaml_writes += int(dumped)
+    assert yaml_writes == 1, (
+        f"`core/config.py` 里有 {yaml_writes} 处直接 `write_text(yaml.safe_dump(...))` —— "
+        "应当只有 `_atomic_write_yaml` 那一份，其余都走它"
+    )
 
 
 def test_config_manager_write_preserves_other_platforms(tmp_path: Path) -> None:
