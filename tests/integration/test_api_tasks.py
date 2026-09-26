@@ -22,13 +22,14 @@ async def test_list_tasks_shows_v2_implemented(client: httpx.AsyncClient) -> Non
         "postprocess",
     } <= names
     # 未实现 / 未移植平台的任务不该出现在列表里（不撒谎原则）。
-    # `xiaohongshu_collect` 在 T2.1 之前是这一条的现成样本，`youtube_collect` 在
-    # T2.2 之前是 —— 两家都有真 handler 之后，继续拿它们当"不该出现"的例子
-    # 就会悄悄变成零断言。样本换成 `backfill`：它仍未实现（V2.2），
-    # 而"该出现的"那一半改成显式断言 youtube_collect 在列（注册表翻向的两半都要钉）。
+    # 样本会随注册表翻向而失效：`xiaohongshu_collect` 在 T2.1 之前、`youtube_collect` 在
+    # T2.2 之前、`backfill` 在 V2.2 补上 handler 之前都当过这个样本 —— 它们各有真 handler
+    # 之后继续拿它们举例，"不该出现"那半条就悄悄变成零断言。现在用 `feishu_sync`
+    # （`ported/feishu/` 搬完了但 `tasks/` 里还没有 handler，见 ROADMAP V2.2 那一格）。
     assert "youtube_collect" in names
-    assert "backfill" not in names
+    assert "backfill" in names  # §7.22 那条陷阱的正面实现，平台由链接决定所以 platforms=()
     assert "all_platforms" not in names
+    assert "feishu_sync" not in names
 
 
 async def test_task_schema_returns_params(client: httpx.AsyncClient) -> None:

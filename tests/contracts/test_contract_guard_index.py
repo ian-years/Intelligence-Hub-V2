@@ -102,6 +102,19 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
         (_BILI_HELPERS, "test_a_pair_artifact_points_the_transcriber_at_the_audio_track"),
     ),
     "§7.24 跟踪必须真布尔": ((_CREATORS_REPO, "test_set_tracking_rejects_non_bool"),),
+    # §7.22 的两半各一条：V1 那次事故同时缺"点名不许过开关"和"认不出身份就红"，
+    # 只钉其中一半的话，另一半漂回去没人知道（第三条就是钉"不退化成扫全库"那一半）。
+    "§7.22 按位抓取不退化全库扫描": (
+        (
+            "tests/unit/tasks/test_backfill.py",
+            "test_a_backfill_of_an_untracked_creator_still_finds_her",
+        ),
+        ("tests/unit/tasks/test_backfill.py", "test_naming_a_creator_never_consults_the_list"),
+        (
+            "tests/unit/tasks/test_backfill.py",
+            "test_a_creator_not_in_the_library_fails_without_touching_the_platform",
+        ),
+    ),
     "§7.25 墓碑一列三字段": ((_VIDEOS_REPO, "test_hide_removes_from_list_but_get_still_works"),),
     "§2 契约二 清单强制终态": (
         (
@@ -113,7 +126,10 @@ GUARD_INDEX: dict[str, tuple[tuple[str, str], ...]] = {
 
 #: 现在**没有看护**的几条，逐条写清为什么。列出来是为了不把它们当成"已经守住了" ——
 #: 漏掉和漏实现看起来一样，所以它们也必须进 §7 编号的完整覆盖检查。
-NOT_YET_GUARDED: tuple[str, ...] = ("§7.22 按位抓取不退化全库扫描（V2.1）",)
+#: 2026-09-26 起为空：`§7.22` 随 `backfill` 落地搬进了 `GUARD_INDEX`（那一条在这里挂了
+#: 三轮"未落地"，每次都靠人记得）。**这一格不许删**：将来有陷阱失去看护时要往回放，
+#: 而"空元组"与"这一格不存在"在完整性检查里是两件事。
+NOT_YET_GUARDED: tuple[str, ...] = ()
 
 #: 与 `AGENTS.md §5` 的"结构性消除"那一栏一一对应（V2 的设计让它不可能再发生）。
 STRUCTURALLY_ELIMINATED: tuple[str, ...] = (

@@ -143,8 +143,8 @@ alembic 的空库 `.scratch/mig.sqlite3`。`--media-strategy` 那条相关判据
 V1 那 25 条陷阱（`Intelligence-Hub/AGENTS.md` §7）在 V2 的状态分三类：
 
 - **结构性消除**（V2 设计让它不可能再发生）：§7.4 整行覆盖、§7.6 LocalCreatorStore 参数、§7.7 双源、§7.10 路由靠记忆、§7.11 三种命名、§7.12 预检主库错位、§7.17 head 接常驻服务、§7.23 用时抖动门禁、§7.25 墓碑散落
-- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.9 SenseVoice 按静音切句补标点、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.18 桥重建沿用同一个 profile、§7.19 进程 PATH 与注册表一致（`core/runtime_env.py`）、§7.20 桥死了报绿、§7.21 B站 DASH、§7.24 跟踪开关
-- **说得出名字但今天没看护**（别当成"已经守住了"）：§7.22 按位扫描（V2.1 的 Backfill，即 T4.x 补录那一族）
+- **契约测试看护**（行为保留，测试守住）：§7.1 sec_uid、§7.2 yt-dlp 必失败、§7.3 Windows cookie、§7.5 转写路径、§7.8 safe_filename、§7.9 SenseVoice 按静音切句补标点、§7.13 技能脚本漂移、§7.14 SkipTest、§7.15 B站 cookie 三档、§7.16 Node playwright、§7.18 桥重建沿用同一个 profile、§7.19 进程 PATH 与注册表一致（`core/runtime_env.py`）、§7.20 桥死了报绿、§7.21 B站 DASH、§7.22 按位点名不退化全库扫描（`tasks/backfill.py`，2026-09-26 起）、§7.24 跟踪开关
+- **说得出名字但今天没看护**（别当成"已经守住了"）：这一栏**暂时是空的** —— 空不等于这条纪律消失：新出现的"文档里点名了、却没有用例"的陷阱必须先登记在这一行（对应测试里的 `NOT_YET_GUARDED`，它也必须保持空元组而不是被删掉），将来才有人发现它被搬走了
 
 > 这三栏由 `tests/contracts/test_contract_guard_index.py` 逐条核：§7.1–§7.25 每条必须有归属、
 > 表里点名的用例必须真的存在且真的会跑、本节的"结构性消除"那一行必须与测试里的分桶一致。

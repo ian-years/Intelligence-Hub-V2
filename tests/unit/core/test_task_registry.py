@@ -37,10 +37,11 @@ IMPLEMENTED_NOW = {
     "add_creator",
     "postprocess",
     "enrich_metrics",
+    "backfill",
 }
 
 
-def test_thirteen_registered_nine_implemented() -> None:
+def test_thirteen_registered_ten_implemented() -> None:
     assert set(TASKS) == {
         "preflight",
         "douyin_collect",
@@ -94,6 +95,9 @@ def test_available_tasks_respect_platform_switch_and_implementation() -> None:
         "postprocess",
         # 跨平台且已实现：它不属于任何一家，所以关掉平台也不该消失
         "enrich_metrics",
+        # backfill 同形：哪家由链接决定，`platforms=()` —— 列四家的话关掉一家
+        # 会让另三家的回溯按钮一起消失（这条断言就是那一格的看护）
+        "backfill",
     } == set(both)
 
     only_douyin = set(available_task_names(_configs(bilibili=False), master_enabled=True))

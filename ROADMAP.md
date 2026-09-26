@@ -258,21 +258,22 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   `params_schema`，事件流是真 SSE（连上时亮"事件流已连上"），取消只对 `running` 出现。
   **注意**：这一格勾着是因为"界面上有这一个按钮且它对 `running` 才出现"是界面判据；
   按钮按下去之后那条路在真进程上从没走过 —— 那一条欠账记在上面的"任务调度"那一格。
-- [ ] `BackfillTask` 实现（§7.22 按 URL 直接定位，不退化全库扫描）
-  —— **这是 V2.1 唯一一条真没写的功能**，也是 `AGENTS.md §5` 那一栏里唯一"说得出名字但今天
-  没看护"的陷阱（`docs/specs/contract-tests.md:55` 同口径写着"未落地"）。
-  今天的实情（我量过，不是推的）：`task_registry.TASKS` 里 `backfill` 是 `implemented=False`，
-  `tasks/` 目录下没有对应 handler，`creators.py:79` 的 `list_tracked()` 是采集那条路的唯一入口
-  —— 而 V1 §7.22 那个事故正是"按位点名的活错走了 `list_tracked`，两位博主开关都关着时拿到 0 条，
-  一路甩成 traceback 且清单停在没有 `status` 的初稿"。
-  要做清的四件：① `params.creator_url` 必填 → 走 `parse_creator_url` 直接定位，认不出身份键就
-  如实失败而不是退回全库；② 点名那一条**不过跟踪开关**（另开一条 `include_untracked` 的读法，
-  别改 `list_tracked` 的语义 —— 日更与定时那条路必须继续筛）；③ 提前失败也落终态清单 + 尾行紧凑
-  JSON（这是 §7.22 的后半句，最容易漏）；④ 用例名 `test_backfill_task_uses_creator_url_not_full_scan`
-  进 `AGENTS.md §5` 与 `test_contract_guard_index.py`（三处一起改，否则文档说谎）。
-  真机那一跑顺带能补上另一格：**`add_creator` 收小红书博主在真机上从未成功过**
-  （live 库里唯一一条是 09-24 01:33 的 failed，而那次失败的原因是当时小红书适配器还没注册，
-  报"主机不在已知平台里"——属于过期失败，不构成缺陷证据，但也不等于验过）。
+- [x] `BackfillTask` 实现（§7.22 按 URL 直接定位，不退化全库扫描）
+  —— **2026-09-26 落地**：`tasks/backfill.py` + `params.BackfillParams`，注册表从
+  13 登记 / 9 实现变成 **13 / 10**（`tests/unit/core/test_task_registry.py` 那份集合快照
+  双向核过，多一条少一条都红）。四条定稿各有出处：`creator_url` 必填就是
+  `docs/specs/task-runner.md §457` 契约化的那个形状；库里没有这位博主 → `stage="task"`
+  一条失败、文案给出 `add_creator`，且**一次枚举都不发**（`adapter.list_calls == []`）；
+  `like_count=None` 一律排最后并单独计 `unknown_metrics`（把"不知道"当 0 排序等于让缺数的
+  旧作品冒充爆款）；逐条下载复用 `collect._collect_one_video`，不再写第二份"查重+下载+入库"。
+  `scan`（扫描窗口）与 `top`（交付条数）是**两个参数、清单里两栏**：合并成一栏就分不出
+  "看了 32 条挑 5 条"与"只看最新 5 条"，后者压根不算回溯。
+  §7.22 从此有看护，**三处同改一起做了**（`AGENTS.md §5` 搬进"契约测试看护"、
+  `docs/specs/contract-tests.md` 那一行、`test_contract_guard_index.py` 的 `GUARD_INDEX` 三条）；
+  `NOT_YET_GUARDED` 第一次为空 —— 那一格**留成空元组而不是删掉**，理由写在它上面。
+  还差两件，各有名字：① **前端那一枚按钮**（Creators 页每张卡上的「爆款回溯」，参数从
+  `profile_url` 来）—— 现在唯一的入口是 Tasks 页那张自动出现的卡片；② **真机那一跑**
+  （要点名一位博主、扫一轮、收几条），与"小红书 `add_creator` 真机从未成功"同一次能补完。
 - [x] 真机烟雾测试：抖音 / B站 / 小红书 三平台各采一条 + 转写
   —— **2026-09-25 收口 5/5**（判定过程与数字在 `docs/progress/2026-09-25.md` §9，那是写进 live
   `data/` 的真跑：桥 3458 + 人扫的码）：抖音 2 条 + B站 1 条 + 小红书 1 条图文，三条出口播稿
@@ -369,7 +370,9 @@ V1 工作区一行不动，V2 独立目录、独立 git、独立 `data/`，通�
   不等于"接进 V2 主流程"** —— 差在 `ported/` 那 11,585 行上，见上面 V2.2 那节的开头）
 - **V2.0**：16 条判据 12 勾 / 4 未勾，未勾的全是"某一跑"（抖音短链、B站非空字幕轨、真机点一次取消、
   CI 第一次真跑）—— 见本节上面那四条，每条都写了补法与判据
-- **V2.1**：唯一没写的功能是 `BackfillTask`（§7.22）；其余全落且真机 5/5
+- **V2.1**：**功能面收满**（`BackfillTask` 于 09-26 落地，注册表 13 登记 / 10 实现），
+  真机 5/5；剩的是三跑一按钮（短链、非空字幕轨、真点一次取消 + Creators 页那枚回溯按钮），
+  全在待办池与上面那一格里点名
 - **V2.2**：7 条里 5 条在树里，2 条卡在"飞书镜像库根本不存在于这台机器"（同步适配 + 报告真产物）
 - **V1 工作区**：未动（今天只读打开了它的 `downloads/local.sqlite3` 数行数，`mode=ro`）
 

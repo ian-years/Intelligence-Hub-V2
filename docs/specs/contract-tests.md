@@ -52,7 +52,7 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 | §7.19 "注册表里有 PATH" ≠ "进程拿得到"（子进程继承的是启动方那份快照） | `test_the_path_knobs_are_the_tools_we_probe`（`config.paths.*` 字段名 == `TOOL_COMMANDS` == preflight 探针清单，三处同源）+ `test_only_missing_directories_are_appended_and_the_existing_order_survives`（只追加、不动既有顺序）+ `test_directories_that_no_longer_exist_are_not_brought_in` + `test_the_same_directory_written_differently_is_not_added_twice` + `test_a_registry_that_cannot_be_read_never_breaks_startup`（读不到只是补不全）+ `test_applying_to_a_given_env_never_touches_the_process_environment`（改 `os.environ` 只有 `prepare_*` 那一个入口）。真机：本机补之前 `which('ffmpeg')=None`、注册表里有 Gyan.FFmpeg，跑一次之后四个工具全部解析到（`docs/progress/2026-09-24.md`） | L0 | `tests/unit/core/test_runtime_env.py` |
 | §7.20 桥的浏览器被人关掉后 formerly 会一直报绿；现已收口（`/health` 503 + 真请求自愈） | `test_503_means_browser_dead_not_bridge_down` + `test_bridge_available_is_true_on_503` + `test_dead_browser_during_navigate_raises_so_self_heal_can_run`；服务端那一半由 `test_a_dead_browser_is_503_not_bridge_down` 钉（客户端判对不够，503 得真是服务端给的） | L1 + L3 | `tests/unit/infra/test_cdp_bridge.py` + `tests/integration/test_bridge_health.py` |
 | §7.21 B站媒体可能是未合并的 DASH 分片，转写必须认音频轨 | `TestDashSplit`：`test_pair_reaches_the_caller_as_a_video_audio_pair`、`test_only_yt_dlp_reported_paths_are_considered`（不扫目录）、`test_two_webm_tracks_are_told_apart_by_size`、`test_a_pair_artifact_points_the_transcriber_at_the_audio_track`（与 `audio_path_of()` 接通） | L2 | `tests/contracts/test_bilibili_adapter.py` + `tests/contracts/test_bilibili_helpers.py` |
-| §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | **未落地**（V2.1 的 Backfill 任务） | — | — |
+| §7.22 「🔥 抓取爆款 Top 5」必须按位扫描，跟踪开关只管整库/定时那条路 | 三条各钉一半：`test_a_backfill_of_an_untracked_creator_still_finds_her`（开关关着照样点名成功；**前置**先当场证明 `list_tracked()` 在这份 fixture 里确实返回 0 条，否则这条会绿着却什么也没挡）+ `test_naming_a_creator_never_consults_the_list`（把 `list_tracked`/`list_all` 直接炸掉，任务仍要成）+ `test_a_creator_not_in_the_library_fails_without_touching_the_platform`（认不出身份就红，`list_calls == []` —— "不退化成扫全库"的另一半） | L1 | `tests/unit/tasks/test_backfill.py` |
 | §7.24 「持续跟踪」的值必须是真布尔 | `test_set_tracking_rejects_non_bool` + `test_tracking_rejects_non_boolean_with_422` | L1 + L3 | `tests/unit/storage/test_creators_repo.py` + `tests/integration/test_api_creators.py`（后半句"默认值只能有一处"由 Task 11 落地：唯一默认值在 `frontend/src/stores/settings.ts` 一处，看护是 `frontend/src/stores/settings.spec.ts` 那 4 条—— 含"localStorage 里是字符串 `\"false\"` 时不认，回到唯一默认值"与"写非布尔直接拒"。前端用例的名字不是 `test_*`，所以本行表格里点名的仍是那两条 Python 用例） |
 | §2 契约二：清单必须写终态（半路抛异常要走 `abandon()` 收尾） | `test_manifest_finalizes_on_every_exit_path`（参数化：成功/异常/取消/超时） | L3 | `tests/integration/test_manifest_finalization.py` |
 
@@ -86,9 +86,18 @@ V1 `AGENTS.md` §7 那 25 条陷阱在 V2 的归宿。**V3 重写后跑同一套
 `test_videos_repo.py` 与 `test_creators_repo.py` 里**各有一条**（两行表格指的是两条），
 `-k` 或按 node id 单跑时要带文件名，别以为只有一条。
 
-**仍未落地**（按计划属于后续任务）：§7.9（ASR 标点，V2.1）、
-§7.13 的 `diff -rq` 那半、§7.19（PATH 上的 ffmpeg / ffprobe，已由 Task 8 preflight 在
-`summary["tools_missing"]` 里报出）、§7.22（按位抓取的 URL 直定位，归 V2.1 的 `BackfillTask`）、
+**仍未落地**（这一段是 09-22 写的账，2026-09-26 对账时清过一次）：
+§7.13 的 `diff -rq` 那半 —— 它是技能脚本与仓库脚本的**逐字节比对**，属于 shell 检查，
+不在这份索引的管辖内（`GUARD_INDEX` 只能核"用例存在且会跑"）。
+
+原来这一句还挂着 §7.9（ASR 标点）、§7.19（PATH 与注册表）、§7.22（按位抓取）三条 ——
+**三条都已经落地并有看护用例**，留在"仍未落地"里是漏删：上面那张表逐条有出处，
+`tests/contracts/test_contract_guard_index.py` 会核"点名的用例存在且真的在跑"，
+而**这一句散文没人核**，所以它一个人烂在那儿。权威清单是 `AGENTS.md §5` 那三栏 + 那个索引测试；
+这一段的用途只剩"记下机器核不到的那类检查"，别再往里塞已经落地的条目。
+
+**顺带一条同族的坑**：那句"§7.4 在两个文件里各有一条同名用例"是**真的**（表格里两行、
+两条用例），而 `-k` 单跑时不带文件名会让人以为只有一条 —— 这一句留着。
 
 
 **已落地（补记 2026-09-23）**：§7.24 的 L4 前端那一半 —— 跟踪默认值只有一处

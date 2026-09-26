@@ -1,4 +1,4 @@
-"""六个 V2.0 任务的参数模型（`TaskDefinition.params_schema`）。
+"""任务参数模型（`TaskDefinition.params_schema`）—— 一个任务一份，形状不同就不合并。
 
 单独一个叶子模块：注册表要拿这些类填 `params_schema`，handler 又要在函数签名里
 用它们 —— 如果每个 handler 各自定义自己的参数类，注册表就得反向 import 五个 handler
@@ -32,6 +32,38 @@ class AddCreatorParams(BaseModel):
         description="留空则按链接域名自动判平台；填了则以填的为准（如裸 sec_uid 无从判域名时）",
     )
     tracking: bool = Field(default=True, description="是否加入持续跟踪（日更采集只收 tracking 的）")
+
+
+class BackfillParams(BaseModel):
+    """爆款回溯（`backfill`）：**点名一位博主**，扫她的近况、按读数挑前几条收进来。
+
+    参数是 `creator_url` 而不是 `creator_id`（V1 §7.22 事故被契约化成了这个形状，
+    见 `docs/specs/task-runner.md §457`）：链接里带着平台身份，适配器用
+    `parse_creator_url` 直接定位到那一位，不需要"先取一份博主名单"——而"取名单"这一步
+    在 V1 就是按跟踪开关筛全库，开关关着时拿到 0 条。
+
+    **`scan` 与 `top` 是两件事，故意不给同一个默认值**：`scan` 是"往回看多少条"
+    （爆款可能藏在第 20 条的位置上），`top` 是"这次收几条进来"。两者合并成一栏的话，
+    清单里就分不出"只看了最新 5 条"与"看了 50 条挑了 5 条"——那正是这个功能有没有干活的区别。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    creator_url: str = Field(
+        description="博主主页链接或分享短链（抖音跟一次 302 拿 sec_uid）。"
+        "**库里没有这位博主时会如实失败**并让你先跑「收录博主」，不会退化成扫全库"
+    )
+    platform: str | None = Field(
+        default=None,
+        description="留空则按链接域名判平台；填了则以填的为准（裸 sec_uid 那种无从判域名的链接）",
+    )
+    top: int = Field(default=5, ge=1, le=50, description="这次收进来几条代表作（按点赞数排）")
+    scan: int | None = Field(
+        default=None,
+        ge=1,
+        le=500,
+        description="往回扫多少条再挑；留空 = 平台 `videos_per_creator` 的 4 倍（下限 20）",
+    )
 
 
 class CollectParams(BaseModel):
@@ -101,6 +133,7 @@ class PostprocessParams(BaseModel):
 
 __all__ = [
     "AddCreatorParams",
+    "BackfillParams",
     "CollectParams",
     "EnrichMetricsParams",
     "PostprocessParams",

@@ -1,8 +1,9 @@
 """`TASKS` 注册表 + 适配器依赖袋的装配（`PlatformRegistry` / `AdapterDeps`）。
 
-`task-runner.md §3` 的 12 个任务在这里全部登记。**四平台适配器齐了**（V2.1 T2.2），
-所以 8 个有真 handler（preflight / 四家 collect / single_link / add_creator / postprocess）。
-其余 4 个（all_platforms / backfill / feishu_sync / migrate_from_v1）
+`task-runner.md §3` 的 13 个任务在这里全部登记，其中 **10 个有真 handler**：
+preflight / 四家 collect / single_link / add_creator / postprocess / enrich_metrics /
+**backfill（V2.2 补的这一格，§7.22 那条陷阱的正面实现）**。
+其余 3 个（all_platforms / feishu_sync / migrate_from_v1）
 仍进注册表、runner 是 `NotImplementedError` —— 两个理由：
 
 1. 未实现平台的采集任务受平台开关过滤，本来就不会出现在 `/api/tasks`
@@ -34,6 +35,7 @@ from intelligence_hub_v2.platforms.base import (
 from intelligence_hub_v2.platforms.registry import PLATFORMS, PlatformRegistry
 from intelligence_hub_v2.tasks import (
     AddCreatorParams,
+    BackfillParams,
     CollectParams,
     EnrichMetricsParams,
     PostprocessParams,
@@ -42,6 +44,7 @@ from intelligence_hub_v2.tasks import (
     TaskDefinition,
     make_collect_handler,
     run_add_creator,
+    run_backfill,
     run_enrich_metrics,
     run_postprocess,
     run_preflight,
@@ -208,13 +211,20 @@ TASKS: dict[str, TaskDefinition] = {
         name="backfill",
         display_name="爆款回溯",
         kind=TaskKind.BACKFILL,
-        params_schema=CollectParams,
+        params_schema=BackfillParams,
+        # **故意留空**（与 single_link / add_creator 同形）：这一家是谁由链接决定。
+        # 列上四家的话，"关掉一家"会让**另三家**的回溯按钮一起消失 —— 那是
+        # `platforms ⊆ 可用家` 这条筛法配不上"运行时才知道平台"的任务形状。
+        # 代价是：闸关着时这里不会在 `submit` 处 422，而是跑到 handler 里
+        # 由 `detect_platform` 如实红（V1 §7.22 的分工只讲开关不看，不讲这道闸在哪一层）。
         platforms=(),
+        # `requires` 同 postprocess / enrich_metrics 的口径：`_check_requires` 那道闸
+        # 还没实现（ADR-0014 的预留位），声明它等于声明一道纸面防护。
+        # 何况这里连该要哪一家的 cookie 都要先认了链接才知道 —— 静态声明给不出来。
         requires=(),
-        timeout_seconds=None,
+        timeout_seconds=1800,
         cancellable=True,
-        runner=_not_implemented("backfill"),
-        implemented=False,
+        runner=run_backfill,
     ),
     "feishu_sync": TaskDefinition(
         name="feishu_sync",
