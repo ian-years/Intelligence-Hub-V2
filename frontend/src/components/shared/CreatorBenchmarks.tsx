@@ -8,7 +8,8 @@ import { QueryState } from "@/components/shared/QueryState";
 import { formatCount, formatTime } from "@/lib/formatters";
 
 /** 一次回溯取几条。V1 的 `--benchmark N` 默认是 5，这里同值：
- *  爆款回溯是"看这个人的天花板在哪"，不是翻页看全库。 */
+ *  这一格是"看这个人在库里最好的几条"（按钮叫「已入库代表作」），
+ *  不是"去平台上把他最好的几条捞回来" —— 后者是「回溯抓取」，起 `backfill` 任务。 */
 export const BENCHMARK_SIZE = 5;
 
 /**
@@ -30,7 +31,7 @@ export function CreatorBenchmarks({ creator }: { creator: Creator }): JSX.Elemen
   return (
     <HardShadowCard className="flex flex-col gap-2">
       <p className="text-mono-sm">
-        爆款回溯 · 按库里的点赞读数前 {String(BENCHMARK_SIZE)} 条（读数是最近一次采集时的值）
+        已入库代表作 · 按库里的点赞读数前 {String(BENCHMARK_SIZE)} 条（读数是最近一次采集时的值）
       </p>
       <QueryState gate={videos} subject="这一位的作品">
         {(page) => (

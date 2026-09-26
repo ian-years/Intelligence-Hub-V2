@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ApiError } from "@/api/client";
 import { useAddCreator, useCreators, useSetTracking, type Creator } from "@/api/hooks/useCreators";
 import { usePlatforms } from "@/api/hooks/useConfig";
+import { useRunTask, useTasks } from "@/api/hooks/useTasks";
 import { HardShadowCard } from "@/components/memphis/HardShadowCard";
 import { ExportLinks } from "@/components/shared/ExportLinks";
 import { MemphisButton } from "@/components/memphis/MemphisButton";
@@ -37,6 +38,12 @@ export function Creators(): JSX.Element {
   const creators = useCreators(filterPlatform === "" ? undefined : filterPlatform);
   const platforms = usePlatforms();
   const add = useAddCreator();
+  /** 「回溯抓取」画不画，问的是后端那份可用清单，不是前端自己记的任务名（经验 42）。
+   *  没列出来（未实现 / 该平台被闸挡住而任务本身消失）就没有这个按钮 ——
+   *  "按钮在、点下去被拒"这一族在 ADR-0025 里已经记过一次。
+   *  注意 `/api/tasks` 顶层**就是数组**，不是 `{tasks: […]}`（经验 42 那个错踩过一次）。 */
+  const tasks = useTasks();
+  const canBackfill = (tasks.data ?? []).some((task) => task.name === "backfill");
 
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -160,7 +167,7 @@ export function Creators(): JSX.Element {
                 </HardShadowCard>
               )}
               {list.map((creator) => (
-                <ToggleRow key={creator.id} creator={creator} />
+                <ToggleRow key={creator.id} creator={creator} canBackfill={canBackfill} />
               ))}
             </div>
           )}
@@ -174,9 +181,19 @@ export function Creators(): JSX.Element {
  *  「写入中…」一起亮，而 `variables` 只有一个，分不清是哪家在飞。
  *
  *  爆款面板的展开态同样**按行**存：全部一起展开等于对每个博主各发一次 `/api/videos`。 */
-function ToggleRow({ creator }: { creator: Creator }): JSX.Element {
+function ToggleRow({
+  creator,
+  canBackfill,
+}: {
+  creator: Creator;
+  canBackfill: boolean;
+}): JSX.Element {
   const toggle = useSetTracking(creator.id);
+  const backfill = useRunTask("backfill");
   const [openBenchmarks, setOpenBenchmarks] = useState(false);
+  // 「回溯抓取」发的是这位**自己**的 `profile_url`：库里那一行就是身份的来源，
+  // 拼一个别的字符串（或让用户再粘一遍）等于给同一位博主造第二个身份（V1 §7.1）。
+  const canRun = canBackfill && creator.profile_url !== "";
   return (
     <CreatorCard
       creator={creator}
@@ -184,6 +201,26 @@ function ToggleRow({ creator }: { creator: Creator }): JSX.Element {
       onToggleTracking={(next) => toggle.mutate(next)}
       onToggleBenchmarks={() => setOpenBenchmarks((open) => !open)}
       benchmarksOpen={openBenchmarks}
+      // `exactOptionalPropertyTypes` 开着（与 `Settings.tsx` 那两行同一个写法）：
+      // "没有这个能力"要把 prop **整个省掉**，不是塞一个 `undefined` 进去 ——
+      // 后者在类型上就过不了，而它要挡的正是"看起来传了、其实没有"。
+      {...(canRun
+        ? { onBackfill: () => backfill.mutate({ creator_url: creator.profile_url }) }
+        : {})}
+      backfillBusy={backfill.isPending}
+      backfillNote={
+        backfill.isError ? (
+          // 状态靠**话说清楚**传达，不靠颜色（红字对色觉障碍等于没有）。
+          <>
+            没排队上：
+            {backfill.error instanceof ApiError ? backfill.error.detail : backfill.error.message}
+          </>
+        ) : backfill.isSuccess ? (
+          <>
+            已排队：<code>{backfill.data.task_id}</code>
+          </>
+        ) : null
+      }
     >
       {openBenchmarks && <CreatorBenchmarks creator={creator} />}
     </CreatorCard>
